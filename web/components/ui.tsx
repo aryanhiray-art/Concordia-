@@ -82,6 +82,44 @@ export function AllocRow({ ticker, pct, votes, max }: { ticker: string; pct?: nu
   );
 }
 
+export function Dots() {
+  return <span className="dots"><span /><span /><span /></span>;
+}
+
+export function LoadingScreen({ label = "loading" }: { label?: string }) {
+  return (
+    <div className="grid min-h-screen place-items-center">
+      <div className="flex flex-col items-center gap-4">
+        <span className="pulse"><Logo size={48} /></span>
+        <Dots />
+        <span className="text-[12px] text-subtle">{label}…</span>
+      </div>
+    </div>
+  );
+}
+
+export function Toggle({ on, onChange, disabled }: { on: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+  return (
+    <button type="button" role="switch" aria-checked={on} disabled={disabled}
+      onClick={() => onChange(!on)}
+      className={`relative h-6 w-11 flex-none rounded-full transition disabled:opacity-50
+        ${on ? "bg-teal-deep shadow-[0_0_18px_-4px_rgba(45,212,191,0.8)]" : "bg-white/12"}`}>
+      <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${on ? "left-[22px]" : "left-0.5"}`} />
+    </button>
+  );
+}
+
+export function Chip({ children, onRemove }: { children: React.ReactNode; onRemove?: () => void }) {
+  return (
+    <span className="enter inline-flex items-center gap-1.5 rounded-full border border-teal/40 bg-teal/[0.1] px-2.5 py-1 font-display text-[12.5px] font-semibold text-ink">
+      {children}
+      {onRemove && (
+        <button onClick={onRemove} aria-label="remove" className="text-teal/70 hover:text-teal">×</button>
+      )}
+    </span>
+  );
+}
+
 export function Countdown({ to }: { to: number }) {
   const [now, setNow] = useState(() => Date.now() / 1000);
   useEffect(() => {

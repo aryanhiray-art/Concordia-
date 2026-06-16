@@ -43,12 +43,13 @@ class LoginBody(_EmailBody):
 
 
 def _default_settings(member_id: int) -> None:
+    # Sizing is now "deploy all buying power", so bp%/daily-cap are unused (kept
+    # as 0 for schema compatibility). opted_in is the single on/off switch.
     with db() as conn:
         conn.execute(
             "INSERT OR IGNORE INTO member_settings(member_id,opted_in,buying_power_pct,"
             "daily_cap_usd,max_orders,updated_at) VALUES(?,?,?,?,?,?)",
-            (member_id, 0, settings.default_buying_power_pct, settings.default_daily_cap_usd,
-             settings.default_max_orders, int(time.time())),
+            (member_id, 0, 0, 0, settings.max_orders, int(time.time())),
         )
 
 

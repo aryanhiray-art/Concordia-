@@ -1,4 +1,4 @@
-export type UniverseItem = { symbol: string; name: string; sort_order: number };
+export type UniverseItem = { symbol: string; name: string; sort_order?: number };
 
 export type TallyRow = { symbol: string; name: string; votes: number };
 

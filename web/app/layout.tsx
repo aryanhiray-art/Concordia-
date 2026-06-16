@@ -13,7 +13,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${inter.variable} ${outfit.variable}`}>
-      <body className="min-h-screen font-sans text-ink antialiased">{children}</body>
+      <body className="min-h-screen font-sans text-ink antialiased">
+        <div className="aurora" aria-hidden />
+        {children}
+      </body>
     </html>
   );
 }

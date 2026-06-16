@@ -45,14 +45,13 @@ export const api = {
   rhStart: () => req<{ authorize_url: string }>("/api/oauth/robinhood/start"),
   rhDisconnect: () => req<{ ok: boolean }>("/api/oauth/robinhood/disconnect", { method: "POST" }),
 
-  // settings
-  updateSettings: (opted_in: boolean, buying_power_pct: number, daily_cap_usd: number) =>
-    req<{ member: Member }>("/api/me/settings", {
-      method: "PUT", body: JSON.stringify({ opted_in, buying_power_pct, daily_cap_usd }),
-    }),
+  // the single on/off switch
+  participate: (on: boolean) =>
+    req<{ member: Member }>("/api/me/participate", { method: "PUT", body: JSON.stringify({ on }) }),
 
   // voting
-  universe: () => req<{ symbols: UniverseItem[] }>("/api/universe"),
+  searchUniverse: (q: string, limit = 40) =>
+    req<{ symbols: UniverseItem[] }>(`/api/universe?q=${encodeURIComponent(q)}&limit=${limit}`),
   voteToday: () => req<SessionView>("/api/vote/today"),
   castVote: (symbols: string[]) =>
     req<SessionView>("/api/vote/today", { method: "POST", body: JSON.stringify({ symbols }) }),

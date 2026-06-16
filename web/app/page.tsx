@@ -2,18 +2,17 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, getToken, setToken } from "@/lib/api";
-import type { Member, SessionView, UniverseItem } from "@/lib/types";
+import type { Member, SessionView } from "@/lib/types";
 import { AuthGate } from "@/components/AuthGate";
 import { ConnectCard } from "@/components/ConnectCard";
 import { Ballot } from "@/components/Ballot";
 import { Results } from "@/components/Results";
 import { AdminStrip } from "@/components/AdminStrip";
-import { Button, Logo } from "@/components/ui";
+import { Button, Logo, LoadingScreen } from "@/components/ui";
 
 export default function Home() {
   const [ready, setReady] = useState(false);
   const [member, setMember] = useState<Member | null>(null);
-  const [universe, setUniverse] = useState<UniverseItem[]>([]);
   const [session, setSession] = useState<SessionView | null>(null);
 
   const refreshMember = useCallback(async () => {
@@ -26,7 +25,6 @@ export default function Home() {
   useEffect(() => {
     (async () => {
       if (getToken()) await refreshMember();
-      try { setUniverse((await api.universe()).symbols); } catch {}
       setReady(true);
     })();
   }, [refreshMember]);
@@ -38,14 +36,15 @@ export default function Home() {
     return () => clearInterval(id);
   }, [member, refreshSession]);
 
-  if (!ready) return <div className="grid min-h-screen place-items-center text-subtle"><Logo size={44} /></div>;
+  if (!ready) return <LoadingScreen label="starting concord" />;
   if (!member) return <AuthGate onAuthed={(m) => setMember(m)} />;
 
   const open = session?.status === "open";
+  const participating = Number(member.settings?.opted_in) === 1;
 
   return (
     <main className="mx-auto w-[min(760px,100%)] px-4 py-8 sm:py-10">
-      <header className="mb-6 flex items-center justify-between">
+      <header className="enter mb-6 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Logo />
           <div>
@@ -58,11 +57,11 @@ export default function Home() {
         <Button variant="ghost" onClick={() => { setToken(null); setMember(null); }}>Log out</Button>
       </header>
 
-      <div className="space-y-4">
+      <div className="stagger space-y-4">
         {member.role === "owner" && <AdminStrip onAction={refreshSession} />}
         <ConnectCard member={member} onChange={refreshMember} />
         {session && (open
-          ? <Ballot universe={universe} session={session} onVoted={setSession} />
+          ? <Ballot session={session} participating={participating} onVoted={setSession} />
           : <Results session={session} />)}
       </div>
 

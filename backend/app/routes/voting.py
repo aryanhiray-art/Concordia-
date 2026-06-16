@@ -16,8 +16,9 @@ class VoteBody(BaseModel):
 
 
 @router.get("/universe")
-def get_universe():
-    return {"symbols": svc.universe()}
+def get_universe(q: str = "", limit: int = 40):
+    """Search the S&P 500 universe (symbol or company name)."""
+    return {"symbols": svc.universe_search(q, limit)}
 
 
 @router.get("/vote/today")
@@ -28,6 +29,9 @@ def vote_today(member: dict = Depends(require_member)):
 
 @router.post("/vote/today")
 def cast_vote(body: VoteBody, member: dict = Depends(require_member)):
+    s = member.get("settings") or {}
+    if int(s.get("opted_in", 0)) != 1:
+        raise HTTPException(status_code=403, detail="participation is off — turn it on to vote")
     session = svc.active_session()
     if not session or session["status"] != "open":
         raise HTTPException(status_code=409, detail="voting is closed")

@@ -26,7 +26,28 @@ def universe() -> list[dict]:
 
 
 def universe_symbols() -> set[str]:
-    return {u["symbol"] for u in universe()}
+    with db() as conn:
+        rows = conn.execute("SELECT symbol FROM universe WHERE active=1").fetchall()
+    return {r["symbol"] for r in rows}
+
+
+def universe_search(q: str = "", limit: int = 40) -> list[dict]:
+    """Search the S&P 500 universe by symbol or name. Exact symbol → prefix → substring."""
+    q = (q or "").strip().upper()
+    with db() as conn:
+        if q:
+            rows = conn.execute(
+                "SELECT symbol,name FROM universe WHERE active=1 "
+                "AND (symbol LIKE ? OR UPPER(name) LIKE ?) "
+                "ORDER BY (symbol=?) DESC, (symbol LIKE ?) DESC, sort_order LIMIT ?",
+                (f"%{q}%", f"%{q}%", q, f"{q}%", limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT symbol,name FROM universe WHERE active=1 ORDER BY sort_order LIMIT ?",
+                (limit,),
+            ).fetchall()
+    return [dict(r) for r in rows]
 
 
 # ─── session lifecycle ───────────────────────────────────────────────────────
@@ -92,7 +113,14 @@ def set_member_picks(session_id: int, member_id: int, symbols: list[str]) -> lis
     if not sess or sess["status"] != "open":
         raise ValueError("voting is closed for this session")
     valid = universe_symbols()
-    picks = [s.upper() for s in symbols if s.upper() in valid]
+    seen: set[str] = set()
+    picks: list[str] = []
+    for s in symbols:
+        u = s.upper()
+        if u in valid and u not in seen:
+            seen.add(u)
+            picks.append(u)
+    picks = picks[: settings.max_picks]   # at most 20 per member
     now = int(time.time())
     with db() as conn:
         conn.execute("DELETE FROM votes WHERE session_id=? AND member_id=?", (session_id, member_id))
@@ -113,19 +141,21 @@ def member_picks(session_id: int, member_id: int) -> list[str]:
 
 
 def tally(session_id: int) -> list[dict]:
-    """[{symbol, name, votes}] over the full universe, most-picked first."""
-    order = {u["symbol"]: (u["sort_order"], u["name"]) for u in universe()}
+    """[{symbol, name, votes}] for VOTED symbols only, most-picked first.
+
+    (The universe is the whole S&P 500 now, so we never return the zero-vote
+    long tail — the ballot searches the universe and shows this as the live
+    leaderboard / forming basket.)
+    """
     with db() as conn:
         rows = conn.execute(
-            "SELECT symbol, COUNT(*) AS votes FROM votes WHERE session_id=? GROUP BY symbol",
+            "SELECT v.symbol, COUNT(*) AS votes, u.name "
+            "FROM votes v LEFT JOIN universe u ON u.symbol=v.symbol "
+            "WHERE v.session_id=? GROUP BY v.symbol "
+            "ORDER BY votes DESC, v.symbol",
             (session_id,),
         ).fetchall()
-    counts = {r["symbol"]: r["votes"] for r in rows}
-    out = []
-    for sym, (so, name) in order.items():
-        out.append({"symbol": sym, "name": name, "votes": counts.get(sym, 0)})
-    out.sort(key=lambda x: (-x["votes"], order[x["symbol"]][0], x["symbol"]))
-    return out
+    return [{"symbol": r["symbol"], "name": r["name"] or r["symbol"], "votes": r["votes"]} for r in rows]
 
 
 def voter_count(session_id: int) -> int:

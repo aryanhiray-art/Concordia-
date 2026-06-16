@@ -64,16 +64,16 @@ class Settings:
 
     # Trading behaviour
     execution_mode: str = os.environ.get("EXECUTION_MODE", "dry_run").strip().lower()
-    top_n: int = _int("TOP_N", 5)
+    top_n: int = _int("TOP_N", 20)            # consensus basket size
+    max_picks: int = _int("MAX_PICKS", 20)    # most a member may add to their ballot
     vote_open_at: str = os.environ.get("VOTE_OPEN_AT", "18:00")
     vote_close_at: str = os.environ.get("VOTE_CLOSE_AT", "09:25")
     execute_at: str = os.environ.get("EXECUTE_AT", "09:31")
 
-    # Caps
-    max_notional_per_member: float = _float("MAX_NOTIONAL_PER_MEMBER", 2000.0)
-    default_buying_power_pct: float = _float("DEFAULT_BUYING_POWER_PCT", 10.0)
-    default_daily_cap_usd: float = _float("DEFAULT_DAILY_CAP_USD", 500.0)
-    default_max_orders: int = _int("DEFAULT_MAX_ORDERS", 10)
+    # Sizing: deploy ALL available buying power across the basket, holding back a
+    # small cash reserve so dollar market orders never trip a buying-power reject.
+    cash_buffer_pct: float = _float("CASH_BUFFER_PCT", 1.0)   # % of BP kept as reserve
+    max_orders: int = _int("MAX_ORDERS", 25)                  # hard per-member order ceiling
 
     @property
     def rh_redirect_uri(self) -> str:

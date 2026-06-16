@@ -40,8 +40,10 @@ def _num(v) -> float | None:
         return None
 
 
-def budget_for(buying_power: float, bp_pct: float, daily_cap: float) -> float:
-    return min(buying_power * (bp_pct / 100.0), daily_cap, settings.max_notional_per_member)
+def deployable(buying_power: float) -> float:
+    """All available buying power, less a small cash reserve so dollar market
+    orders don't trip a buying-power reject on the last leg."""
+    return buying_power * (1.0 - settings.cash_buffer_pct / 100.0)
 
 
 def has_blocking_alerts(review: dict) -> tuple[bool, list]:
@@ -161,7 +163,7 @@ def run(session: dict, force_dry_run: bool = False) -> dict:
             summary["members"].append(msum)
             continue
 
-        budget = budget_for(buying_power, m["buying_power_pct"], m["daily_cap_usd"])
+        budget = deployable(buying_power)
         per_pick = math.floor((budget / len(picks)) * 100) / 100.0
         msum["buying_power"] = round(buying_power, 2)
         msum["budget"] = round(budget, 2)
@@ -176,7 +178,7 @@ def run(session: dict, force_dry_run: bool = False) -> dict:
             if (mid, symbol) in already:
                 msum["orders"].append({"symbol": symbol, "status": "placed", "note": "already placed"})
                 continue
-            if placed_count >= m["max_orders"]:
+            if placed_count >= settings.max_orders:
                 _record(sid, mid, symbol, per_pick, ref_id_for(sid, mid, symbol), "skipped",
                         error="max_orders cap reached")
                 msum["orders"].append({"symbol": symbol, "status": "skipped", "note": "max_orders cap"})

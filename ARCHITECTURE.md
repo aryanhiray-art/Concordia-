@@ -1,10 +1,12 @@
 # Concord — collective daily-vote trading club
 
 > A Concordia-style trading club. Members each connect **their own** Robinhood
-> account. Every trading day, members **vote** on a 20-stock universe to pick
-> the day's buys. The consensus basket executes **on each member's own account
-> independently**, sized as a percentage of that member's buying power. The
-> owner watches everything from a Forge dashboard tab.
+> account. Every trading day, members **search the S&P 500 and add up to 20
+> picks**. The **top-20 consensus basket** executes **on each member's own
+> account independently**, deploying **all of that member's available buying
+> power** split evenly across the basket. A single on/off switch governs each
+> member's participation (off ⇒ no voting). The owner watches everything from a
+> Forge dashboard tab.
 
 This document is the **canonical contract**. Backend, frontend, and infra all
 conform to what is written here.
@@ -68,9 +70,10 @@ Reuses the mechanics proven in `forge-dashboard/jobs/robinhood_refresh/`.
 **Two hard API constraints that shape the flow:**
 - The trading account must be **`agentic_allowed=true`** (member enables
   Robinhood's "Agentic" account). We resolve it via `get_accounts`.
-- **"% of buying power" ⇒ `dollar_amount`, which requires `type=market` +
+- **Dollar-denominated sizing ⇒ `dollar_amount`, which requires `type=market` +
   `market_hours=regular_hours`.** Dollar/fractional orders only fill in regular
-  hours. Therefore **execution runs at market open, not pre-open.**
+  hours. Therefore **execution runs at market open, not pre-open.** Each
+  member's per-pick amount = (all buying power − small reserve) ÷ basket size.
 
 ---
 
@@ -134,13 +137,13 @@ State writes use the atomic tmp+`os.replace` / WAL patterns already used in
 - `GET  /oauth/robinhood/callback`      → exchanges code, stores encrypted tokens, redirects to web `/connected`
 - `POST /api/oauth/robinhood/disconnect`
 
-**Member settings**
-- `PUT  /api/me/settings`   `{opted_in, buying_power_pct, daily_cap_usd}`
+**Participation (the one switch)**
+- `PUT  /api/me/participate` `{on}` → persists opted_in immediately; off ⇒ voting blocked
 
 **Voting**
-- `GET  /api/universe`               → 20 symbols (+ live quotes, cached)
+- `GET  /api/universe?q=&limit=`     → search the S&P 500 (symbol or company name)
 - `GET  /api/vote/today`             → today's session (status, closes_at, my picks, tally)
-- `POST /api/vote/today`             `{symbols:[...]}` → replace my picks (idempotent; 409 if closed)
+- `POST /api/vote/today`             `{symbols:[...]}` → replace my picks (≤20; 403 if off; 409 if closed)
 - `GET  /api/vote/today/results`     → picks_json + per-member execution status (after execute)
 
 **Admin (owner only)**
