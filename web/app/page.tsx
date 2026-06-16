@@ -7,7 +7,6 @@ import { AuthGate } from "@/components/AuthGate";
 import { ConnectCard } from "@/components/ConnectCard";
 import { Ballot } from "@/components/Ballot";
 import { Results } from "@/components/Results";
-import { AdminStrip } from "@/components/AdminStrip";
 import { Button, Logo, LoadingScreen } from "@/components/ui";
 
 export default function Home() {
@@ -58,7 +57,6 @@ export default function Home() {
       </header>
 
       <div className="stagger space-y-4">
-        {member.role === "owner" && <AdminStrip onAction={refreshSession} />}
         <ConnectCard member={member} onChange={refreshMember} />
         {session && (open
           ? <Ballot session={session} participating={participating} onVoted={setSession} />

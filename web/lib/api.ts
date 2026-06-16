@@ -56,11 +56,5 @@ export const api = {
   castVote: (symbols: string[]) =>
     req<SessionView>("/api/vote/today", { method: "POST", body: JSON.stringify({ symbols }) }),
   results: () => req<{ session: SessionView | null; executions: ExecutionRow[] }>("/api/vote/results"),
-
-  // admin
-  adminOverview: () => req<any>("/api/admin/overview"),
-  arm: (armed: boolean) => req<any>("/api/admin/arm", { method: "POST", body: JSON.stringify({ armed }) }),
-  kill: () => req<any>("/api/admin/kill", { method: "POST" }),
-  runPhase: (phase: "open" | "close" | "execute", dry = true) =>
-    req<any>(`/api/admin/run/${phase}?dry_run=${dry}`, { method: "POST" }),
+  // (owner/admin controls live on the forge dashboard, not in this member app)
 };
