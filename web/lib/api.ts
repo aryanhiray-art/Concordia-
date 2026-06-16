@@ -1,8 +1,10 @@
 "use client";
 
-import type { Member, SessionView, UniverseItem, ExecutionRow } from "./types";
+import type { Member, SessionView, UniverseItem, ExecutionRow, PowerView } from "./types";
 
-const BASE = (process.env.NEXT_PUBLIC_CONCORD_API || "http://localhost:8780").replace(/\/$/, "");
+// Empty base = same-origin (Vercel rewrites /api + /oauth to the forge backend).
+// Local dev sets NEXT_PUBLIC_CONCORD_API=http://localhost:8780.
+const BASE = (process.env.NEXT_PUBLIC_CONCORD_API || "").replace(/\/$/, "");
 const TOKEN_KEY = "concord_token";
 
 export function getToken(): string | null {
@@ -30,16 +32,16 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
 
 export const api = {
   base: BASE,
-  // auth
-  join: (invite_code: string, email: string, display_name: string) =>
-    req<{ token: string; member: Member }>("/api/auth/join", {
-      method: "POST", body: JSON.stringify({ invite_code, email, display_name }),
+  // auth — invite code + email + a password you create; log in with email + password
+  signup: (invite_code: string, email: string, password: string, display_name: string) =>
+    req<{ token: string; member: Member }>("/api/auth/signup", {
+      method: "POST", body: JSON.stringify({ invite_code, email, password, display_name }),
     }),
-  login: (invite_code: string, email: string) =>
+  login: (email: string, password: string) =>
     req<{ token: string; member: Member }>("/api/auth/login", {
-      method: "POST", body: JSON.stringify({ invite_code, email }),
+      method: "POST", body: JSON.stringify({ email, password }),
     }),
-  me: () => req<{ member: Member }>("/api/me"),
+  me: () => req<{ member: Member; power: PowerView }>("/api/me"),
 
   // robinhood
   rhStart: () => req<{ authorize_url: string }>("/api/oauth/robinhood/start"),

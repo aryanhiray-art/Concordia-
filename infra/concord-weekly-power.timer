@@ -1,0 +1,9 @@
+[Unit]
+Description=Concord — re-allocate voting power every Sunday (08:00 ET)
+
+[Timer]
+OnCalendar=Sun 08:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -12,11 +12,36 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import time
 
 from cryptography.fernet import Fernet, InvalidToken
 
 from .config import settings
+
+# ─── Passwords (PBKDF2-HMAC-SHA256, stdlib) ──────────────────────────────────
+
+_PBKDF2_ITERS = 240_000
+
+
+def hash_password(password: str) -> str:
+    """Return a self-describing 'pbkdf2$iter$salt$hash' string. Never stores plaintext."""
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, _PBKDF2_ITERS)
+    return f"pbkdf2${_PBKDF2_ITERS}${base64.b64encode(salt).decode()}${base64.b64encode(dk).decode()}"
+
+
+def verify_password(password: str, stored: str | None) -> bool:
+    if not stored or not stored.startswith("pbkdf2$"):
+        return False
+    try:
+        _, iters, salt_b64, hash_b64 = stored.split("$", 3)
+        salt = base64.b64decode(salt_b64)
+        expected = base64.b64decode(hash_b64)
+        dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, int(iters))
+    except Exception:
+        return False
+    return hmac.compare_digest(dk, expected)
 
 # ─── Token vault ─────────────────────────────────────────────────────────────
 

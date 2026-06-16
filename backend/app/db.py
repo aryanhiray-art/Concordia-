@@ -26,17 +26,40 @@ CREATE TABLE IF NOT EXISTS members (
     display_name    TEXT NOT NULL,
     role            TEXT NOT NULL DEFAULT 'member',   -- 'owner' | 'member'
     invite_code_used TEXT,
+    password_hash   TEXT,                             -- pbkdf2$iter$salt$hash
     session_version INTEGER NOT NULL DEFAULT 1,
-    created_at      INTEGER NOT NULL
+    created_at      INTEGER NOT NULL,
+    last_login_at   INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS member_settings (
     member_id        INTEGER PRIMARY KEY REFERENCES members(id) ON DELETE CASCADE,
     opted_in         INTEGER NOT NULL DEFAULT 0,
-    buying_power_pct REAL NOT NULL,
-    daily_cap_usd    REAL NOT NULL,
-    max_orders       INTEGER NOT NULL,
+    buying_power_pct REAL NOT NULL DEFAULT 0,
+    daily_cap_usd    REAL NOT NULL DEFAULT 0,
+    max_orders       INTEGER NOT NULL DEFAULT 25,
+    voting_power     REAL NOT NULL DEFAULT 0,         -- current weight = account equity ($)
     updated_at       INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS voting_power_history (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    member_id   INTEGER NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+    week_start  TEXT NOT NULL,                        -- YYYY-MM-DD (Sunday, ET)
+    power       REAL NOT NULL,                        -- = equity snapshot
+    equity      REAL,
+    prev_power  REAL,
+    delta       REAL,                                 -- power - prev_power
+    created_at  INTEGER NOT NULL,
+    UNIQUE(member_id, week_start)
+);
+
+CREATE TABLE IF NOT EXISTS login_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    member_id  INTEGER NOT NULL,
+    ts         INTEGER NOT NULL,
+    ip         TEXT,
+    kind       TEXT NOT NULL DEFAULT 'login'          -- 'signup' | 'login'
 );
 
 CREATE TABLE IF NOT EXISTS rh_accounts (
@@ -124,6 +147,21 @@ def db() -> Iterator[sqlite3.Connection]:
 def init_db() -> None:
     with db() as conn:
         conn.executescript(_SCHEMA)
+        _migrate(conn)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns to pre-existing tables (deployed DBs predate these fields)."""
+    def cols(t: str) -> set[str]:
+        return {r["name"] for r in conn.execute(f"PRAGMA table_info({t})")}
+    m = cols("members")
+    if "password_hash" not in m:
+        conn.execute("ALTER TABLE members ADD COLUMN password_hash TEXT")
+    if "last_login_at" not in m:
+        conn.execute("ALTER TABLE members ADD COLUMN last_login_at INTEGER")
+    s = cols("member_settings")
+    if "voting_power" not in s:
+        conn.execute("ALTER TABLE member_settings ADD COLUMN voting_power REAL NOT NULL DEFAULT 0")
 
 
 # ─── kv flags ────────────────────────────────────────────────────────────────

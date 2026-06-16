@@ -1,6 +1,14 @@
 export type UniverseItem = { symbol: string; name: string; sort_order?: number };
 
-export type TallyRow = { symbol: string; name: string; votes: number };
+export type TallyRow = { symbol: string; name: string; votes: number; weight?: number };
+
+export type PowerPoint = { week_start: string; power: number; equity: number | null; delta: number | null };
+export type PowerView = {
+  power: number;
+  delta: number | null;
+  as_of_week: string | null;
+  history: PowerPoint[];
+};
 
 export type SessionView = {
   id: number;

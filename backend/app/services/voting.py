@@ -141,21 +141,26 @@ def member_picks(session_id: int, member_id: int) -> list[str]:
 
 
 def tally(session_id: int) -> list[dict]:
-    """[{symbol, name, votes}] for VOTED symbols only, most-picked first.
+    """[{symbol, name, votes, weight}] for VOTED symbols, by voting-power weight.
 
-    (The universe is the whole S&P 500 now, so we never return the zero-vote
-    long tail — the ballot searches the universe and shows this as the live
-    leaderboard / forming basket.)
+    Each member's pick contributes their voting power (= account equity $), with
+    a floor of 1 so members who haven't connected/snapshotted yet still count.
+    The forming basket = the top-N by weight. (Universe is the whole S&P 500, so
+    we only return symbols that actually got votes.)
     """
     with db() as conn:
         rows = conn.execute(
-            "SELECT v.symbol, COUNT(*) AS votes, u.name "
-            "FROM votes v LEFT JOIN universe u ON u.symbol=v.symbol "
+            "SELECT v.symbol, COUNT(*) AS votes, "
+            "       SUM(MAX(COALESCE(s.voting_power,0), 1.0)) AS weight, u.name "
+            "FROM votes v "
+            "LEFT JOIN member_settings s ON s.member_id=v.member_id "
+            "LEFT JOIN universe u ON u.symbol=v.symbol "
             "WHERE v.session_id=? GROUP BY v.symbol "
-            "ORDER BY votes DESC, v.symbol",
+            "ORDER BY weight DESC, votes DESC, v.symbol",
             (session_id,),
         ).fetchall()
-    return [{"symbol": r["symbol"], "name": r["name"] or r["symbol"], "votes": r["votes"]} for r in rows]
+    return [{"symbol": r["symbol"], "name": r["name"] or r["symbol"],
+             "votes": r["votes"], "weight": round(r["weight"] or 0, 2)} for r in rows]
 
 
 def voter_count(session_id: int) -> int:

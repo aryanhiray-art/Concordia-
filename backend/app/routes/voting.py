@@ -32,8 +32,8 @@ def cast_vote(body: VoteBody, member: dict = Depends(require_member)):
     s = member.get("settings") or {}
     if int(s.get("opted_in", 0)) != 1:
         raise HTTPException(status_code=403, detail="participation is off — turn it on to vote")
-    session = svc.active_session()
-    if not session or session["status"] != "open":
+    session = svc.ensure_active_session()   # always resolves to the open ballot
+    if session["status"] != "open":
         raise HTTPException(status_code=409, detail="voting is closed")
     try:
         svc.set_member_picks(session["id"], member["id"], body.symbols)

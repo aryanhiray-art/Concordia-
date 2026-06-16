@@ -67,8 +67,12 @@ class Settings:
     top_n: int = _int("TOP_N", 20)            # consensus basket size
     max_picks: int = _int("MAX_PICKS", 20)    # most a member may add to their ballot
     vote_open_at: str = os.environ.get("VOTE_OPEN_AT", "18:00")
-    vote_close_at: str = os.environ.get("VOTE_CLOSE_AT", "09:25")
+    vote_close_at: str = os.environ.get("VOTE_CLOSE_AT", "08:30")   # 1h before the 09:30 open
     execute_at: str = os.environ.get("EXECUTE_AT", "09:31")
+    # Voting power re-allocates weekly (Sunday). Power = account equity ($),
+    # snapshotted on connect + every Sunday; votes are weighted by it.
+    weekly_power_at: str = os.environ.get("WEEKLY_POWER_AT", "08:00")  # Sunday ET
+    voting_power_base: float = _float("VOTING_POWER_BASE", 0.0)        # power before first snapshot
 
     # Sizing: deploy ALL available buying power across the basket, holding back a
     # small cash reserve so dollar market orders never trip a buying-power reject.

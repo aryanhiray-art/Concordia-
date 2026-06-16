@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from ..db import audit, db
+from ..services import power
 from .deps import load_member, require_member
 
 router = APIRouter(prefix="/api", tags=["member"])
@@ -18,7 +19,7 @@ class ParticipateBody(BaseModel):
 
 @router.get("/me")
 def me(member: dict = Depends(require_member)):
-    return {"member": load_member(member["id"])}
+    return {"member": load_member(member["id"]), "power": power.member_power_view(member["id"])}
 
 
 @router.put("/me/participate")

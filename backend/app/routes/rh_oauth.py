@@ -7,6 +7,7 @@ from fastapi.responses import RedirectResponse
 from ..config import settings
 from ..db import audit, db
 from ..robinhood import oauth, vault
+from ..services import power
 from .deps import require_member
 
 router = APIRouter(tags=["robinhood"])
@@ -34,6 +35,11 @@ def callback(request: Request):
     try:
         bundle = oauth.exchange_code(code, pending["verifier"], pending["client_id"])
         info = vault.complete_connection(pending["member_id"], bundle)
+        # give them voting power immediately = their current equity
+        try:
+            power.snapshot_member(pending["member_id"])
+        except Exception:  # noqa: BLE001 — never fail the connect over a snapshot
+            pass
     except Exception as e:  # noqa: BLE001
         audit(f"member:{pending['member_id']}", "rh_oauth_error", None, {"err": str(e)})
         return RedirectResponse(f"{web}/connected?status=error&reason=exchange_failed")
