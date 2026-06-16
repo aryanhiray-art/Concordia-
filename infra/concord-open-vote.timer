@@ -1,0 +1,9 @@
+[Unit]
+Description=Concord — open voting nightly (18:00 ET); job opens the next trading day
+
+[Timer]
+OnCalendar=*-*-* 18:00 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

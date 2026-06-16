@@ -1,0 +1,19 @@
+# secrets & runtime state — never commit
+.env
+.auth.env
+*.db
+*.db-wal
+*.db-shm
+concord.db*
+backend/concord.db*
+backend/.venv/
+__pycache__/
+*.pyc
+
+# web
+web/node_modules/
+web/.next/
+web/.vercel/
+web/.env*.local
+web/next-env.d.ts
+web/*.tsbuildinfo

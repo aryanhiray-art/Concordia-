@@ -1,0 +1,23 @@
+[Unit]
+Description=Concord API (FastAPI/uvicorn) — daily-vote trading club
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=concord
+Group=concord
+WorkingDirectory=/opt/concord/backend
+EnvironmentFile=/opt/concord/.env
+ExecStart=/opt/concord/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8780
+Restart=on-failure
+RestartSec=5
+# hardening — concord can't see the rest of the box
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/concord
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

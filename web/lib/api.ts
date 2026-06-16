@@ -1,0 +1,67 @@
+"use client";
+
+import type { Member, SessionView, UniverseItem, ExecutionRow } from "./types";
+
+const BASE = (process.env.NEXT_PUBLIC_CONCORD_API || "http://localhost:8780").replace(/\/$/, "");
+const TOKEN_KEY = "concord_token";
+
+export function getToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(TOKEN_KEY);
+}
+export function setToken(t: string | null) {
+  if (typeof window === "undefined") return;
+  if (t) window.localStorage.setItem(TOKEN_KEY, t);
+  else window.localStorage.removeItem(TOKEN_KEY);
+}
+
+async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
+  const headers: Record<string, string> = { "Content-Type": "application/json", ...(opts.headers as any) };
+  const tok = getToken();
+  if (tok) headers["Authorization"] = `Bearer ${tok}`;
+  const res = await fetch(`${BASE}${path}`, { ...opts, headers, cache: "no-store" });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { detail = (await res.json()).detail || detail; } catch {}
+    throw new Error(detail);
+  }
+  return res.status === 204 ? (undefined as T) : res.json();
+}
+
+export const api = {
+  base: BASE,
+  // auth
+  join: (invite_code: string, email: string, display_name: string) =>
+    req<{ token: string; member: Member }>("/api/auth/join", {
+      method: "POST", body: JSON.stringify({ invite_code, email, display_name }),
+    }),
+  login: (invite_code: string, email: string) =>
+    req<{ token: string; member: Member }>("/api/auth/login", {
+      method: "POST", body: JSON.stringify({ invite_code, email }),
+    }),
+  me: () => req<{ member: Member }>("/api/me"),
+
+  // robinhood
+  rhStart: () => req<{ authorize_url: string }>("/api/oauth/robinhood/start"),
+  rhDisconnect: () => req<{ ok: boolean }>("/api/oauth/robinhood/disconnect", { method: "POST" }),
+
+  // settings
+  updateSettings: (opted_in: boolean, buying_power_pct: number, daily_cap_usd: number) =>
+    req<{ member: Member }>("/api/me/settings", {
+      method: "PUT", body: JSON.stringify({ opted_in, buying_power_pct, daily_cap_usd }),
+    }),
+
+  // voting
+  universe: () => req<{ symbols: UniverseItem[] }>("/api/universe"),
+  voteToday: () => req<SessionView>("/api/vote/today"),
+  castVote: (symbols: string[]) =>
+    req<SessionView>("/api/vote/today", { method: "POST", body: JSON.stringify({ symbols }) }),
+  results: () => req<{ session: SessionView | null; executions: ExecutionRow[] }>("/api/vote/results"),
+
+  // admin
+  adminOverview: () => req<any>("/api/admin/overview"),
+  arm: (armed: boolean) => req<any>("/api/admin/arm", { method: "POST", body: JSON.stringify({ armed }) }),
+  kill: () => req<any>("/api/admin/kill", { method: "POST" }),
+  runPhase: (phase: "open" | "close" | "execute", dry = true) =>
+    req<any>(`/api/admin/run/${phase}?dry_run=${dry}`, { method: "POST" }),
+};

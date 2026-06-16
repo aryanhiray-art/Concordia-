@@ -1,0 +1,9 @@
+[Unit]
+Description=Concord — execute at the open (09:31 ET, weekdays); job is holiday-gated
+
+[Timer]
+OnCalendar=Mon-Fri 09:31 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target
