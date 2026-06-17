@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from ..config import settings
 from ..db import audit, db, is_armed, kv_get, kv_set, set_armed
 from ..robinhood import vault
-from ..services import alloc, executor, power
+from ..services import alloc, bots, executor, power
 from ..services import voting as svc
 from .deps import load_member, require_owner
 
@@ -30,6 +30,7 @@ def overview(owner: dict = Depends(require_owner)):
     with db() as conn:
         members = conn.execute(
             "SELECT m.id,m.email,m.display_name,m.role,m.last_login_at,m.created_at,"
+            "m.is_bot,m.bot_strategy,m.bot_model,"
             "s.opted_in,s.voting_power,a.account_number,a.agentic_allowed,a.status AS rh_status,"
             "(SELECT delta FROM voting_power_history h WHERE h.member_id=m.id "
             "  ORDER BY h.week_start DESC LIMIT 1) AS power_delta "
@@ -46,16 +47,26 @@ def overview(owner: dict = Depends(require_owner)):
                 "WHERE e.session_id=? ORDER BY e.member_id,e.symbol", (session["id"],)
             ).fetchall()
         execs = [dict(r) for r in rows]
-    total_power = sum(float(m["voting_power"] or 0) for m in members)
+    mdicts = [dict(m) for m in members]
+    total_power = sum(float(m["voting_power"] or 0) for m in mdicts)
+    bot_power = sum(float(m["voting_power"] or 0) for m in mdicts if m["is_bot"])
     return {
         "armed": is_armed(),
         "halt": kv_get("halt") == "1",
         "execution_mode": settings.execution_mode,
         "top_n": settings.top_n,
         "total_voting_power": round(total_power, 2),
+        "bot_voting_power": round(bot_power, 2),
+        "human_count": sum(1 for m in mdicts if not m["is_bot"]),
+        "bot_count": sum(1 for m in mdicts if m["is_bot"]),
+        # Owner-only: the shareable invite code + owner email, surfaced here so the
+        # forge dashboard can show them. Recovery for forgotten passwords is the
+        # member app's self-serve reset (invite code + email → new password).
+        "invite_code": settings.invite_code,
+        "owner_email": settings.owner_email,
         "schedule": {"open": settings.vote_open_at, "close": settings.vote_close_at,
                      "execute": settings.execute_at, "weekly_power": settings.weekly_power_at},
-        "members": [dict(m) for m in members],
+        "members": mdicts,
         "session": sess_view,
         "executions": execs,
     }
@@ -74,6 +85,16 @@ def member_detail(member_id: int, owner: dict = Depends(require_owner)):
     if session:
         out["session_date"] = session["trade_date"]
         out["picks"] = svc.member_picks(session["id"], member_id)
+        # bot extras: this session's weighted picks + thesis
+        with db() as conn:
+            bp = conn.execute(
+                "SELECT symbol, weight_pct, entry_price, thesis FROM bot_picks "
+                "WHERE session_id=? AND member_id=? ORDER BY weight_pct DESC",
+                (session["id"], member_id)
+            ).fetchall()
+        if bp:
+            out["bot_picks"] = [dict(r) for r in bp]
+            out["bot_thesis"] = bp[0]["thesis"]
         with db() as conn:
             rows = conn.execute(
                 "SELECT symbol,side,dollar_amount,status,error,created_at FROM executions "
@@ -123,6 +144,33 @@ def member_detail(member_id: int, owner: dict = Depends(require_owner)):
     return out
 
 
+@router.post("/member/{member_id}/reset-password")
+def reset_password(member_id: int, owner: dict = Depends(require_owner)):
+    """Owner-mediated recovery for a member who forgot their password.
+
+    Generates a random temporary password, stores its hash, and invalidates the
+    member's existing sessions (bump session_version). Returns the temp password
+    ONCE for the owner to relay; the member logs in with it and can change it.
+    Owner-only by design — a shared-invite self-serve reset would let any member
+    reset another member's account.
+    """
+    import secrets
+    from ..security import hash_password
+    with db() as conn:
+        row = conn.execute("SELECT id,email,is_bot FROM members WHERE id=?", (member_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "no such member")
+        if row["is_bot"]:
+            raise HTTPException(400, "bots have no login")
+        temp = secrets.token_urlsafe(9)  # ~12 chars, > 8 min
+        conn.execute(
+            "UPDATE members SET password_hash=?, session_version=session_version+1 WHERE id=?",
+            (hash_password(temp), member_id),
+        )
+    audit(owner["email"], "reset_password", row["email"], None)
+    return {"ok": True, "email": row["email"], "temp_password": temp}
+
+
 @router.post("/arm")
 def arm(body: ArmBody, owner: dict = Depends(require_owner)):
     set_armed(body.armed, actor=owner["email"])
@@ -146,6 +194,11 @@ def run_phase(phase: str, dry_run: bool = True, owner: dict = Depends(require_ow
         return {"session": svc.ensure_active_session()}
     if phase == "power":
         return {"snapshots": power.snapshot_all()}
+    if phase == "bots":          # seed (if needed) + have every bot vote now
+        bots.seed_bots()
+        return bots.cast_votes(svc.ensure_active_session())
+    if phase == "reweight":      # weekly accuracy → bot voting power
+        return bots.score_and_reweight()
     if phase == "close":
         session = svc.active_session()
         if not session:
@@ -159,4 +212,4 @@ def run_phase(phase: str, dry_run: bool = True, owner: dict = Depends(require_ow
         if session["status"] == "open":
             session = svc.close_and_select(session["id"])
         return executor.run(session, force_dry_run=dry_run)
-    raise HTTPException(400, "phase must be open|close|execute|power")
+    raise HTTPException(400, "phase must be open|close|execute|power|bots|reweight")

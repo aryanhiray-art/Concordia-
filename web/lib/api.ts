@@ -42,6 +42,10 @@ export const api = {
       method: "POST", body: JSON.stringify({ email, password }),
     }),
   me: () => req<{ member: Member; power: PowerView }>("/api/me"),
+  changePassword: (current_password: string, new_password: string) =>
+    req<{ ok: boolean }>("/api/me/password", {
+      method: "PUT", body: JSON.stringify({ current_password, new_password }),
+    }),
 
   // robinhood — start, then paste back the redirect URL Robinhood sends you
   rhStart: () => req<{ authorize_url: string }>("/api/oauth/robinhood/start"),

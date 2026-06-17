@@ -1,0 +1,11 @@
+[Unit]
+Description=Concord — one-shot account reset, just after the 2026-06-17 open (then never again)
+
+[Timer]
+# Fires once a few minutes after the open on the test date. The job is also
+# guarded by a kv flag, so it liquidates exactly once even if re-armed.
+OnCalendar=2026-06-17 09:35 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

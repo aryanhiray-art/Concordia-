@@ -84,6 +84,13 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
         </form>
       </Card>
 
+      {mode === "login" && (
+        <p className="mt-3 text-center text-[12px] text-subtle">
+          Forgot your password? Ask the club owner to reset it — they&apos;ll give you a
+          temporary one you can change after logging in.
+        </p>
+      )}
+
       <p className="mt-4 text-center text-[11.5px] leading-relaxed text-subtle">
         Invite-only. You connect Robinhood through Robinhood&apos;s own secure login —
         we never see your password.

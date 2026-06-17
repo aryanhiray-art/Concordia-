@@ -1,0 +1,19 @@
+[Unit]
+Description=Concord — AI bots vote in the day's session (Ollama)
+
+[Service]
+Type=oneshot
+User=concord
+Group=concord
+WorkingDirectory=/opt/concord/backend
+EnvironmentFile=/opt/concord/.env
+# Low priority: 20 local LLM inferences are CPU-heavy; yield to other services.
+Nice=10
+CPUWeight=30
+IOWeight=30
+ExecStart=/opt/concord/backend/.venv/bin/python jobs/bot_vote.py
+TimeoutStartSec=1800
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/concord

@@ -1,0 +1,9 @@
+[Unit]
+Description=Concord — re-weight bots by accuracy every Sunday (08:05 ET, after weekly-power)
+
+[Timer]
+OnCalendar=Sun 08:05 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

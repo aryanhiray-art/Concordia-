@@ -6,6 +6,7 @@ import type { Member, SessionView } from "@/lib/types";
 import { AuthGate } from "@/components/AuthGate";
 import { ConnectCard } from "@/components/ConnectCard";
 import { AllocationCard } from "@/components/AllocationCard";
+import { ChangePassword } from "@/components/ChangePassword";
 import { Ballot } from "@/components/Ballot";
 import { Results } from "@/components/Results";
 import { Button, Logo, LoadingScreen } from "@/components/ui";
@@ -64,6 +65,7 @@ export default function Home() {
         {session && (open
           ? <Ballot session={session} participating={participating} onVoted={setSession} />
           : <Results session={session} />)}
+        <ChangePassword />
       </div>
 
       <p className="mt-6 text-center text-[11px] text-subtle">

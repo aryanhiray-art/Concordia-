@@ -1,0 +1,15 @@
+[Unit]
+Description=Concord — weekly bot voting-power re-weight by pick accuracy
+
+[Service]
+Type=oneshot
+User=concord
+Group=concord
+WorkingDirectory=/opt/concord/backend
+EnvironmentFile=/opt/concord/.env
+Nice=10
+ExecStart=/opt/concord/backend/.venv/bin/python jobs/bot_reweight.py
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/concord

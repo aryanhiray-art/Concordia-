@@ -24,7 +24,7 @@ import uuid
 from ..config import settings
 from ..db import audit, db, is_armed
 from ..robinhood import vault
-from . import alloc, voting
+from . import alloc, positions, voting
 
 _REF_NS = uuid.UUID("c0c0c0c0-0000-4000-8000-000000000000")
 
@@ -87,26 +87,44 @@ def _opted_members() -> list[dict]:
 
 
 def _record(session_id, member_id, symbol, dollar_amount, ref_id, status,
-            review=None, place=None, error=None) -> None:
+            review=None, place=None, error=None, side="buy") -> None:
     with db() as conn:
         conn.execute(
             "INSERT INTO executions(session_id,member_id,symbol,side,type,dollar_amount,"
             "ref_id,status,review_json,place_json,error,created_at) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-            (session_id, member_id, symbol, "buy", "market", dollar_amount, ref_id, status,
+            (session_id, member_id, symbol, side, "market", dollar_amount, ref_id, status,
              json.dumps(review) if review is not None else None,
              json.dumps(place) if place is not None else None,
              error, int(time.time())),
         )
 
 
-def _placed_keys(session_id: int) -> set[tuple[int, str]]:
+def _placed_keys(session_id: int) -> set[tuple[int, str, str]]:
+    """(member, symbol, side) already placed this session — never re-place."""
     with db() as conn:
         rows = conn.execute(
-            "SELECT member_id,symbol FROM executions WHERE session_id=? AND status='placed'",
+            "SELECT member_id,symbol,side FROM executions WHERE session_id=? AND status='placed'",
             (session_id,),
         ).fetchall()
-    return {(r["member_id"], r["symbol"]) for r in rows}
+    return {(r["member_id"], r["symbol"], r["side"]) for r in rows}
+
+
+def _quotes(client, symbols: list[str]) -> dict[str, float]:
+    """last_trade_price per symbol via the member's own RH client (best-effort)."""
+    out: dict[str, float] = {}
+    syms = sorted({s for s in symbols if s})
+    for i in range(0, len(syms), 20):
+        try:
+            res = (client.get_quotes(syms[i:i + 20]).get("data") or {}).get("results") or []
+        except Exception:  # noqa: BLE001
+            continue
+        for e in res:
+            q = e.get("quote") or {}
+            px = _num(q.get("last_trade_price"))
+            if q.get("symbol") and px:
+                out[q["symbol"]] = px
+    return out
 
 
 def _clear_replanable(session_id: int) -> None:
@@ -164,52 +182,98 @@ def run(session: dict, force_dry_run: bool = False) -> dict:
             continue
 
         budget = alloc.resolve_allocation(m["alloc_type"], m["alloc_value"], buying_power)
-        per_pick = math.floor((budget / len(picks)) * 100) / 100.0
+        n = len(picks)
+        per_pick = math.floor((budget / n) * 100) / 100.0
+        want = set(picks)
+        held = positions.club_shares(mid)            # only what the CLUB bought
+        prices = _quotes(client, list(want | set(held)))
         msum["buying_power"] = round(buying_power, 2)
         msum["allocation"] = round(budget, 2)
         msum["budget"] = round(budget, 2)
         msum["per_pick"] = per_pick
-        if per_pick < 1.00:
-            msum["note"] = f"per-pick ${per_pick:.2f} below $1 minimum — skipped"
-            summary["members"].append(msum)
-            continue
+        order_count = 0
 
-        placed_count = 0
-        for symbol in picks:
-            if (mid, symbol) in already:
-                msum["orders"].append({"symbol": symbol, "status": "placed", "note": "already placed"})
+        # ── SELL phase: exit club holdings that dropped out of the basket ──
+        # (a member's own non-club positions are never in `held`, so untouched.)
+        for symbol, qty in sorted(held.items()):
+            if symbol in want:
+                continue                              # still in basket → keep it
+            if (mid, symbol, "sell") in already:
+                msum["orders"].append({"symbol": symbol, "side": "sell", "status": "placed",
+                                       "note": "already sold"})
                 continue
-            if placed_count >= settings.max_orders:
-                _record(sid, mid, symbol, per_pick, ref_id_for(sid, mid, symbol), "skipped",
-                        error="max_orders cap reached")
-                msum["orders"].append({"symbol": symbol, "status": "skipped", "note": "max_orders cap"})
-                continue
-            ref_id = ref_id_for(sid, mid, symbol)
-            amt = f"{per_pick:.2f}"
+            ref_id = ref_id_for(sid, mid, f"SELL:{symbol}")
+            qstr = f"{qty:.6f}"
             try:
-                review = client.review_market_buy(m["account_number"], symbol, amt)
+                review = client.review_market_sell(m["account_number"], symbol, qstr)
             except Exception as e:  # noqa: BLE001
-                _record(sid, mid, symbol, per_pick, ref_id, "error", error=f"review: {e}")
-                msum["orders"].append({"symbol": symbol, "status": "error", "note": str(e)})
+                _record(sid, mid, symbol, None, ref_id, "error", error=f"sell review: {e}", side="sell")
+                msum["orders"].append({"symbol": symbol, "side": "sell", "status": "error", "note": str(e)})
                 continue
             blocked, alerts = has_blocking_alerts(review)
             if blocked:
-                _record(sid, mid, symbol, per_pick, ref_id, "skipped", review=review,
-                        error="blocking pre-trade alert")
-                msum["orders"].append({"symbol": symbol, "status": "skipped", "alerts": alerts})
+                _record(sid, mid, symbol, None, ref_id, "skipped", review=review,
+                        error="blocking pre-trade alert", side="sell")
+                msum["orders"].append({"symbol": symbol, "side": "sell", "status": "skipped", "alerts": alerts})
                 continue
             if not will_place:
-                _record(sid, mid, symbol, per_pick, ref_id, "reviewed", review=review)
-                msum["orders"].append({"symbol": symbol, "status": "reviewed", "amount": amt})
+                _record(sid, mid, symbol, None, ref_id, "reviewed", review=review, side="sell")
+                msum["orders"].append({"symbol": symbol, "side": "sell", "status": "reviewed", "qty": qstr})
+                continue
+            try:
+                place = client.place_market_sell(m["account_number"], symbol, qstr, ref_id=ref_id)
+                _record(sid, mid, symbol, None, ref_id, "placed", review=review, place=place, side="sell")
+                msum["orders"].append({"symbol": symbol, "side": "sell", "status": "placed", "qty": qstr})
+                order_count += 1
+            except Exception as e:  # noqa: BLE001
+                _record(sid, mid, symbol, None, ref_id, "error", review=review, error=f"sell: {e}", side="sell")
+                msum["orders"].append({"symbol": symbol, "side": "sell", "status": "error", "note": str(e)})
+
+        # ── BUY phase: top each basket name up to its equal-weight target ──
+        # need = target − current club value, so names already held aren't re-bought
+        # and the proceeds from the sells above fund the newly-added names.
+        for symbol in picks:
+            if (mid, symbol, "buy") in already:
+                msum["orders"].append({"symbol": symbol, "side": "buy", "status": "placed",
+                                       "note": "already placed"})
+                continue
+            held_val = held.get(symbol, 0.0) * (prices.get(symbol) or 0.0)
+            need = round(per_pick - held_val, 2)
+            if need < 1.00:
+                msum["orders"].append({"symbol": symbol, "side": "buy", "status": "held",
+                                       "note": f"at target (${held_val:.2f} ≥ ${per_pick:.2f})"})
+                continue
+            if order_count >= settings.max_orders:
+                _record(sid, mid, symbol, need, ref_id_for(sid, mid, symbol), "skipped",
+                        error="max_orders cap reached")
+                msum["orders"].append({"symbol": symbol, "side": "buy", "status": "skipped", "note": "max_orders cap"})
+                continue
+            ref_id = ref_id_for(sid, mid, symbol)
+            amt = f"{need:.2f}"
+            try:
+                review = client.review_market_buy(m["account_number"], symbol, amt)
+            except Exception as e:  # noqa: BLE001
+                _record(sid, mid, symbol, need, ref_id, "error", error=f"review: {e}")
+                msum["orders"].append({"symbol": symbol, "side": "buy", "status": "error", "note": str(e)})
+                continue
+            blocked, alerts = has_blocking_alerts(review)
+            if blocked:
+                _record(sid, mid, symbol, need, ref_id, "skipped", review=review,
+                        error="blocking pre-trade alert")
+                msum["orders"].append({"symbol": symbol, "side": "buy", "status": "skipped", "alerts": alerts})
+                continue
+            if not will_place:
+                _record(sid, mid, symbol, need, ref_id, "reviewed", review=review)
+                msum["orders"].append({"symbol": symbol, "side": "buy", "status": "reviewed", "amount": amt})
                 continue
             try:
                 place = client.place_market_buy(m["account_number"], symbol, amt, ref_id=ref_id)
-                _record(sid, mid, symbol, per_pick, ref_id, "placed", review=review, place=place)
-                msum["orders"].append({"symbol": symbol, "status": "placed", "amount": amt})
-                placed_count += 1
+                _record(sid, mid, symbol, need, ref_id, "placed", review=review, place=place)
+                msum["orders"].append({"symbol": symbol, "side": "buy", "status": "placed", "amount": amt})
+                order_count += 1
             except Exception as e:  # noqa: BLE001
-                _record(sid, mid, symbol, per_pick, ref_id, "error", review=review, error=f"place: {e}")
-                msum["orders"].append({"symbol": symbol, "status": "error", "note": str(e)})
+                _record(sid, mid, symbol, need, ref_id, "error", review=review, error=f"place: {e}")
+                msum["orders"].append({"symbol": symbol, "side": "buy", "status": "error", "note": str(e)})
         summary["members"].append(msum)
         summary["orders"].extend(
             {"member_id": mid, **o} for o in msum["orders"]

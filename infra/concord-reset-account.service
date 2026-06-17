@@ -1,0 +1,14 @@
+[Unit]
+Description=Concord — one-shot: liquidate the owner's account to all-cash (the $100 reset)
+
+[Service]
+Type=oneshot
+User=concord
+Group=concord
+WorkingDirectory=/opt/concord/backend
+EnvironmentFile=/opt/concord/.env
+ExecStart=/opt/concord/backend/.venv/bin/python jobs/reset_account.py
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/concord

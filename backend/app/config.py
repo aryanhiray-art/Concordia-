@@ -68,6 +68,12 @@ class Settings:
     # Concord; we exchange it server-side (PKCE verifier is keyed by state).
     rh_redirect_uri_env: str = os.environ.get("RH_REDIRECT_URI", "").strip()
 
+    # AI voting bots (local Ollama). Bots vote but never trade.
+    ollama_url: str = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
+    ollama_timeout: int = _int("OLLAMA_TIMEOUT", 120)
+    bots_universe_size: int = _int("BOTS_UNIVERSE_SIZE", 120)   # tickers shown to each bot
+    bot_start_power: float = _float("BOT_START_POWER", 100.0)   # initial voting power per bot
+
     # Trading behaviour
     execution_mode: str = os.environ.get("EXECUTION_MODE", "dry_run").strip().lower()
     top_n: int = _int("TOP_N", 20)            # consensus basket size

@@ -29,7 +29,12 @@ CREATE TABLE IF NOT EXISTS members (
     password_hash   TEXT,                             -- pbkdf2$iter$salt$hash
     session_version INTEGER NOT NULL DEFAULT 1,
     created_at      INTEGER NOT NULL,
-    last_login_at   INTEGER
+    last_login_at   INTEGER,
+    is_bot          INTEGER NOT NULL DEFAULT 0,       -- AI voter (no RH account, never trades)
+    bot_strategy    TEXT,                             -- human-readable style label
+    bot_slug        TEXT,                             -- stable id for the strategy
+    bot_model       TEXT,                             -- ollama model name
+    bot_temperature REAL                              -- sampling temperature
 );
 
 CREATE TABLE IF NOT EXISTS member_settings (
@@ -100,6 +105,21 @@ CREATE TABLE IF NOT EXISTS votes (
     PRIMARY KEY (session_id, member_id, symbol)
 );
 
+-- A bot's per-session picks with the price at vote time, so we can score the
+-- bot's realized return next week (its "accuracy"). Mirrors `votes` but keeps
+-- the weight + entry price + thesis the consensus tally doesn't need.
+CREATE TABLE IF NOT EXISTS bot_picks (
+    session_id  INTEGER NOT NULL REFERENCES vote_sessions(id) ON DELETE CASCADE,
+    member_id   INTEGER NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+    symbol      TEXT NOT NULL,
+    weight_pct  REAL NOT NULL DEFAULT 0,              -- bot's own % allocation
+    entry_price REAL,                                 -- price when the bot voted
+    thesis      TEXT,
+    created_at  INTEGER NOT NULL,
+    PRIMARY KEY (session_id, member_id, symbol)
+);
+CREATE INDEX IF NOT EXISTS ix_botpicks_member ON bot_picks(member_id);
+
 CREATE TABLE IF NOT EXISTS executions (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id    INTEGER NOT NULL,
@@ -164,6 +184,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE members ADD COLUMN password_hash TEXT")
     if "last_login_at" not in m:
         conn.execute("ALTER TABLE members ADD COLUMN last_login_at INTEGER")
+    for col, ddl in (("is_bot", "is_bot INTEGER NOT NULL DEFAULT 0"),
+                     ("bot_strategy", "bot_strategy TEXT"),
+                     ("bot_slug", "bot_slug TEXT"),
+                     ("bot_model", "bot_model TEXT"),
+                     ("bot_temperature", "bot_temperature REAL")):
+        if col not in m:
+            conn.execute(f"ALTER TABLE members ADD COLUMN {ddl}")
     s = cols("member_settings")
     if "voting_power" not in s:
         conn.execute("ALTER TABLE member_settings ADD COLUMN voting_power REAL NOT NULL DEFAULT 0")

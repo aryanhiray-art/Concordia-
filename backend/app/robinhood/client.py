@@ -136,6 +136,32 @@ class RobinhoodClient:
             "ref_id": ref_id or str(uuid.uuid4()),
         })
 
+    def review_market_sell(self, account_number: str, symbol: str, quantity: str) -> dict:
+        """Simulate a share-quantity market sell (used to fully exit a position)."""
+        return self.mcp.call_tool("review_equity_order", {
+            "account_number": account_number,
+            "symbol": symbol,
+            "side": "sell",
+            "type": "market",
+            "quantity": quantity,
+            "market_hours": "regular_hours",
+            "time_in_force": "gfd",
+        })
+
+    def place_market_sell(self, account_number: str, symbol: str, quantity: str,
+                          ref_id: str | None = None) -> dict:
+        """Place a REAL share-quantity market sell. ref_id = idempotency key."""
+        return self.mcp.call_tool("place_equity_order", {
+            "account_number": account_number,
+            "symbol": symbol,
+            "side": "sell",
+            "type": "market",
+            "quantity": quantity,
+            "market_hours": "regular_hours",
+            "time_in_force": "gfd",
+            "ref_id": ref_id or str(uuid.uuid4()),
+        })
+
 
 def find_agentic_account(accounts_payload: dict) -> dict | None:
     """Pick the agentic_allowed=true account from a get_accounts payload.

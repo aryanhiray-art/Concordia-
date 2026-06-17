@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from pydantic import Field
 
 from ..db import audit, db
+from ..security import hash_password, verify_password
 from ..services import alloc, power
 from .deps import load_member, require_member
 
@@ -18,6 +19,11 @@ router = APIRouter(prefix="/api", tags=["member"])
 
 class ParticipateBody(BaseModel):
     on: bool
+
+
+class PasswordBody(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8)
 
 
 class AllocationBody(BaseModel):
@@ -57,6 +63,20 @@ def set_allocation(body: AllocationBody, member: dict = Depends(require_member))
         pass
     audit(f"member:{member['id']}", "allocation", None, {"type": body.type, "value": body.value})
     return me_account(member)
+
+
+@router.put("/me/password")
+def change_password(body: PasswordBody, member: dict = Depends(require_member)):
+    """Change your own password (e.g. after the owner reset it to a temp one)."""
+    with db() as conn:
+        row = conn.execute("SELECT password_hash FROM members WHERE id=?", (member["id"],)).fetchone()
+    if not row or not row["password_hash"] or not verify_password(body.current_password, row["password_hash"]):
+        raise HTTPException(status_code=403, detail="current password is wrong")
+    with db() as conn:
+        conn.execute("UPDATE members SET password_hash=? WHERE id=?",
+                     (hash_password(body.new_password), member["id"]))
+    audit(f"member:{member['id']}", "change_password", None, None)
+    return {"ok": True}
 
 
 @router.put("/me/participate")
