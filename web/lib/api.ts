@@ -1,6 +1,6 @@
 "use client";
 
-import type { Member, SessionView, UniverseItem, ExecutionRow, PowerView } from "./types";
+import type { Member, SessionView, UniverseItem, ExecutionRow, PowerView, Account } from "./types";
 
 // Empty base = same-origin (Vercel rewrites /api + /oauth to the forge backend).
 // Local dev sets NEXT_PUBLIC_CONCORD_API=http://localhost:8780.
@@ -50,6 +50,11 @@ export const api = {
   // the single on/off switch
   participate: (on: boolean) =>
     req<{ member: Member }>("/api/me/participate", { method: "PUT", body: JSON.stringify({ on }) }),
+
+  // agentic balance + allocation (% or $) + club-only P&L
+  account: () => req<Account>("/api/me/account"),
+  setAllocation: (type: "percent" | "dollar", value: number) =>
+    req<Account>("/api/me/allocation", { method: "PUT", body: JSON.stringify({ type, value }) }),
 
   // voting
   searchUniverse: (q: string, limit = 40) =>

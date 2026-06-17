@@ -12,6 +12,7 @@ import time
 from ..calendar_us import now_et
 from ..db import audit, db
 from ..robinhood import vault
+from . import alloc
 
 
 def _num(v) -> float | None:
@@ -67,23 +68,37 @@ def _prev_power(member_id: int, before_week: str) -> float | None:
 
 
 def snapshot_member(member_id: int, week: str | None = None) -> dict | None:
-    """Snapshot one member's equity → voting power + history row. Returns the row."""
+    """Snapshot a member's committed allocation → voting power + history. Returns the row.
+
+    Voting power = the $ the member commits to the club (their stake), not their
+    whole account. Re-run on connect, on allocation change, and every Sunday.
+    """
     week = week or week_start_et()
-    equity = member_equity(member_id)
-    if equity is None:
+    bal = alloc.member_balance(member_id)
+    if bal is None:
         return None
+    with db() as conn:
+        row = conn.execute(
+            "SELECT alloc_type, alloc_value FROM member_settings WHERE member_id=?", (member_id,)
+        ).fetchone()
+    power = alloc.resolve_allocation(
+        row["alloc_type"] if row else "percent",
+        row["alloc_value"] if row else 0.0,
+        bal.get("buying_power"),
+    )
+    equity = bal.get("total_value")
     prev = _prev_power(member_id, week)
-    delta = (equity - prev) if prev is not None else None
+    delta = (power - prev) if prev is not None else None
     now = int(time.time())
     with db() as conn:
         conn.execute(
             "INSERT INTO voting_power_history(member_id,week_start,power,equity,prev_power,delta,created_at) "
             "VALUES(?,?,?,?,?,?,?) ON CONFLICT(member_id,week_start) DO UPDATE SET "
             "power=excluded.power, equity=excluded.equity, prev_power=excluded.prev_power, delta=excluded.delta",
-            (member_id, week, equity, equity, prev, delta, now),
+            (member_id, week, power, equity, prev, delta, now),
         )
-    _set_current(member_id, equity)
-    return {"member_id": member_id, "week_start": week, "power": equity,
+    _set_current(member_id, power)
+    return {"member_id": member_id, "week_start": week, "power": power,
             "equity": equity, "prev_power": prev, "delta": delta}
 
 

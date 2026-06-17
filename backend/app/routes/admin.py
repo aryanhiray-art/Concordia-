@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from ..config import settings
 from ..db import audit, db, is_armed, kv_get, kv_set, set_armed
 from ..robinhood import vault
-from ..services import executor, power
+from ..services import alloc, executor, power
 from ..services import voting as svc
 from .deps import load_member, require_owner
 
@@ -67,7 +67,8 @@ def member_detail(member_id: int, owner: dict = Depends(require_owner)):
     base = load_member(member_id)
     if not base:
         raise HTTPException(404, "no such member")
-    out: dict = {"member": base, "power": power.member_power_view(member_id)}
+    out: dict = {"member": base, "power": power.member_power_view(member_id),
+                 "allocation": alloc.member_allocation(member_id), "pnl": alloc.club_pnl(member_id)}
 
     session = svc.active_session()
     if session:

@@ -38,7 +38,9 @@ CREATE TABLE IF NOT EXISTS member_settings (
     buying_power_pct REAL NOT NULL DEFAULT 0,
     daily_cap_usd    REAL NOT NULL DEFAULT 0,
     max_orders       INTEGER NOT NULL DEFAULT 25,
-    voting_power     REAL NOT NULL DEFAULT 0,         -- current weight = account equity ($)
+    voting_power     REAL NOT NULL DEFAULT 0,         -- current weight = allocated $ stake
+    alloc_type       TEXT NOT NULL DEFAULT 'percent', -- 'percent' | 'dollar'
+    alloc_value      REAL NOT NULL DEFAULT 0,         -- pct of buying power, or fixed USD
     updated_at       INTEGER NOT NULL
 );
 
@@ -165,6 +167,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     s = cols("member_settings")
     if "voting_power" not in s:
         conn.execute("ALTER TABLE member_settings ADD COLUMN voting_power REAL NOT NULL DEFAULT 0")
+    if "alloc_type" not in s:
+        conn.execute("ALTER TABLE member_settings ADD COLUMN alloc_type TEXT NOT NULL DEFAULT 'percent'")
+    if "alloc_value" not in s:
+        conn.execute("ALTER TABLE member_settings ADD COLUMN alloc_value REAL NOT NULL DEFAULT 0")
 
 
 # ─── kv flags ────────────────────────────────────────────────────────────────

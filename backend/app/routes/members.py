@@ -6,8 +6,11 @@ import time
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from fastapi import HTTPException
+from pydantic import Field
+
 from ..db import audit, db
-from ..services import power
+from ..services import alloc, power
 from .deps import load_member, require_member
 
 router = APIRouter(prefix="/api", tags=["member"])
@@ -17,9 +20,43 @@ class ParticipateBody(BaseModel):
     on: bool
 
 
+class AllocationBody(BaseModel):
+    type: str = Field(pattern="^(percent|dollar)$")
+    value: float = Field(ge=0)
+
+
 @router.get("/me")
 def me(member: dict = Depends(require_member)):
     return {"member": load_member(member["id"]), "power": power.member_power_view(member["id"])}
+
+
+@router.get("/me/account")
+def me_account(member: dict = Depends(require_member)):
+    """Agentic-account balance + allocation + club-only P&L (live Robinhood reads)."""
+    mid = member["id"]
+    return {
+        "allocation": alloc.member_allocation(mid),   # {type, value, resolved_usd, balance}
+        "pnl": alloc.club_pnl(mid),
+        "power": power.member_power_view(mid),
+    }
+
+
+@router.put("/me/allocation")
+def set_allocation(body: AllocationBody, member: dict = Depends(require_member)):
+    if body.type == "percent" and body.value > 100:
+        raise HTTPException(status_code=422, detail="percent must be 0–100")
+    with db() as conn:
+        conn.execute(
+            "UPDATE member_settings SET alloc_type=?, alloc_value=?, updated_at=strftime('%s','now') "
+            "WHERE member_id=?", (body.type, body.value, member["id"]),
+        )
+    # re-snapshot voting power from the new allocation (best-effort; needs RH)
+    try:
+        power.snapshot_member(member["id"])
+    except Exception:  # noqa: BLE001
+        pass
+    audit(f"member:{member['id']}", "allocation", None, {"type": body.type, "value": body.value})
+    return me_account(member)
 
 
 @router.put("/me/participate")

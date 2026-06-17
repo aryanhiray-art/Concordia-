@@ -24,7 +24,7 @@ import uuid
 from ..config import settings
 from ..db import audit, db, is_armed
 from ..robinhood import vault
-from . import voting
+from . import alloc, voting
 
 _REF_NS = uuid.UUID("c0c0c0c0-0000-4000-8000-000000000000")
 
@@ -76,7 +76,7 @@ def has_blocking_alerts(review: dict) -> tuple[bool, list]:
 def _opted_members() -> list[dict]:
     with db() as conn:
         rows = conn.execute(
-            "SELECT m.id AS member_id, m.display_name, s.buying_power_pct, s.daily_cap_usd,"
+            "SELECT m.id AS member_id, m.display_name, s.alloc_type, s.alloc_value,"
             "       s.max_orders, a.account_number, a.agentic_allowed, a.status AS rh_status "
             "FROM members m "
             "JOIN member_settings s ON s.member_id=m.id "
@@ -163,9 +163,10 @@ def run(session: dict, force_dry_run: bool = False) -> dict:
             summary["members"].append(msum)
             continue
 
-        budget = deployable(buying_power)
+        budget = alloc.resolve_allocation(m["alloc_type"], m["alloc_value"], buying_power)
         per_pick = math.floor((budget / len(picks)) * 100) / 100.0
         msum["buying_power"] = round(buying_power, 2)
+        msum["allocation"] = round(budget, 2)
         msum["budget"] = round(budget, 2)
         msum["per_pick"] = per_pick
         if per_pick < 1.00:

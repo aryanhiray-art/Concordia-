@@ -64,7 +64,7 @@ export function ConnectCard({ member, onChange }: { member: Member; onChange: ()
               </div>
               <div className="mt-0.5 text-[12px] text-subtle">
                 {optedIn
-                  ? "All your buying power is split evenly across the basket."
+                  ? "Your committed amount is deployed across the basket each day."
                   : "Voting is off. Flip this on to vote and trade today."}
               </div>
             </div>

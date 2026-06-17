@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, getToken, setToken } from "@/lib/api";
-import type { Member, SessionView, PowerView } from "@/lib/types";
+import type { Member, SessionView } from "@/lib/types";
 import { AuthGate } from "@/components/AuthGate";
 import { ConnectCard } from "@/components/ConnectCard";
-import { VotingPowerCard } from "@/components/VotingPowerCard";
+import { AllocationCard } from "@/components/AllocationCard";
 import { Ballot } from "@/components/Ballot";
 import { Results } from "@/components/Results";
 import { Button, Logo, LoadingScreen } from "@/components/ui";
@@ -13,11 +13,10 @@ import { Button, Logo, LoadingScreen } from "@/components/ui";
 export default function Home() {
   const [ready, setReady] = useState(false);
   const [member, setMember] = useState<Member | null>(null);
-  const [power, setPower] = useState<PowerView | null>(null);
   const [session, setSession] = useState<SessionView | null>(null);
 
   const refreshMember = useCallback(async () => {
-    try { const r = await api.me(); setMember(r.member); setPower(r.power); }
+    try { setMember((await api.me()).member); }
     catch { setMember(null); setToken(null); }
   }, []);
   const refreshSession = useCallback(async () => {
@@ -61,7 +60,7 @@ export default function Home() {
 
       <div className="stagger space-y-4">
         <ConnectCard member={member} onChange={refreshMember} />
-        {member.robinhood?.status === "connected" && <VotingPowerCard power={power} />}
+        {member.robinhood?.status === "connected" && <AllocationCard onChange={refreshMember} />}
         {session && (open
           ? <Ballot session={session} participating={participating} onVoted={setSession} />
           : <Results session={session} />)}
