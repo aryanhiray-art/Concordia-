@@ -46,31 +46,42 @@ def deployable(buying_power: float) -> float:
     return buying_power * (1.0 - settings.cash_buffer_pct / 100.0)
 
 
+# EQUITY_SUITABILITY is a disclosure that shows on every order for individual
+# agentic accounts. It's benign for an ONBOARDED account (orders place + fill
+# fine — confirmed live). For an account that hasn't finished Robinhood's
+# investing-goals questionnaire the place still fails at 400, but that surfaces
+# as a normal order error (recorded, no money moves) — so we let suitability
+# through and let the broker be the final gate. Real blockers (buying power,
+# PDT, halts) are NOT in this set and still skip the order pre-trade.
+_BENIGN_ALERTS = {"EQUITY_SUITABILITY"}
+
+
 def has_blocking_alerts(review: dict) -> tuple[bool, list]:
     """Authoritative pre-trade gate, verified against the live review payload.
 
     Robinhood's review_equity_order returns broker alerts under `order_checks`
     (an empty {} means NO alerts — confirmed live). For an UNATTENDED real-money
-    executor we take the safe stance: any non-empty order_checks (or legacy
-    alert/warning field) blocks the order; the owner can inspect review_json and
-    relax later. Returns (blocked, items).
+    executor we block on any alert EXCEPT a known-benign allowlist
+    (`_BENIGN_ALERTS`). Returns (blocked, blocking_items).
     """
     data = review.get("data", review) if isinstance(review, dict) else {}
     if not isinstance(data, dict):
         return False, []
-    items: list = []
+    raw: list = []
     checks = data.get("order_checks")
-    if isinstance(checks, dict):
-        items += [{k: v} for k, v in checks.items()]
+    if isinstance(checks, dict) and checks:
+        raw.append(checks)
     elif isinstance(checks, list):
-        items += checks
+        raw += [c for c in checks if c]
     for legacy in ("alerts", "blocking_alerts", "warnings"):
         v = data.get(legacy)
         if isinstance(v, list):
-            items += v
+            raw += [x for x in v if x]
         elif v:
-            items.append(v)
-    return (len(items) > 0), items
+            raw.append(v)
+    blocking = [a for a in raw
+                if not (isinstance(a, dict) and a.get("alertType") in _BENIGN_ALERTS)]
+    return (len(blocking) > 0), blocking
 
 
 def _opted_members() -> list[dict]:
@@ -175,16 +186,22 @@ def run(session: dict, force_dry_run: bool = False) -> dict:
             pdata = port.get("data", port) if isinstance(port, dict) else {}
             bp = pdata.get("buying_power") or (pdata.get("buying_power") or {})
             buying_power = _num(bp.get("buying_power") if isinstance(bp, dict) else bp) or 0.0
+            total_value = (_num(pdata.get("total_value")) or _num(pdata.get("equity_value"))
+                           or buying_power)
         except Exception as e:  # noqa: BLE001
             msum["note"] = f"portfolio fetch failed: {type(e).__name__}: {e}"
             vault.mark_status(mid, "error")
             summary["members"].append(msum)
             continue
 
-        budget = alloc.resolve_allocation(m["alloc_type"], m["alloc_value"], buying_power)
-        n = len(picks)
-        per_pick = math.floor((budget / n) * 100) / 100.0
-        want = set(picks)
+        # Rebalance target = committed stake (frees cash via sells), NOT buying power.
+        budget = alloc.rebalance_budget(m["alloc_type"], m["alloc_value"], total_value, buying_power)
+        # Broker minimum is $1/order, so we can hold at most floor(budget) names at
+        # equal weight. With a small stake the member holds the TOP names only.
+        n_eff = max(1, min(len(picks), int(budget // 1.00)))
+        basket = picks[:n_eff]
+        per_pick = math.floor((budget / n_eff) * 100) / 100.0
+        want = set(basket)
         held = positions.club_shares(mid)            # only what the CLUB bought
         prices = _quotes(client, list(want | set(held)))
         msum["buying_power"] = round(buying_power, 2)
@@ -193,17 +210,29 @@ def run(session: dict, force_dry_run: bool = False) -> dict:
         msum["per_pick"] = per_pick
         order_count = 0
 
-        # ── SELL phase: exit club holdings that dropped out of the basket ──
-        # (a member's own non-club positions are never in `held`, so untouched.)
+        # ── SELL phase: exit dropped names + trim overweight basket names ──
+        # Sells come ONLY from `held` (club-bought, reconstructed from executions),
+        # so a member's own non-club positions are never touched. A name that left
+        # the basket is fully sold; a name still in the basket but OVER its equal-
+        # weight target is trimmed back to target, so the proceeds redistribute
+        # into the rest of the new basket.
         for symbol, qty in sorted(held.items()):
+            price = prices.get(symbol)
             if symbol in want:
-                continue                              # still in basket → keep it
+                if price is None:
+                    continue                          # can't size a trim without a price
+                excess = qty - (per_pick / price)     # shares above the equal-weight target
+                if excess * price < 1.00:             # not meaningfully overweight → keep
+                    continue
+                sell_qty, why = excess, "trim to target"
+            else:
+                sell_qty, why = qty, "exited basket"  # full exit of a dropped name
             if (mid, symbol, "sell") in already:
                 msum["orders"].append({"symbol": symbol, "side": "sell", "status": "placed",
                                        "note": "already sold"})
                 continue
             ref_id = ref_id_for(sid, mid, f"SELL:{symbol}")
-            qfloor = math.floor(qty * 1e6) / 1e6      # never round UP past what we hold
+            qfloor = math.floor(sell_qty * 1e6) / 1e6   # never round UP past what we hold
             if qfloor <= 0:
                 continue
             qstr = f"{qfloor:.6f}"
@@ -221,14 +250,14 @@ def run(session: dict, force_dry_run: bool = False) -> dict:
                 continue
             if not will_place:
                 _record(sid, mid, symbol, None, ref_id, "reviewed", review=review, side="sell")
-                msum["orders"].append({"symbol": symbol, "side": "sell", "status": "reviewed", "qty": qstr})
+                msum["orders"].append({"symbol": symbol, "side": "sell", "status": "reviewed", "qty": qstr, "note": why})
                 continue
             try:
                 place = client.place_market_sell(m["account_number"], symbol, qstr, ref_id=ref_id)
                 if isinstance(place, dict):
                     place["_concord_est_qty"] = qfloor   # shares sold (broker fill is async)
                 _record(sid, mid, symbol, None, ref_id, "placed", review=review, place=place, side="sell")
-                msum["orders"].append({"symbol": symbol, "side": "sell", "status": "placed", "qty": qstr})
+                msum["orders"].append({"symbol": symbol, "side": "sell", "status": "placed", "qty": qstr, "note": why})
                 order_count += 1
             except Exception as e:  # noqa: BLE001
                 _record(sid, mid, symbol, None, ref_id, "error", review=review, error=f"sell: {e}", side="sell")
@@ -237,7 +266,7 @@ def run(session: dict, force_dry_run: bool = False) -> dict:
         # ── BUY phase: top each basket name up to its equal-weight target ──
         # need = target − current club value, so names already held aren't re-bought
         # and the proceeds from the sells above fund the newly-added names.
-        for symbol in picks:
+        for symbol in basket:
             if (mid, symbol, "buy") in already:
                 msum["orders"].append({"symbol": symbol, "side": "buy", "status": "placed",
                                        "note": "already placed"})
