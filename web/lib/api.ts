@@ -64,6 +64,9 @@ export const api = {
   tradeReadiness: (force = false) =>
     req<{ connected: boolean; ready: boolean; reason: string; detail?: string }>(
       `/api/me/trade-readiness${force ? "?force=true" : ""}`),
+  // the member's live positions (for the overview donut + holdings list)
+  holdings: () =>
+    req<{ holdings: { symbol: string; quantity: number; value: number; pnl: number | null }[] }>("/api/me/holdings"),
   setAllocation: (type: "percent" | "dollar", value: number) =>
     req<Account>("/api/me/allocation", { method: "PUT", body: JSON.stringify({ type, value }) }),
 

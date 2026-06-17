@@ -8,12 +8,6 @@ export default function Overview() {
   const { member } = useAuth();
   const connected = !!(member?.robinhood?.status === "connected" && member?.robinhood?.account_number);
 
-  return (
-    <>
-      <div className={connected ? "" : "pt-2"}>
-        <Onboarding />
-      </div>
-      {connected && <CinematicOverview />}
-    </>
-  );
+  if (!connected) return <div className="stagger space-y-5 pt-2"><Onboarding /></div>;
+  return <CinematicOverview />;
 }

@@ -11,7 +11,7 @@ from pydantic import Field
 
 from ..db import audit, db
 from ..security import hash_password, verify_password
-from ..services import alloc, power
+from ..services import alloc, positions, power
 from .deps import load_member, require_member
 
 router = APIRouter(prefix="/api", tags=["member"])
@@ -51,6 +51,12 @@ def me_account(member: dict = Depends(require_member)):
 def me_trade_readiness(force: bool = False, member: dict = Depends(require_member)):
     """Is the member's RH account cleared to place buys (questionnaire done)?"""
     return alloc.trade_readiness(member["id"], force=force)
+
+
+@router.get("/me/holdings")
+def me_holdings(member: dict = Depends(require_member)):
+    """The member's live long positions, valued at the current quote."""
+    return {"holdings": positions.holdings_with_value(member["id"])}
 
 
 @router.put("/me/allocation")

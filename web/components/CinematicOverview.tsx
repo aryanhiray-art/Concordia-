@@ -16,16 +16,26 @@ export function CinematicOverview() {
   const router = useRouter();
   const root = useRef<HTMLDivElement>(null);
   const [acc, setAcc] = useState<Account | null>(null);
+  const [hold, setHold] = useState<{ symbol: string; value: number; pnl: number | null }[]>([]);
 
-  useEffect(() => { api.account().then(setAcc).catch(() => {}); }, []);
+  useEffect(() => {
+    api.account().then(setAcc).catch(() => {});
+    api.holdings().then((r) => setHold(r.holdings || [])).catch(() => {});
+  }, []);
 
   const pnl = acc?.pnl;
-  const value = (pnl && pnl.invested > 0 ? pnl.value : null)
+  const value = (hold.length ? hold.reduce((a, h) => a + h.value, 0) : null)
+    ?? (pnl && pnl.invested > 0 ? pnl.value : null)
     ?? acc?.allocation?.resolved_usd
     ?? acc?.allocation?.balance?.total_value ?? 0;
   const pctTarget = (pnl && pnl.invested > 0 && pnl.profit_pct != null) ? pnl.profit_pct : 0;
-  const basket = ((session?.picks?.length ? session.picks : session?.tally) || []).slice(0, 8);
-  const basketKey = basket.map((b) => `${b.symbol}:${b.weight}`).join(",");
+  // donut + holdings reflect what you actually HOLD; fall back to the consensus basket
+  const basket = ((session?.picks?.length ? session.picks : session?.tally) || []);
+  const items = hold.length
+    ? hold.map((h) => ({ sym: h.symbol, name: h.symbol, val: h.value }))
+    : basket.slice(0, 12).map((b) => ({ sym: b.symbol, name: b.name, val: b.weight || 0 }));
+  const itemsLabel = hold.length ? "holdings" : "names";
+  const itemsKey = items.map((i) => `${i.sym}:${i.val}`).join(",");
   const closesAt = session?.closes_at ?? 0;
   const open = session?.status === "open";
 
@@ -89,11 +99,11 @@ export function CinematicOverview() {
     }
     const unscrub = () => { stage.classList.remove("scrubbing"); if (usd.length) readout(usd.length - 1); };
 
-    // ── donut: the basket allocation ──
-    const totW = basket.reduce((a, b) => a + (b.weight || 0), 0) || 1;
-    const slices = basket.slice(0, 5).map((b, i) => ({ nm: b.symbol, co: b.name, pc: Math.round((b.weight || 0) / totW * 1000) / 10, c: COLORS[i] }));
+    // ── donut: your holdings (or the consensus basket) by value ──
+    const totW = items.reduce((a, b) => a + (b.val || 0), 0) || 1;
+    const slices = items.slice(0, 5).map((b, i) => ({ nm: b.sym, co: b.name, pc: Math.round((b.val || 0) / totW * 1000) / 10, c: COLORS[i] }));
     const restPc = Math.round((100 - slices.reduce((a, s) => a + s.pc, 0)) * 10) / 10;
-    if (restPc > 0.5 && basket.length > 5) slices.push({ nm: "Rest", co: `${basket.length - 5} more`, pc: restPc, c: COLORS[5] });
+    if (restPc > 0.5 && items.length > 5) slices.push({ nm: "Rest", co: `${items.length - 5} more`, pc: restPc, c: COLORS[5] });
     const CC = 2 * Math.PI * 80, arcsEl = $("#arcs");
     function drawDonut() {
       while (arcsEl.children.length < 6) arcsEl.insertAdjacentHTML("beforeend", `<circle class="arc" cx="100" cy="100" r="80" stroke="#2DD4BF" stroke-dasharray="0 ${CC.toFixed(2)}"/>`);
@@ -104,12 +114,14 @@ export function CinematicOverview() {
       }
       const leg = $("#leg"); leg.style.opacity = "0";
       setTimeout(() => { leg.innerHTML = slices.map((x) => `<div class="row"><span class="sw" style="background:${x.c};color:${x.c}"></span><span class="nm">${x.nm}<s>${x.co || ""}</s></span><span class="pc tnum">${x.pc}%</span></div>`).join(""); leg.style.opacity = "1"; }, 160);
-      $("#dctr").textContent = String(basket.length); $("#dctrs").textContent = "names";
+      $("#dctr").textContent = items.length ? String(items.length) : "—"; $("#dctrs").textContent = itemsLabel;
     }
 
     // ── holdings ──
     const spark = (up: boolean) => `<svg class="hspark" viewBox="0 0 300 38" preserveAspectRatio="none"><polyline points="${up ? "0,30 60,20 120,24 180,11 240,15 300,3" : "0,11 60,16 120,9 180,20 240,17 300,26"}" fill="none" stroke="${up ? "#34E3A8" : "#FF6B6B"}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-    $("#holdings").innerHTML = basket.map((h, i) => `<div class="holdrow" data-vote="1"><span class="htk">${h.symbol}</span><div class="hn"><b>${h.name || h.symbol}</b><s>${h.symbol}</s></div>${spark(i % 3 !== 1)}<span class="hwt tnum">$${Math.round(h.weight || 0).toLocaleString()}</span></div>`).join("");
+    $("#holdings").innerHTML = items.length
+      ? items.map((h, i) => `<div class="holdrow" data-vote="1"><span class="htk">${h.sym}</span><div class="hn"><b>${h.name || h.sym}</b><s>${h.sym}</s></div>${spark(i % 3 !== 1)}<span class="hwt tnum">$${Math.round(h.val || 0).toLocaleString()}</span></div>`).join("")
+      : `<div style="color:var(--subtle);font:500 13px/1.6 var(--font-inter);padding:8px 2px">No holdings yet — once the basket runs, your positions show here. <a href="/vote" style="color:var(--teal)">Cast your vote →</a></div>`;
 
     drawChart("ALL"); drawDonut();
     // count-up the hero
@@ -145,7 +157,7 @@ export function CinematicOverview() {
       window.removeEventListener("pointermove", pm); window.removeEventListener("pointerup", pu);
       stage.removeEventListener("wheel", onWheel as any);
     };
-  }, [value, pctTarget, basketKey, router]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [value, pctTarget, itemsKey, itemsLabel, router]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="cine" ref={root}>

@@ -243,8 +243,9 @@ body {
 /* ═══ Cinematic overview (morph carousel) — ported from Concordia ═══════ */
 :root { --ease: cubic-bezier(.55,.05,.18,1); --gutter: max(20px, calc((100vw - 1080px)/2));
   --glass: rgba(255,255,255,.05); --glassbd: rgba(255,255,255,.10); --grey: #8A94A6; --teal2: #5FF0DC; }
-.cine { position: relative; }
-.cine #stage { position: relative; height: calc(100vh - 88px); min-height: 560px; overflow: hidden; z-index: 1; cursor: grab; user-select: none; touch-action: pan-y; }
+/* full-bleed: break out of the nav-padded column so the stage fills the viewport */
+.cine { position: relative; width: 100vw; margin-left: calc(50% - 50vw); margin-top: -88px; }
+.cine #stage { position: relative; height: 100vh; min-height: 600px; overflow: hidden; z-index: 1; cursor: grab; user-select: none; touch-action: pan-y; }
 .cine #stage.grab { cursor: grabbing; }
 .cine .chartfield { position: absolute; inset: 0; z-index: 0; transition: opacity .34s var(--ease); will-change: opacity; }
 .cine #stage[data-s="0"] .chartfield { opacity: .20; }
@@ -298,7 +299,8 @@ body {
 .cine .scrolldn:hover { color: var(--ink); }
 .cine .scrolldn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; animation: bob 1.8s ease-in-out infinite; }
 @keyframes bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(5px); } }
-.cine #hold { position: relative; z-index: 1; padding: 60px 4px 40px; }
+.cine #hold { position: relative; z-index: 1; max-width: 1080px; margin: 0 auto; padding: 60px max(20px,4vw) 50px; }
+html, body { overflow-x: hidden; }
 .cine .holdrow { display: flex; align-items: center; gap: 20px; padding: 16px 12px; margin: 0 -12px; border-radius: 12px; border-top: 1px solid var(--hair); cursor: pointer; transition: background .2s; }
 .cine .holdrow:first-of-type { border-top: none; }
 .cine .holdrow:hover { background: rgba(255,255,255,.03); }

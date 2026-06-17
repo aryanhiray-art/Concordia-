@@ -59,6 +59,40 @@ def club_shares(member_id: int) -> dict[str, float]:
     return {s: q for s, q in shares.items() if q > 1e-9}
 
 
+def holdings_with_value(member_id: int) -> list[dict]:
+    """The member's long positions valued at the live quote: [{symbol, quantity, value, pnl}]."""
+    acct = vault.account_number_for(member_id)
+    if not acct:
+        return []
+    try:
+        client = vault.ensure_client(member_id)
+        pos = (client.get_positions(acct).get("data") or {}).get("positions") or []
+    except Exception:  # noqa: BLE001
+        return []
+    longs = [p for p in pos if p.get("type") == "long" and (_num(p.get("quantity")) or 0) > 1e-9]
+    syms = [p["symbol"] for p in longs if p.get("symbol")]
+    quotes: dict[str, float] = {}
+    for i in range(0, len(syms), 20):
+        try:
+            res = (client.get_quotes(syms[i:i + 20]).get("data") or {}).get("results") or []
+            for e in res:
+                q = e.get("quote") or {}
+                if q.get("symbol"):
+                    quotes[q["symbol"]] = _num(q.get("last_trade_price"))
+        except Exception:  # noqa: BLE001
+            pass
+    out = []
+    for p in longs:
+        qty = _num(p.get("quantity")) or 0.0
+        px = quotes.get(p["symbol"])
+        avg = _num(p.get("average_buy_price")) or px or 0.0
+        val = (px if px is not None else avg) * qty
+        out.append({"symbol": p["symbol"], "quantity": round(qty, 4), "value": round(val, 2),
+                    "pnl": round(((px - avg) * qty), 2) if px is not None else None})
+    out.sort(key=lambda h: h["value"], reverse=True)
+    return out
+
+
 def live_positions(member_id: int) -> list[dict]:
     """All long positions in the member's account: [{symbol, quantity}]. Best-effort."""
     acct = vault.account_number_for(member_id)
