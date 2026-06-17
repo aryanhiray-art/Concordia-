@@ -60,6 +60,10 @@ export const api = {
 
   // agentic balance + allocation (% or $) + club-only P&L
   account: () => req<Account>("/api/me/account"),
+  // is the RH account cleared to place buys (investing-goals questionnaire done)?
+  tradeReadiness: (force = false) =>
+    req<{ connected: boolean; ready: boolean; reason: string; detail?: string }>(
+      `/api/me/trade-readiness${force ? "?force=true" : ""}`),
   setAllocation: (type: "percent" | "dollar", value: number) =>
     req<Account>("/api/me/allocation", { method: "PUT", body: JSON.stringify({ type, value }) }),
 
@@ -67,8 +71,9 @@ export const api = {
   searchUniverse: (q: string, limit = 40) =>
     req<{ symbols: UniverseItem[] }>(`/api/universe?q=${encodeURIComponent(q)}&limit=${limit}`),
   voteToday: () => req<SessionView>("/api/vote/today"),
-  castVote: (symbols: string[]) =>
-    req<SessionView>("/api/vote/today", { method: "POST", body: JSON.stringify({ symbols }) }),
+  // Concordia model: allocate % of voting power across picks (sums to ≤100)
+  castVote: (allocations: { symbol: string; weight: number }[]) =>
+    req<SessionView>("/api/vote/today", { method: "POST", body: JSON.stringify({ allocations }) }),
   results: () => req<{ session: SessionView | null; executions: ExecutionRow[] }>("/api/vote/results"),
   // (owner/admin controls live on the forge dashboard, not in this member app)
 };

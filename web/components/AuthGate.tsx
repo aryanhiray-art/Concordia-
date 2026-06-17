@@ -34,7 +34,7 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
       <div className="mb-7 flex flex-col items-center text-center">
         <Logo size={52} />
         <div className="mt-4 font-display text-[26px] font-bold tracking-tight">
-          con<span className="text-teal">·</span>cord
+          con<span className="text-teal">·</span>cordia
         </div>
         <p className="mt-1.5 text-[13.5px] text-muted">
           A trading club that votes. <b className="font-semibold text-teal">One ballot a day</b>,

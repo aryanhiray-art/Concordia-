@@ -26,7 +26,7 @@ function ConnectedInner() {
             {!agentic && (
               <p className="mt-2.5 text-[13px] leading-relaxed text-amber">
                 This account isn&apos;t agentic-enabled yet. Turn on Robinhood&apos;s “Agentic” account
-                so Concord can place the basket for you.
+                so Concordia can place the basket for you.
               </p>
             )}
           </>
@@ -37,7 +37,7 @@ function ConnectedInner() {
             <p className="mt-1 text-[13px] text-muted">{reason || "Please try again."}</p>
           </>
         )}
-        <Link href="/"><Button variant="go" className="mt-6">Back to Concord</Button></Link>
+        <Link href="/"><Button variant="go" className="mt-6">Back to Concordia</Button></Link>
       </Card>
     </div>
   );

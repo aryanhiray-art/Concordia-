@@ -107,37 +107,68 @@ def get_session(session_id: int) -> dict | None:
 
 # ─── votes ───────────────────────────────────────────────────────────────────
 
-def set_member_picks(session_id: int, member_id: int, symbols: list[str]) -> list[str]:
-    """Replace a member's picks for a session. Raises if closed or symbol invalid."""
+def set_member_allocations(session_id: int, member_id: int, allocs: list[dict]) -> list[dict]:
+    """Replace a member's picks + the % of their voting power on each (Concordia model).
+
+    `allocs` = [{symbol, weight}] where weight is a 0–100 percentage. Total is
+    capped at 100% (scaled down if a client over-allocates); a total under 100%
+    just means the member abstains the remainder. Returns the stored allocations.
+    """
     sess = get_session(session_id)
     if not sess or sess["status"] != "open":
         raise ValueError("voting is closed for this session")
     valid = universe_symbols()
     seen: set[str] = set()
-    picks: list[str] = []
-    for s in symbols:
-        u = s.upper()
-        if u in valid and u not in seen:
-            seen.add(u)
-            picks.append(u)
-    picks = picks[: settings.max_picks]   # at most 20 per member
+    clean: list[tuple[str, float]] = []
+    for a in allocs:
+        sym = str(a.get("symbol") or "").upper()
+        try:
+            w = float(a.get("weight") or 0)
+        except (TypeError, ValueError):
+            w = 0.0
+        if sym in valid and sym not in seen and w > 0:
+            seen.add(sym)
+            clean.append((sym, max(0.0, min(100.0, w))))
+    clean = clean[: settings.max_picks]
+    total = sum(w for _, w in clean)
+    if total > 100.0 and total > 0:                    # never let a member exceed 100%
+        clean = [(s, w * 100.0 / total) for s, w in clean]
     now = int(time.time())
     with db() as conn:
         conn.execute("DELETE FROM votes WHERE session_id=? AND member_id=?", (session_id, member_id))
         conn.executemany(
-            "INSERT OR IGNORE INTO votes(session_id,member_id,symbol,created_at) VALUES(?,?,?,?)",
-            [(session_id, member_id, s, now) for s in picks],
+            "INSERT OR IGNORE INTO votes(session_id,member_id,symbol,weight,created_at) VALUES(?,?,?,?,?)",
+            [(session_id, member_id, s, round(w, 4), now) for s, w in clean],
         )
-    audit(f"member:{member_id}", "vote", sess["trade_date"], {"picks": picks})
-    return picks
+    audit(f"member:{member_id}", "vote", sess["trade_date"],
+          {"allocs": [{"symbol": s, "weight": round(w, 2)} for s, w in clean]})
+    return [{"symbol": s, "weight": round(w, 4)} for s, w in clean]
 
 
-def member_picks(session_id: int, member_id: int) -> list[str]:
+def set_member_picks(session_id: int, member_id: int, symbols: list[str]) -> list[dict]:
+    """Back-compat: equal-weight a bare list of symbols across the member's 100%."""
+    syms: list[str] = []
+    seen: set[str] = set()
+    for s in symbols:
+        u = s.upper()
+        if u not in seen:
+            seen.add(u)
+            syms.append(u)
+    syms = syms[: settings.max_picks]
+    if not syms:
+        return set_member_allocations(session_id, member_id, [])
+    w = 100.0 / len(syms)
+    return set_member_allocations(session_id, member_id, [{"symbol": s, "weight": w} for s in syms])
+
+
+def member_picks(session_id: int, member_id: int) -> list[dict]:
+    """This member's picks for a session as [{symbol, weight}] (weight = % of power)."""
     with db() as conn:
         rows = conn.execute(
-            "SELECT symbol FROM votes WHERE session_id=? AND member_id=?", (session_id, member_id)
+            "SELECT symbol, weight FROM votes WHERE session_id=? AND member_id=? ORDER BY weight DESC",
+            (session_id, member_id)
         ).fetchall()
-    return [r["symbol"] for r in rows]
+    return [{"symbol": r["symbol"], "weight": round(r["weight"], 2)} for r in rows]
 
 
 def tally(session_id: int) -> list[dict]:
@@ -151,7 +182,8 @@ def tally(session_id: int) -> list[dict]:
     with db() as conn:
         rows = conn.execute(
             "SELECT v.symbol, COUNT(*) AS votes, "
-            "       SUM(MAX(COALESCE(s.voting_power,0), 1.0)) AS weight, u.name "
+            "       SUM(MAX(COALESCE(s.voting_power,0), 1.0) * COALESCE(v.weight,100)/100.0) AS weight, "
+            "       u.name "
             "FROM votes v "
             "LEFT JOIN member_settings s ON s.member_id=v.member_id "
             "LEFT JOIN universe u ON u.symbol=v.symbol "

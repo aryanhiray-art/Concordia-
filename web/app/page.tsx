@@ -1,76 +1,111 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { api, getToken, setToken } from "@/lib/api";
-import type { Member, SessionView } from "@/lib/types";
-import { AuthGate } from "@/components/AuthGate";
-import { ConnectCard } from "@/components/ConnectCard";
-import { AllocationCard } from "@/components/AllocationCard";
-import { ChangePassword } from "@/components/ChangePassword";
-import { Ballot } from "@/components/Ballot";
-import { Results } from "@/components/Results";
-import { Button, Logo, LoadingScreen } from "@/components/ui";
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import type { Account } from "@/lib/types";
+import { Onboarding } from "@/components/Onboarding";
+import { Countdown } from "@/components/ui";
 
-export default function Home() {
-  const [ready, setReady] = useState(false);
-  const [member, setMember] = useState<Member | null>(null);
-  const [session, setSession] = useState<SessionView | null>(null);
+function money(n?: number | null, dp = 0) {
+  if (n == null) return "—";
+  return n.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: dp });
+}
 
-  const refreshMember = useCallback(async () => {
-    try { setMember((await api.me()).member); }
-    catch { setMember(null); setToken(null); }
-  }, []);
-  const refreshSession = useCallback(async () => {
-    try { setSession(await api.voteToday()); } catch {}
-  }, []);
+function Stat({ k, v, s, tone }: { k: string; v: React.ReactNode; s?: string; tone?: string }) {
+  return (
+    <div className="statcell">
+      <div className="k">{k}</div>
+      <div className={`v ${tone || ""}`}>{v}</div>
+      {s && <div className="s">{s}</div>}
+    </div>
+  );
+}
 
-  useEffect(() => {
-    (async () => {
-      if (getToken()) await refreshMember();
-      setReady(true);
-    })();
-  }, [refreshMember]);
+export default function Overview() {
+  const { member, power, session } = useAuth();
+  const [acc, setAcc] = useState<Account | null>(null);
 
-  useEffect(() => {
-    if (!member) return;
-    refreshSession();
-    const id = setInterval(refreshSession, 5000);
-    return () => clearInterval(id);
-  }, [member, refreshSession]);
+  const connected = member?.robinhood?.status === "connected";
+  useEffect(() => { if (connected) api.account().then(setAcc).catch(() => {}); }, [connected, member]);
 
-  if (!ready) return <LoadingScreen label="starting concord" />;
-  if (!member) return <AuthGate onAuthed={(m) => setMember(m)} />;
+  const committed = acc?.allocation?.resolved_usd ?? null;
+  const pnl = acc?.pnl;
+  const bal = acc?.allocation?.balance;
+  const up = (pnl?.profit ?? 0) >= 0;
 
   const open = session?.status === "open";
-  const participating = Number(member.settings?.opted_in) === 1;
+  const basket = ((session?.picks?.length ? session.picks : session?.tally) || []).slice(0, session?.top_n || 20);
+  const maxW = Math.max(1, ...basket.map((b) => b.weight || 0));
 
   return (
-    <main className="mx-auto w-[min(760px,100%)] px-4 py-8 sm:py-10">
-      <header className="enter mb-6 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Logo />
-          <div>
-            <div className="font-display text-[18px] font-bold leading-none tracking-tight">
-              con<span className="text-teal">·</span>cord
-            </div>
-            <div className="mt-1 text-[11.5px] text-subtle">{member.display_name} · {member.email}</div>
-          </div>
-        </div>
-        <Button variant="ghost" onClick={() => { setToken(null); setMember(null); }}>Log out</Button>
-      </header>
+    <div className="stagger space-y-6">
+      <Onboarding />
 
-      <div className="stagger space-y-4">
-        <ConnectCard member={member} onChange={refreshMember} />
-        {member.robinhood?.status === "connected" && <AllocationCard onChange={refreshMember} />}
-        {session && (open
-          ? <Ballot session={session} participating={participating} onVoted={setSession} />
-          : <Results session={session} />)}
-        <ChangePassword />
+      {/* ── hero ───────────────────────────────────────────────── */}
+      <section className="enter pt-2">
+        <div className="hero-eyebrow">Your stake in the club</div>
+        <div className="hero-num mt-3">{money(committed, committed && committed < 1000 ? 2 : 0)}</div>
+        {pnl && pnl.invested > 0 ? (
+          <div className="hero-chg mt-2.5">
+            <span className={up ? "text-green" : "text-red"}>
+              {up ? "▲" : "▼"} {money(Math.abs(pnl.profit), 2)}
+              {pnl.profit_pct != null && <> · {pnl.profit_pct >= 0 ? "+" : ""}{pnl.profit_pct}%</>}
+            </span>
+            <span className="ml-2 text-subtle">club profit · on {money(pnl.invested, 2)} deployed</span>
+          </div>
+        ) : (
+          <div className="mt-2.5 text-[13.5px] text-subtle">
+            committed to the club — deployed across the consensus basket each day, and the only thing P&amp;L tracks
+          </div>
+        )}
+      </section>
+
+      {/* ── stat strip ─────────────────────────────────────────── */}
+      <div className="statrow enter">
+        <Stat k="Voting power" v={money(power?.power)} tone="text-teal"
+          s={power?.delta ? `${power.delta >= 0 ? "▲" : "▼"} ${money(Math.abs(power.delta))} wk` : "your say in the basket"} />
+        <Stat k="Committed" v={money(committed, committed && committed < 1000 ? 2 : 0)} s="traded + tracked" />
+        <Stat k="Club P&L" v={pnl && pnl.invested > 0 ? `${up ? "+" : ""}${money(pnl.profit, 0)}` : "—"}
+          tone={pnl && pnl.invested > 0 ? (up ? "text-green" : "text-red") : ""} s="club positions only" />
+        <Stat k="Balance" v={money(bal?.total_value)} s={bal ? `${money(bal.cash)} cash` : "connect to see"} />
       </div>
 
-      <p className="mt-6 text-center text-[11px] text-subtle">
-        Concord · collective daily-vote trading · executes at the open
-      </p>
-    </main>
+      {/* ── consensus basket ───────────────────────────────────── */}
+      <section className="glass enter p-5 sm:p-6">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="font-display text-[16px] font-bold">Today&apos;s consensus basket</h2>
+            <p className="mt-0.5 text-[12px] text-subtle">
+              top {session?.top_n ?? 20} by <b className="text-teal">voting power</b> · {session?.voters ?? 0} voter{(session?.voters ?? 0) === 1 ? "" : "s"} · {session?.trade_date ?? "—"}
+            </p>
+          </div>
+          {open
+            ? <Link href="/vote" className="btn btn-go !px-4 !py-2.5 text-[13px]">Cast your vote →</Link>
+            : <span className="pill pill-teal">{session?.status ?? "closed"}</span>}
+        </div>
+
+        {basket.length === 0 ? (
+          <p className="mt-5 text-[13px] text-subtle">No votes yet today — be the first to allocate.</p>
+        ) : (
+          <div className="mt-5 flex flex-col gap-3">
+            {basket.map((b) => (
+              <div key={b.symbol} className="flex items-center gap-3">
+                <span className="w-16 flex-none font-display text-[13.5px] font-semibold">{b.symbol}</span>
+                <div className="bar flex-1"><i style={{ width: `${((b.weight || 0) / maxW) * 100}%` }} /></div>
+                <span className="w-20 flex-none text-right text-[12.5px] tnum text-muted">{money(b.weight)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {open && (
+          <div className="mt-4 text-[11.5px] text-subtle">
+            voting closes in <b className="text-teal"><Countdown to={session!.closes_at} /></b> · the basket fills at the open
+          </div>
+        )}
+      </section>
+    </div>
   );
 }

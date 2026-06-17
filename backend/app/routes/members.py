@@ -47,6 +47,12 @@ def me_account(member: dict = Depends(require_member)):
     }
 
 
+@router.get("/me/trade-readiness")
+def me_trade_readiness(force: bool = False, member: dict = Depends(require_member)):
+    """Is the member's RH account cleared to place buys (questionnaire done)?"""
+    return alloc.trade_readiness(member["id"], force=force)
+
+
 @router.put("/me/allocation")
 def set_allocation(body: AllocationBody, member: dict = Depends(require_member)):
     if body.type == "percent" and body.value > 100:

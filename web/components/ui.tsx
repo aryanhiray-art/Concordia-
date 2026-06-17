@@ -21,7 +21,7 @@ export function Logo({ size = 40 }: { size?: number }) {
 export function Wordmark() {
   return (
     <span className="font-display text-[19px] font-bold tracking-tight">
-      con<span className="text-teal">·</span>cord
+      con<span className="text-teal">·</span>cordia
     </span>
   );
 }

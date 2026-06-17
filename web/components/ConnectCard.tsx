@@ -60,7 +60,7 @@ export function ConnectCard({ member, onChange }: { member: Member; onChange: ()
         <div className="mt-4">
           <p className="text-[13.5px] leading-relaxed text-muted">
             Connect Robinhood to take part. You log in on Robinhood&apos;s own site and approve
-            agentic trading — your credentials never touch Concord.
+            agentic trading — your credentials never touch Concordia.
           </p>
 
           {phase === "idle" ? (

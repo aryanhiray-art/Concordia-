@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS votes (
     session_id INTEGER NOT NULL REFERENCES vote_sessions(id) ON DELETE CASCADE,
     member_id  INTEGER NOT NULL REFERENCES members(id) ON DELETE CASCADE,
     symbol     TEXT NOT NULL,
+    weight     REAL NOT NULL DEFAULT 100,    -- % of this member's voting power on this pick
     created_at INTEGER NOT NULL,
     PRIMARY KEY (session_id, member_id, symbol)
 );
@@ -174,7 +175,7 @@ def init_db() -> None:
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Add columns to pre-existing tables (deployed DBs predate these fields)."""
-    _ALLOWED = {"members", "member_settings"}
+    _ALLOWED = {"members", "member_settings", "votes"}
 
     def cols(t: str) -> set[str]:
         assert t in _ALLOWED, f"unexpected table {t!r}"  # PRAGMA can't be parameterized
@@ -191,6 +192,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
                      ("bot_temperature", "bot_temperature REAL")):
         if col not in m:
             conn.execute(f"ALTER TABLE members ADD COLUMN {ddl}")
+    if "weight" not in cols("votes"):
+        conn.execute("ALTER TABLE votes ADD COLUMN weight REAL NOT NULL DEFAULT 100")
     s = cols("member_settings")
     if "voting_power" not in s:
         conn.execute("ALTER TABLE member_settings ADD COLUMN voting_power REAL NOT NULL DEFAULT 0")

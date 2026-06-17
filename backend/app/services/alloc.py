@@ -9,9 +9,51 @@ the member's whole account.
 from __future__ import annotations
 
 import json
+import time
 
-from ..db import db
+from ..db import db, kv_get, kv_set
 from ..robinhood import vault
+
+_READY_TTL = 180  # seconds to cache a trade-readiness probe (avoids RH rate limits)
+
+
+def trade_readiness(member_id: int, force: bool = False) -> dict:
+    """Can this member's account actually place a buy right now?
+
+    Robinhood blocks buys on an agentic account that hasn't completed its
+    investing-goals/suitability questionnaire — the review returns an
+    EQUITY_SUITABILITY alert and the place 400s. We probe with a tiny $1 review
+    (no order placed) and cache the verdict so onboarding can guide the member.
+    """
+    acct = vault.account_number_for(member_id)
+    if not acct:
+        return {"connected": False, "ready": False, "reason": "not_connected"}
+    ck = f"trade_ready:{member_id}"
+    if not force:
+        cached = kv_get(ck)
+        if cached:
+            try:
+                c = json.loads(cached)
+                if time.time() - c.get("ts", 0) < _READY_TTL:
+                    return {k: v for k, v in c.items() if k != "ts"}
+            except Exception:  # noqa: BLE001
+                pass
+    out = {"connected": True, "ready": False, "reason": "unknown"}
+    try:
+        client = vault.ensure_client(member_id)
+        rv = client.review_market_buy(acct, "AAPL", "1.00")
+        checks = (rv.get("data") or rv).get("order_checks")
+        atype = checks.get("alertType") if isinstance(checks, dict) else None
+        if atype == "EQUITY_SUITABILITY":
+            out = {"connected": True, "ready": False, "reason": "needs_questionnaire"}
+        elif checks:
+            out = {"connected": True, "ready": False, "reason": "blocked", "detail": str(checks)[:140]}
+        else:
+            out = {"connected": True, "ready": True, "reason": "ok"}
+    except Exception as e:  # noqa: BLE001
+        out = {"connected": True, "ready": False, "reason": "probe_failed", "detail": str(e)[:140]}
+    kv_set(ck, json.dumps({**out, "ts": int(time.time())}))
+    return out
 
 
 def _num(v) -> float | None:

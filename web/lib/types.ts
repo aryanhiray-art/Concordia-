@@ -1,6 +1,7 @@
 export type UniverseItem = { symbol: string; name: string; sort_order?: number };
 
 export type TallyRow = { symbol: string; name: string; votes: number; weight?: number };
+export type Alloc = { symbol: string; weight: number };   // weight = % of voting power
 
 export type Balance = { total_value: number | null; cash: number | null; buying_power: number | null } | null;
 export type Allocation = { type: "percent" | "dollar"; value: number; resolved_usd: number; balance: Balance };
@@ -23,7 +24,7 @@ export type SessionView = {
   top_n: number;
   voters: number;
   tally: TallyRow[];
-  my_picks: string[];
+  my_picks: Alloc[];
   picks: TallyRow[];
 };
 

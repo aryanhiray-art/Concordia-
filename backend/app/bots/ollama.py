@@ -15,23 +15,33 @@ from ..config import settings
 
 
 def chat(model: str, system: str, user: str, temperature: float = 0.5) -> str:
-    """One-shot chat completion against local Ollama. Returns the raw text."""
-    r = requests.post(
-        f"{settings.ollama_url}/api/chat",
-        json={
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "stream": False,
-            "format": "json",
-            "options": {"temperature": temperature},
-        },
-        timeout=settings.ollama_timeout,
-    )
-    r.raise_for_status()
-    return (r.json().get("message") or {}).get("content") or ""
+    """One-shot chat completion against local Ollama. Returns the raw text.
+
+    keep_alive keeps the model resident between bots (they all share one model,
+    so it loads once). Retries once on a transient transport error — under load
+    Ollama can briefly refuse/timeout while a model loads.
+    """
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "stream": False,
+        "format": "json",
+        "keep_alive": "10m",
+        "options": {"temperature": temperature},
+    }
+    last: Exception | None = None
+    for attempt in range(2):
+        try:
+            r = requests.post(f"{settings.ollama_url}/api/chat", json=payload,
+                              timeout=settings.ollama_timeout)
+            r.raise_for_status()
+            return (r.json().get("message") or {}).get("content") or ""
+        except requests.RequestException as e:
+            last = e
+    raise last  # type: ignore[misc]
 
 
 def _extract_json(text: str) -> dict:

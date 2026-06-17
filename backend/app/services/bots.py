@@ -108,7 +108,9 @@ def cast_votes(session: dict) -> dict:
             continue
         symbols = [p["ticker"] for p in picks]
         try:
-            voting.set_member_picks(sid, b["id"], symbols)
+            # bots allocate their voting power by conviction (their own pct weights)
+            voting.set_member_allocations(sid, b["id"],
+                                          [{"symbol": p["ticker"], "weight": p["pct"]} for p in picks])
         except Exception as e:  # noqa: BLE001
             failed += 1
             details.append({"bot": b["display_name"], "status": "vote_failed", "err": str(e)[:140]})

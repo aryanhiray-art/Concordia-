@@ -11,8 +11,14 @@ from .deps import require_member
 router = APIRouter(prefix="/api", tags=["voting"])
 
 
+class AllocItem(BaseModel):
+    symbol: str
+    weight: float = 0   # % of the member's voting power on this pick
+
+
 class VoteBody(BaseModel):
-    symbols: list[str]
+    allocations: list[AllocItem] | None = None   # preferred (Concordia model)
+    symbols: list[str] | None = None             # back-compat: equal-weighted
 
 
 @router.get("/universe")
@@ -36,7 +42,11 @@ def cast_vote(body: VoteBody, member: dict = Depends(require_member)):
     if session["status"] != "open":
         raise HTTPException(status_code=409, detail="voting is closed")
     try:
-        svc.set_member_picks(session["id"], member["id"], body.symbols)
+        if body.allocations is not None:
+            svc.set_member_allocations(session["id"], member["id"],
+                                       [{"symbol": a.symbol, "weight": a.weight} for a in body.allocations])
+        else:
+            svc.set_member_picks(session["id"], member["id"], body.symbols or [])
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
     return svc.session_public(svc.get_session(session["id"]), member["id"])
