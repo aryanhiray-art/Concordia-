@@ -203,7 +203,10 @@ def run(session: dict, force_dry_run: bool = False) -> dict:
                                        "note": "already sold"})
                 continue
             ref_id = ref_id_for(sid, mid, f"SELL:{symbol}")
-            qstr = f"{qty:.6f}"
+            qfloor = math.floor(qty * 1e6) / 1e6      # never round UP past what we hold
+            if qfloor <= 0:
+                continue
+            qstr = f"{qfloor:.6f}"
             try:
                 review = client.review_market_sell(m["account_number"], symbol, qstr)
             except Exception as e:  # noqa: BLE001
@@ -222,6 +225,8 @@ def run(session: dict, force_dry_run: bool = False) -> dict:
                 continue
             try:
                 place = client.place_market_sell(m["account_number"], symbol, qstr, ref_id=ref_id)
+                if isinstance(place, dict):
+                    place["_concord_est_qty"] = qfloor   # shares sold (broker fill is async)
                 _record(sid, mid, symbol, None, ref_id, "placed", review=review, place=place, side="sell")
                 msum["orders"].append({"symbol": symbol, "side": "sell", "status": "placed", "qty": qstr})
                 order_count += 1
@@ -237,7 +242,15 @@ def run(session: dict, force_dry_run: bool = False) -> dict:
                 msum["orders"].append({"symbol": symbol, "side": "buy", "status": "placed",
                                        "note": "already placed"})
                 continue
-            held_val = held.get(symbol, 0.0) * (prices.get(symbol) or 0.0)
+            price = prices.get(symbol)
+            if price is None:
+                # can't value an existing holding or estimate filled shares → skip,
+                # so we never blindly re-buy a name we may already hold.
+                _record(sid, mid, symbol, None, ref_id_for(sid, mid, symbol), "skipped",
+                        error="no quote for sizing")
+                msum["orders"].append({"symbol": symbol, "side": "buy", "status": "skipped", "note": "no quote"})
+                continue
+            held_val = held.get(symbol, 0.0) * price
             need = round(per_pick - held_val, 2)
             if need < 1.00:
                 msum["orders"].append({"symbol": symbol, "side": "buy", "status": "held",
@@ -268,6 +281,8 @@ def run(session: dict, force_dry_run: bool = False) -> dict:
                 continue
             try:
                 place = client.place_market_buy(m["account_number"], symbol, amt, ref_id=ref_id)
+                if isinstance(place, dict):
+                    place["_concord_est_qty"] = round(need / price, 6)  # est shares (async fill)
                 _record(sid, mid, symbol, need, ref_id, "placed", review=review, place=place)
                 msum["orders"].append({"symbol": symbol, "side": "buy", "status": "placed", "amount": amt})
                 order_count += 1

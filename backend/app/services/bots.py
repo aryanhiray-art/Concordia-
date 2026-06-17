@@ -35,6 +35,11 @@ def seed_bots() -> int:
             email = bot_email(s["slug"])
             row = conn.execute("SELECT id FROM members WHERE email=?", (email,)).fetchone()
             if row:
+                # keep an existing bot's model/strategy in sync with the code
+                conn.execute(
+                    "UPDATE members SET bot_model=?, bot_temperature=?, bot_strategy=? WHERE id=?",
+                    (s["model"], s["temperature"], s["style"], row["id"]),
+                )
                 continue
             cur = conn.execute(
                 "INSERT INTO members(email,display_name,role,is_bot,bot_strategy,bot_slug,"
@@ -167,7 +172,11 @@ def score_and_reweight(week: str | None = None) -> dict:
     out: list[dict] = []
     for b in bot_members():
         mid = b["id"]
-        old = float(b["voting_power"] or settings.bot_start_power)
+        # Baseline = the snapshot at the START of the scored week, NOT the mutable
+        # current voting_power — so re-running this job is idempotent (no double
+        # compounding). Falls back to the start power before the first snapshot.
+        prev = power._prev_power(mid, this_week)
+        old = float(prev) if prev is not None else float(settings.bot_start_power)
         ret, n = _bot_week_return(mid, prev_week, this_week, prices)
         if ret is None:
             new = old                      # no scorable picks → power unchanged

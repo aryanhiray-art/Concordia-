@@ -21,13 +21,25 @@ def _num(v) -> float | None:
 
 
 def _filled_qty(place_json: str | None) -> float:
+    """Shares from a placed order.
+
+    A market order's *synchronous* place response is the just-accepted order, so
+    cumulative_quantity is 0 and a dollar-denominated buy carries no quantity yet.
+    The executor therefore stamps an estimate (`_concord_est_qty` = dollars/price
+    for buys, share count for sells) at placement time; we prefer a real filled
+    quantity when present and fall back to that estimate.
+    """
     if not place_json:
         return 0.0
     try:
-        order = (json.loads(place_json).get("data") or {}).get("order") or {}
+        payload = json.loads(place_json)
     except Exception:  # noqa: BLE001
         return 0.0
-    return _num(order.get("cumulative_quantity")) or _num(order.get("quantity")) or 0.0
+    order = (payload.get("data") or {}).get("order") or {}
+    real = _num(order.get("cumulative_quantity")) or _num(order.get("quantity")) or 0.0
+    if real > 0:
+        return real
+    return _num(payload.get("_concord_est_qty")) or 0.0
 
 
 def club_shares(member_id: int) -> dict[str, float]:

@@ -6,6 +6,7 @@ the bot test from a clean cash base. Guarded by a kv flag so it runs exactly onc
 ("after tmrw ignore"); the systemd one-shot timer fires it just after the open.
 Market-hours gated — does nothing on a non-trading day.
 """
+import math
 import sys
 import uuid
 from pathlib import Path
@@ -31,6 +32,11 @@ def main() -> int:
     if kv_get(_DONE) == "1":
         print("[reset_account] already done — skipping")
         return 0
+    # Honor the kill switch: hitting Kill on the dashboard (halt=1) cancels the
+    # scheduled real-money liquidation, same as it halts the executor.
+    if kv_get("halt") == "1":
+        print("[reset_account] kill switch (halt) is on — skipping liquidation")
+        return 0
     if not is_trading_day(today_et()):
         print("[reset_account] not a trading day — will retry next run")
         return 0
@@ -51,7 +57,7 @@ def main() -> int:
     sold = []
     for p in pos:
         sym, qty = p["symbol"], p["quantity"]
-        qstr = f"{qty:.6f}"
+        qstr = f"{math.floor(qty * 1e6) / 1e6:.6f}"   # never request more than held
         ref = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"reset:{mid}:{sym}"))
         try:
             client.place_market_sell(acct, sym, qstr, ref_id=ref)
