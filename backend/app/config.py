@@ -61,6 +61,12 @@ class Settings:
     rh_token_url: str = os.environ.get("RH_TOKEN_URL", "https://api.robinhood.com/oauth2/token/")
     rh_scope: str = os.environ.get("RH_SCOPE", "internal")
     rh_client_id_env: str = os.environ.get("RH_CLIENT_ID", "").strip()
+    # Robinhood's agentic OAuth only accepts a localhost redirect (the consent
+    # screen rejects a hosted HTTPS callback with robinhood.com/oauth/error).
+    # So we redirect to localhost — the member's browser lands on a "can't
+    # connect" page whose URL carries ?code=&state=, which they paste back into
+    # Concord; we exchange it server-side (PKCE verifier is keyed by state).
+    rh_redirect_uri_env: str = os.environ.get("RH_REDIRECT_URI", "").strip()
 
     # Trading behaviour
     execution_mode: str = os.environ.get("EXECUTION_MODE", "dry_run").strip().lower()
@@ -81,7 +87,9 @@ class Settings:
 
     @property
     def rh_redirect_uri(self) -> str:
-        return f"{self.api_public_url}/oauth/robinhood/callback"
+        # localhost only (Robinhood agentic requirement). Override via env if
+        # Robinhood ever permits a different/registered redirect.
+        return self.rh_redirect_uri_env or "http://localhost:8917/callback"
 
     @property
     def is_live(self) -> bool:

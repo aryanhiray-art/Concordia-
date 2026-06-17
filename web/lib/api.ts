@@ -43,8 +43,11 @@ export const api = {
     }),
   me: () => req<{ member: Member; power: PowerView }>("/api/me"),
 
-  // robinhood
+  // robinhood — start, then paste back the redirect URL Robinhood sends you
   rhStart: () => req<{ authorize_url: string }>("/api/oauth/robinhood/start"),
+  rhComplete: (redirect_url: string) =>
+    req<{ ok: boolean; account_number: string | null; agentic_allowed: boolean }>(
+      "/api/oauth/robinhood/complete", { method: "POST", body: JSON.stringify({ redirect_url }) }),
   rhDisconnect: () => req<{ ok: boolean }>("/api/oauth/robinhood/disconnect", { method: "POST" }),
 
   // the single on/off switch

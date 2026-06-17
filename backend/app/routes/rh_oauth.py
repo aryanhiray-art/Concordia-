@@ -1,8 +1,18 @@
-"""Robinhood connect flow (per member)."""
+"""Robinhood connect flow (per member).
+
+Robinhood's agentic OAuth only honours a *localhost* redirect, so after the
+member approves, their browser lands on a localhost "can't connect" page whose
+URL carries ?code=&state=. They paste that URL back here (`/complete`) and we
+exchange it server-side. The hosted `/callback` route is kept as a fallback in
+case Robinhood ever redirects to a hosted URL.
+"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from urllib.parse import parse_qs, urlparse
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 
 from ..config import settings
 from ..db import audit, db
@@ -19,6 +29,49 @@ def start(member: dict = Depends(require_member)):
     vault.set_pending_state(info["state"], member["id"], info["verifier"], info["client_id"])
     audit(f"member:{member['id']}", "rh_oauth_start", None, None)
     return {"authorize_url": info["authorize_url"]}
+
+
+class CompleteBody(BaseModel):
+    redirect_url: str
+
+
+def _finish(member_id: int, code: str, state: str) -> dict:
+    pending = vault.take_pending_state(state)
+    if not pending:
+        raise HTTPException(status_code=400,
+                            detail="this approval expired or was already used — click Connect again")
+    if pending["member_id"] != member_id:
+        raise HTTPException(status_code=403, detail="that approval belongs to a different account")
+    try:
+        bundle = oauth.exchange_code(code, pending["verifier"], pending["client_id"])
+        info = vault.complete_connection(member_id, bundle)
+    except Exception as e:  # noqa: BLE001
+        audit(f"member:{member_id}", "rh_oauth_error", None, {"err": str(e)})
+        raise HTTPException(status_code=502, detail="Robinhood token exchange failed — try connecting again")
+    try:
+        power.snapshot_member(member_id)
+    except Exception:  # noqa: BLE001 — never fail the connect over a snapshot
+        pass
+    return {"ok": True, "account_number": info.get("account_number"),
+            "agentic_allowed": bool(info.get("agentic_allowed"))}
+
+
+@router.post("/api/oauth/robinhood/complete")
+def complete(body: CompleteBody, member: dict = Depends(require_member)):
+    """Member pastes the URL Robinhood redirected them to; we extract code+state."""
+    raw = (body.redirect_url or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="paste the URL Robinhood sent you after approving")
+    query = urlparse(raw).query or (raw.split("?", 1)[1] if "?" in raw else raw)
+    params = parse_qs(query)
+    if params.get("error"):
+        raise HTTPException(status_code=400, detail=f"Robinhood returned an error: {params['error'][0]}")
+    code = (params.get("code") or [None])[0]
+    state = (params.get("state") or [None])[0]
+    if not code or not state:
+        raise HTTPException(status_code=400,
+                            detail="that URL is missing code/state — copy the full address bar after approving")
+    return _finish(member["id"], code, state)
 
 
 @router.get("/oauth/robinhood/callback")

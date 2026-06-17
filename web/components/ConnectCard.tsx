@@ -13,10 +13,30 @@ export function ConnectCard({ member, onChange }: { member: Member; onChange: ()
 
   const [optedIn, setOptedIn] = useState(Number(s?.opted_in) === 1);
   const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState<"idle" | "paste">("idle");
+  const [pasteUrl, setPasteUrl] = useState("");
+  const [err, setErr] = useState<string | null>(null);
 
+  // Robinhood's agentic OAuth only redirects to localhost, so we can't catch the
+  // callback server-side. Open Robinhood in a new tab; after approving, the user
+  // lands on a "can't connect" localhost page — they copy that URL back here.
   async function connect() {
-    setBusy(true);
-    try { const { authorize_url } = await api.rhStart(); window.location.href = authorize_url; }
+    setBusy(true); setErr(null);
+    const tab = window.open("", "_blank");           // open synchronously (no popup block)
+    try {
+      const { authorize_url } = await api.rhStart();
+      if (tab) tab.location.href = authorize_url; else window.location.href = authorize_url;
+      setPhase("paste");
+    } catch (e: any) {
+      if (tab) tab.close();
+      setErr(e.message || "couldn't start Robinhood connect");
+    } finally { setBusy(false); }
+  }
+
+  async function complete() {
+    setBusy(true); setErr(null);
+    try { await api.rhComplete(pasteUrl.trim()); setPhase("idle"); setPasteUrl(""); onChange(); }
+    catch (e: any) { setErr(e.message || "couldn't finish connecting"); }
     finally { setBusy(false); }
   }
 
@@ -42,13 +62,37 @@ export function ConnectCard({ member, onChange }: { member: Member; onChange: ()
             Connect Robinhood to take part. You log in on Robinhood&apos;s own site and approve
             agentic trading — your credentials never touch Concord.
           </p>
-          <Button variant="go" className="mt-4" onClick={connect} busy={busy}>
-            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
-              strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <path d="M5 12h14M13 6l6 6-6 6" />
-            </svg>
-            Connect Robinhood
-          </Button>
+
+          {phase === "idle" ? (
+            <Button variant="go" className="mt-4" onClick={connect} busy={busy}>
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
+                strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M5 12h14M13 6l6 6-6 6" />
+              </svg>
+              Connect Robinhood
+            </Button>
+          ) : (
+            <div className="enter mt-4 rounded-[14px] border border-teal/20 bg-teal/[0.04] p-4">
+              <div className="label !text-teal mb-2">Almost there — one paste</div>
+              <ol className="ml-4 list-decimal space-y-1 text-[12.5px] leading-relaxed text-muted">
+                <li>In the Robinhood tab that opened, log in and <b className="text-ink">Approve</b>.</li>
+                <li>It’ll land on a <b className="text-ink">“can’t connect / localhost”</b> page — that’s expected.</li>
+                <li>Copy that page’s <b className="text-ink">full address bar URL</b> and paste it below.</li>
+              </ol>
+              <input
+                value={pasteUrl} onChange={(e) => { setPasteUrl(e.target.value); setErr(null); }}
+                placeholder="http://localhost:8917/callback?code=…&state=…"
+                className="input mt-3 w-full font-mono !text-[12px]" spellCheck={false} autoComplete="off" />
+              <div className="mt-3 flex items-center gap-2.5">
+                <Button variant="ok" onClick={complete} busy={busy} disabled={!pasteUrl.trim()}>Finish connecting</Button>
+                <button onClick={() => { setPhase("idle"); setErr(null); }}
+                  className="text-[12.5px] text-subtle hover:text-ink">cancel</button>
+                <button onClick={connect}
+                  className="ml-auto text-[12px] text-subtle hover:text-teal">re-open Robinhood</button>
+              </div>
+            </div>
+          )}
+          {err && <div className="mt-3 text-[13px] text-red">⚠ {err}</div>}
         </div>
       ) : (
         <>
