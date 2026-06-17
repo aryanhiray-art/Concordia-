@@ -42,10 +42,14 @@ def register_client() -> str:
     cached = kv_get("rh_client_id")
     if cached:
         return cached
+    # Robinhood dedupes dynamic registration by client_name, returning a prior
+    # client bound to its original redirect. Scope the name to THIS deployment's
+    # host so a fresh client registers against the current redirect_uri.
+    host = settings.api_public_url.split("://", 1)[-1].rstrip("/")
     reg = requests.post(
         settings.rh_register_url,
         json={
-            "client_name": "Concord daily-vote trading club",
+            "client_name": f"Concord daily-vote trading club @ {host}",
             "redirect_uris": [settings.rh_redirect_uri],
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
