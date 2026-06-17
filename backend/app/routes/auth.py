@@ -11,12 +11,17 @@ import time
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, field_validator
 
+from .. import ratelimit
 from ..config import settings
 from ..db import audit, db
-from ..security import hash_password, make_session, verify_password
-from .deps import COOKIE_NAME, current_member, load_member
+from ..security import ct_eq, hash_password, make_session, verify_password
+from .deps import COOKIE_NAME, client_ip, current_member, load_member
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+# Run PBKDF2 even when the email is unknown, so login takes the same time either
+# way (no user enumeration via timing).
+_DUMMY_HASH = hash_password("concord-constant-time-placeholder")
 
 
 class _EmailBody(BaseModel):
@@ -74,28 +79,25 @@ def _issue(resp: Response, member: dict) -> dict:
 
 @router.post("/signup")
 def signup(body: SignupBody, request: Request, resp: Response):
-    if body.invite_code.strip() != settings.invite_code:
+    ip = client_ip(request)
+    if ratelimit.too_many(f"signup:{ip}", 10, 3600):
+        raise HTTPException(status_code=429, detail="too many signups — try again later")
+    if not ct_eq(body.invite_code.strip(), settings.invite_code):
+        ratelimit.record(f"signup:{ip}")
         raise HTTPException(status_code=403, detail="invalid invite code")
     email = body.email
-    role = "owner" if email == settings.owner_email else "member"
+    role = "owner" if ct_eq(email, settings.owner_email) else "member"
     pw = hash_password(body.password)
     with db() as conn:
-        existing = conn.execute("SELECT * FROM members WHERE email=?", (email,)).fetchone()
-        if existing:
-            existing = dict(existing)
-            if existing.get("password_hash"):
-                raise HTTPException(status_code=409, detail="account exists — log in instead")
-            # claim a pre-existing passwordless account (e.g. the seeded owner)
-            conn.execute("UPDATE members SET password_hash=?, display_name=? WHERE id=?",
-                         (pw, body.display_name.strip(), existing["id"]))
-            member = existing
-        else:
-            cur = conn.execute(
-                "INSERT INTO members(email,display_name,role,invite_code_used,password_hash,created_at) "
-                "VALUES(?,?,?,?,?,?)",
-                (email, body.display_name.strip(), role, body.invite_code.strip(), pw, int(time.time())),
-            )
-            member = {"id": cur.lastrowid, "session_version": 1, "role": role}
+        if conn.execute("SELECT 1 FROM members WHERE email=?", (email,)).fetchone():
+            # never overwrite an existing account (no passwordless-claim takeover)
+            raise HTTPException(status_code=409, detail="account exists — log in instead")
+        cur = conn.execute(
+            "INSERT INTO members(email,display_name,role,invite_code_used,password_hash,created_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (email, body.display_name.strip(), role, "redacted", pw, int(time.time())),
+        )
+        member = {"id": cur.lastrowid, "session_version": 1, "role": role}
     _default_settings(member["id"])
     _log_event(member["id"], "signup", request)
     audit(f"member:{member['id']}", "signup", email, {"role": role})
@@ -104,10 +106,19 @@ def signup(body: SignupBody, request: Request, resp: Response):
 
 @router.post("/login")
 def login(body: LoginBody, request: Request, resp: Response):
+    ip = client_ip(request)
+    ekey, ikey = f"login:{body.email}", f"loginip:{ip}"
+    if ratelimit.too_many(ekey, 8, 900) or ratelimit.too_many(ikey, 40, 900):
+        raise HTTPException(status_code=429, detail="too many attempts — try again in a few minutes")
     with db() as conn:
         row = conn.execute("SELECT * FROM members WHERE email=?", (body.email,)).fetchone()
-    if not row or not verify_password(body.password, dict(row).get("password_hash")):
+    stored = dict(row).get("password_hash") if row else None
+    ok = verify_password(body.password, stored or _DUMMY_HASH) and bool(stored)  # constant-ish time
+    if not ok:
+        ratelimit.record(ekey)
+        ratelimit.record(ikey)
         raise HTTPException(status_code=401, detail="wrong email or password")
+    ratelimit.clear(ekey)
     _log_event(row["id"], "login", request)
     return _issue(resp, dict(row))
 

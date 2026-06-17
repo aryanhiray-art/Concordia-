@@ -68,7 +68,12 @@ def decrypt_tokens(blob: bytes) -> dict:
 
 # ─── Signed sessions ─────────────────────────────────────────────────────────
 
-SESSION_TTL_SECONDS = 30 * 24 * 3600  # 30 days
+SESSION_TTL_SECONDS = 7 * 24 * 3600  # 7 days
+
+
+def ct_eq(a: str | None, b: str | None) -> bool:
+    """Constant-time string compare (avoids timing oracles on secrets)."""
+    return hmac.compare_digest((a or "").encode(), (b or "").encode())
 
 
 def _sign(msg: str) -> str:

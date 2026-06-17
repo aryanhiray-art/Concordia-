@@ -10,7 +10,7 @@ from fastapi import HTTPException, Request
 
 from ..config import settings
 from ..db import db
-from ..security import read_session
+from ..security import ct_eq, read_session
 
 COOKIE_NAME = "concord_session"
 
@@ -20,6 +20,14 @@ def _token_from(request: Request) -> str | None:
     if auth and auth.lower().startswith("bearer "):
         return auth[7:].strip()
     return request.cookies.get(COOKIE_NAME)
+
+
+def client_ip(request: Request) -> str:
+    """Real client IP, honouring the proxy chain (nginx + Next.js rewrites)."""
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "?"
 
 
 def load_member(member_id: int) -> dict | None:
@@ -59,7 +67,7 @@ def require_member(request: Request) -> dict:
 
 def require_owner(request: Request) -> dict:
     # backend-to-backend: a matching static service token authenticates as owner
-    if settings.admin_api_token and _token_from(request) == settings.admin_api_token:
+    if settings.admin_api_token and ct_eq(_token_from(request), settings.admin_api_token):
         return {"id": 0, "email": "service", "role": "owner", "display_name": "service"}
     member = current_member(request)
     if not member:

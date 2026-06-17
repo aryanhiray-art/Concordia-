@@ -152,7 +152,10 @@ def init_db() -> None:
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Add columns to pre-existing tables (deployed DBs predate these fields)."""
+    _ALLOWED = {"members", "member_settings"}
+
     def cols(t: str) -> set[str]:
+        assert t in _ALLOWED, f"unexpected table {t!r}"  # PRAGMA can't be parameterized
         return {r["name"] for r in conn.execute(f"PRAGMA table_info({t})")}
     m = cols("members")
     if "password_hash" not in m:
