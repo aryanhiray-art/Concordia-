@@ -74,19 +74,31 @@ class McpClient:
         self.notify("notifications/initialized")
         return result
 
-    def call_tool(self, name: str, arguments: dict) -> dict:
-        result = self.rpc("tools/call", {"name": name, "arguments": arguments})
-        if result.get("isError"):
-            raise RuntimeError(f"tool {name} errored: {json.dumps(result)[:300]}")
-        if isinstance(result.get("structuredContent"), dict):
-            return result["structuredContent"]
-        for block in result.get("content") or []:
-            if block.get("type") == "text":
-                try:
-                    return json.loads(block["text"])
-                except json.JSONDecodeError:
+    def call_tool(self, name: str, arguments: dict, retries: int = 4) -> dict:
+        import re
+        import time
+        for attempt in range(retries):
+            result = self.rpc("tools/call", {"name": name, "arguments": arguments})
+            if result.get("isError"):
+                text = json.dumps(result)
+                throttled = "429" in text or "throttl" in text.lower()
+                if throttled and attempt < retries - 1:
+                    # Robinhood rate-limit: it tells us "available in N seconds".
+                    # Sleep that long (+1) and retry; ref_id keeps places idempotent.
+                    m = re.search(r"available in (\d+)", text)
+                    time.sleep(min((int(m.group(1)) + 1) if m else 5, 35))
                     continue
-        raise RuntimeError(f"tool {name}: no JSON payload in response")
+                raise RuntimeError(f"tool {name} errored: {text[:300]}")
+            if isinstance(result.get("structuredContent"), dict):
+                return result["structuredContent"]
+            for block in result.get("content") or []:
+                if block.get("type") == "text":
+                    try:
+                        return json.loads(block["text"])
+                    except json.JSONDecodeError:
+                        continue
+            raise RuntimeError(f"tool {name}: no JSON payload in response")
+        raise RuntimeError(f"tool {name}: throttled after {retries} attempts")
 
 
 class RobinhoodClient:
