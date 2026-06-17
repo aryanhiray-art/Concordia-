@@ -101,7 +101,7 @@ export function CinematicOverview() {
 
     // ── donut: your holdings (or the consensus basket) by value ──
     const totW = items.reduce((a, b) => a + (b.val || 0), 0) || 1;
-    const slices = items.slice(0, 5).map((b, i) => ({ nm: b.sym, co: b.name, pc: Math.round((b.val || 0) / totW * 1000) / 10, c: COLORS[i] }));
+    const slices = items.slice(0, 5).map((b, i) => ({ nm: b.sym, co: (b.name && b.name !== b.sym) ? b.name : "", pc: Math.round((b.val || 0) / totW * 1000) / 10, c: COLORS[i] }));
     const restPc = Math.round((100 - slices.reduce((a, s) => a + s.pc, 0)) * 10) / 10;
     if (restPc > 0.5 && items.length > 5) slices.push({ nm: "Rest", co: `${items.length - 5} more`, pc: restPc, c: COLORS[5] });
     const CC = 2 * Math.PI * 80, arcsEl = $("#arcs");
@@ -113,7 +113,7 @@ export function CinematicOverview() {
         else c.setAttribute("stroke-dasharray", "0 " + CC.toFixed(2));
       }
       const leg = $("#leg"); leg.style.opacity = "0";
-      setTimeout(() => { leg.innerHTML = slices.map((x) => `<div class="row"><span class="sw" style="background:${x.c};color:${x.c}"></span><span class="nm">${x.nm}<s>${x.co || ""}</s></span><span class="pc tnum">${x.pc}%</span></div>`).join(""); leg.style.opacity = "1"; }, 160);
+      setTimeout(() => { leg.innerHTML = slices.map((x) => `<div class="row"><span class="sw" style="background:${x.c};color:${x.c}"></span><span class="nm">${x.nm}${x.co ? `<s>${x.co}</s>` : ""}</span><span class="pc tnum">${x.pc}%</span></div>`).join(""); leg.style.opacity = "1"; }, 160);
       $("#dctr").textContent = items.length ? String(items.length) : "—"; $("#dctrs").textContent = itemsLabel;
     }
 
@@ -137,7 +137,7 @@ export function CinematicOverview() {
     dots.forEach((d, kk) => d.addEventListener("click", (e: any) => { e.stopPropagation(); go(kk); }));
     const onKey = (e: KeyboardEvent) => { if (e.key === "ArrowRight") next(); else if (e.key === "ArrowLeft") prev(); };
     document.addEventListener("keydown", onKey);
-    $("#ring").addEventListener("click", (e: any) => e.stopPropagation());
+    $("#donutring").addEventListener("click", (e: any) => e.stopPropagation());
     const onNav = (e: any) => { if (e.target.closest("[data-vote],.strip a")) router.push("/vote"); };
     r.addEventListener("click", onNav);
 
@@ -200,7 +200,7 @@ export function CinematicOverview() {
         </div>
 
         <div className="alloc">
-          <div className="ring" id="ring"><svg viewBox="0 0 200 200"><g id="arcs" /></svg><div className="ctr"><b id="dctr">0</b><span id="dctrs">names</span></div></div>
+          <div className="donutring" id="donutring"><svg viewBox="0 0 200 200"><g id="arcs" /></svg><div className="ctr"><b id="dctr">0</b><span id="dctrs">names</span></div></div>
           <div className="leg" id="leg" />
         </div>
 

@@ -276,13 +276,13 @@ body {
 .cine .cycle b { color: var(--teal); font-weight: 600; font-family: var(--font-outfit); }
 .cine .alloc { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; gap: 56px; opacity: 0; transform: scale(.95); pointer-events: none; transition: opacity .45s var(--ease), transform .55s var(--ease); flex-wrap: wrap; }
 .cine #stage[data-s="2"] .alloc { opacity: 1; transform: none; pointer-events: auto; }
-.cine .ring { position: relative; width: 280px; height: 280px; flex: none; cursor: pointer; transition: transform .5s var(--ease); }
-.cine .ring.pop { transform: scale(1.06); }
-.cine .ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
-.cine .ring .arc { fill: none; stroke-width: 30; transition: stroke-dasharray .55s var(--ease), stroke-dashoffset .55s var(--ease), stroke .45s var(--ease); }
-.cine .ring .ctr { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; }
-.cine .ring .ctr b { font: 700 38px/1 var(--font-outfit); }
-.cine .ring .ctr span { font: 600 11px/1 var(--font-inter); letter-spacing: .12em; text-transform: uppercase; color: var(--subtle); margin-top: 5px; }
+.cine .donutring { position: relative; width: 280px; height: 280px; flex: none; cursor: pointer; transition: transform .5s var(--ease); }
+.cine .donutring.pop { transform: scale(1.06); }
+.cine .donutring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.cine .donutring .arc { fill: none; stroke-width: 30; transition: stroke-dasharray .55s var(--ease), stroke-dashoffset .55s var(--ease), stroke .45s var(--ease); }
+.cine .donutring .ctr { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; }
+.cine .donutring .ctr b { font: 700 38px/1 var(--font-outfit); }
+.cine .donutring .ctr span { font: 600 11px/1 var(--font-inter); letter-spacing: .12em; text-transform: uppercase; color: var(--subtle); margin-top: 5px; }
 .cine .leg { display: flex; flex-direction: column; gap: 13px; min-width: 230px; transition: opacity .28s var(--ease); }
 .cine .leg .row { display: flex; align-items: center; gap: 12px; }
 .cine .leg .sw { width: 13px; height: 13px; border-radius: 4px; flex: none; box-shadow: 0 0 11px -1px currentColor; }
@@ -309,3 +309,8 @@ html, body { overflow-x: hidden; }
 .cine .hspark { flex: 1; height: 42px; }
 .cine .hwt { font: 600 14px/1 var(--font-outfit); color: var(--muted); flex: none; width: 84px; text-align: right; }
 @media (prefers-reduced-motion: reduce) { .cine * { transition: none !important; animation: none !important; } }
+
+/* cinematic fixes: trackpad swipe (no browser back/fwd), no focus-box, legend subtitle */
+html, body { overscroll-behavior-x: none; }
+.cine :focus, .cine :focus-visible, .cine svg:focus, .cine .donutring:focus { outline: none !important; }
+.cine .leg .nm s { display: block; font: 400 11.5px/1 var(--font-inter), sans-serif; color: var(--subtle); text-decoration: none; margin-top: 3px; }
