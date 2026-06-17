@@ -239,3 +239,71 @@ body {
 .gcard:hover { transform: translateY(-4px); border-color: rgba(45,212,191,0.26); box-shadow: inset 0 1px 0 rgba(255,255,255,0.14), 0 28px 60px -28px rgba(0,0,0,0.8), 0 0 50px -22px rgba(45,212,191,0.4); }
 .ci { width: 36px; height: 36px; border-radius: 11px; display: grid; place-items: center; color: var(--teal); background: rgba(45,212,191,0.12); border: 1px solid rgba(45,212,191,0.22); }
 .ci svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ═══ Cinematic overview (morph carousel) — ported from Concordia ═══════ */
+:root { --ease: cubic-bezier(.55,.05,.18,1); --gutter: max(20px, calc((100vw - 1080px)/2));
+  --glass: rgba(255,255,255,.05); --glassbd: rgba(255,255,255,.10); --grey: #8A94A6; --teal2: #5FF0DC; }
+.cine { position: relative; }
+.cine #stage { position: relative; height: calc(100vh - 88px); min-height: 560px; overflow: hidden; z-index: 1; cursor: grab; user-select: none; touch-action: pan-y; }
+.cine #stage.grab { cursor: grabbing; }
+.cine .chartfield { position: absolute; inset: 0; z-index: 0; transition: opacity .34s var(--ease); will-change: opacity; }
+.cine #stage[data-s="0"] .chartfield { opacity: .20; }
+.cine #stage[data-s="1"] .chartfield { opacity: 1; }
+.cine #stage[data-s="2"] .chartfield { opacity: 0; }
+.cine .chartfield svg { width: 100%; height: 100%; display: block; overflow: visible; }
+.cine .sdot { position: absolute; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 0 14px rgba(255,255,255,.7), 0 0 0 4px rgba(45,212,191,.18); transform: translate(-50%,-50%); z-index: 3; opacity: 0; pointer-events: none; transition: opacity .18s; }
+.cine .stip { position: absolute; transform: translate(-50%,-100%); z-index: 3; font: 600 13px/1 var(--font-inter); color: var(--ink); background: rgba(12,16,22,.82); border: 1px solid var(--glassbd); padding: 7px 11px; border-radius: 8px; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity .18s; backdrop-filter: blur(8px); }
+.cine #stage.scrubbing .sdot, .cine #stage.scrubbing .stip { opacity: 1; }
+.cine .value { position: absolute; top: 0; left: 0; z-index: 2; transform-origin: top left; will-change: transform,opacity; transition: transform .62s var(--ease), opacity .4s var(--ease); }
+.cine .value .num { font: 800 clamp(54px,8.6vw,118px)/1 var(--font-outfit); letter-spacing: -.02em; background: linear-gradient(180deg,#fff,#bfeee6); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.cine .value .chg { margin-top: 14px; font: 600 22px/1 var(--font-inter); color: var(--green); }
+.cine .value .chg.dn { color: var(--red); }
+.cine #stage[data-s="0"] .value { transform: translate(calc(50vw - 50%), calc(50vh - 58%)) scale(1); }
+.cine #stage[data-s="1"] .value { transform: translate(var(--gutter), 84px) scale(.5); }
+.cine #stage[data-s="2"] .value { transform: translate(var(--gutter), 84px) scale(.5); opacity: 0; }
+.cine .strip { position: absolute; left: 50%; top: calc(50vh + 92px); transform: translateX(-50%); z-index: 2; display: flex; padding: 6px; border-radius: 16px; width: min(640px,86vw); background: var(--glass); border: 1px solid var(--glassbd); overflow: hidden; backdrop-filter: blur(16px) saturate(140%); box-shadow: inset 0 1px 0 rgba(255,255,255,.1); transition: opacity .4s var(--ease), transform .5s var(--ease); }
+.cine .strip a { flex: 1; display: flex; align-items: center; justify-content: center; gap: 9px; padding: 13px 12px; border-radius: 11px; font: 600 13.5px/1 var(--font-inter); cursor: pointer; transition: background .2s; }
+.cine .strip a:hover { background: rgba(45,212,191,.08); }
+.cine .strip a svg { width: 17px; height: 17px; color: var(--teal); }
+.cine #stage[data-s="1"] .strip, .cine #stage[data-s="2"] .strip { opacity: 0; transform: translateX(-50%) translateY(14px); pointer-events: none; }
+.cine .perfx { position: absolute; left: var(--gutter); right: var(--gutter); bottom: 92px; z-index: 2; opacity: 0; transition: opacity .4s var(--ease) .12s; pointer-events: none; }
+.cine #stage[data-s="1"] .perfx { opacity: 1; pointer-events: auto; }
+.cine .axis { display: flex; justify-content: space-between; color: var(--subtle); font: 500 11px/1 var(--font-inter); }
+.cine .tfs { display: flex; gap: 6px; margin-top: 16px; justify-content: center; }
+.cine .cycle { position: absolute; left: 50%; bottom: 92px; transform: translateX(-50%); z-index: 2; font: 500 12px/1 var(--font-inter); color: var(--subtle); display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px; background: var(--glass); border: 1px solid var(--hair); transition: opacity .4s var(--ease); }
+.cine #stage[data-s="1"] .cycle, .cine #stage[data-s="2"] .cycle { opacity: 0; pointer-events: none; }
+.cine .cycle b { color: var(--teal); font-weight: 600; font-family: var(--font-outfit); }
+.cine .alloc { position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; gap: 56px; opacity: 0; transform: scale(.95); pointer-events: none; transition: opacity .45s var(--ease), transform .55s var(--ease); flex-wrap: wrap; }
+.cine #stage[data-s="2"] .alloc { opacity: 1; transform: none; pointer-events: auto; }
+.cine .ring { position: relative; width: 280px; height: 280px; flex: none; cursor: pointer; transition: transform .5s var(--ease); }
+.cine .ring.pop { transform: scale(1.06); }
+.cine .ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.cine .ring .arc { fill: none; stroke-width: 30; transition: stroke-dasharray .55s var(--ease), stroke-dashoffset .55s var(--ease), stroke .45s var(--ease); }
+.cine .ring .ctr { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; }
+.cine .ring .ctr b { font: 700 38px/1 var(--font-outfit); }
+.cine .ring .ctr span { font: 600 11px/1 var(--font-inter); letter-spacing: .12em; text-transform: uppercase; color: var(--subtle); margin-top: 5px; }
+.cine .leg { display: flex; flex-direction: column; gap: 13px; min-width: 230px; transition: opacity .28s var(--ease); }
+.cine .leg .row { display: flex; align-items: center; gap: 12px; }
+.cine .leg .sw { width: 13px; height: 13px; border-radius: 4px; flex: none; box-shadow: 0 0 11px -1px currentColor; }
+.cine .leg .nm { font: 500 14.5px/1.1 var(--font-inter); flex: 1; }
+.cine .leg .pc { font: 600 14.5px/1 var(--font-outfit); }
+.cine .arw { position: absolute; top: 50%; transform: translateY(-50%); width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; color: var(--muted); background: rgba(255,255,255,.04); border: 1px solid var(--hair); cursor: pointer; z-index: 5; transition: .2s; }
+.cine .arw:hover { color: var(--ink); background: rgba(45,212,191,.1); border-color: rgba(45,212,191,.3); }
+.cine .arw svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.cine .arw.l { left: 8px; } .cine .arw.r { right: 8px; }
+.cine .dots { position: absolute; left: 50%; bottom: 48px; transform: translateX(-50%); display: flex; gap: 10px; z-index: 5; }
+.cine .dots button { width: 8px; height: 8px; border-radius: 50%; border: none; background: rgba(255,255,255,.22); cursor: pointer; padding: 0; transition: .25s; }
+.cine .dots button.on { background: var(--teal); width: 24px; border-radius: 5px; box-shadow: 0 0 12px rgba(45,212,191,.6); }
+.cine .scrolldn { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 5; color: var(--subtle); background: none; border: none; cursor: pointer; transition: color .2s; }
+.cine .scrolldn:hover { color: var(--ink); }
+.cine .scrolldn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; animation: bob 1.8s ease-in-out infinite; }
+@keyframes bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(5px); } }
+.cine #hold { position: relative; z-index: 1; padding: 60px 4px 40px; }
+.cine .holdrow { display: flex; align-items: center; gap: 20px; padding: 16px 12px; margin: 0 -12px; border-radius: 12px; border-top: 1px solid var(--hair); cursor: pointer; transition: background .2s; }
+.cine .holdrow:first-of-type { border-top: none; }
+.cine .holdrow:hover { background: rgba(255,255,255,.03); }
+.cine .htk { width: 56px; height: 40px; border-radius: 11px; background: rgba(255,255,255,.04); border: 1px solid var(--hair); display: grid; place-items: center; font: 600 12px/1 var(--font-outfit); color: var(--muted); flex: none; }
+.cine .hn { flex: none; min-width: 150px; } .cine .hn b { font: 600 15px/1.2 var(--font-inter); } .cine .hn s { display: block; font: 400 12px/1 var(--font-inter); color: var(--subtle); text-decoration: none; margin-top: 3px; }
+.cine .hspark { flex: 1; height: 42px; }
+.cine .hwt { font: 600 14px/1 var(--font-outfit); color: var(--muted); flex: none; width: 84px; text-align: right; }
+@media (prefers-reduced-motion: reduce) { .cine * { transition: none !important; animation: none !important; } }
