@@ -2,7 +2,6 @@
 
 import { useAuth } from "@/lib/auth";
 import { AllocSliders } from "@/components/AllocSliders";
-import { VoteApiCard } from "@/components/ApiBot";
 import { Countdown, LoadingScreen } from "@/components/ui";
 
 function money(n?: number | null) {
@@ -38,10 +37,7 @@ export default function VotePage() {
       </header>
 
       <div className="grid items-start gap-7 lg:grid-cols-[1.55fr_1fr]">
-        <div className="space-y-7">
-          <AllocSliders session={session} participating={participating && open} onVoted={() => refreshSession()} />
-          <VoteApiCard />
-        </div>
+        <AllocSliders session={session} participating={participating && open} onVoted={() => refreshSession()} />
 
         {/* forming basket — power-weighted consensus */}
         <div className="glass rise p-5 sm:p-6">
