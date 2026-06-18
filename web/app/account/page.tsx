@@ -4,6 +4,7 @@ import { useAuth } from "@/lib/auth";
 import { ConnectCard } from "@/components/ConnectCard";
 import { AllocationCard } from "@/components/AllocationCard";
 import { ChangePassword } from "@/components/ChangePassword";
+import { MemberKeys } from "@/components/MemberKeys";
 
 export default function AccountPage() {
   const { member, refreshMember } = useAuth();
@@ -18,6 +19,7 @@ export default function AccountPage() {
 
       <ConnectCard member={member} onChange={refreshMember} />
       {member.robinhood?.status === "connected" && <AllocationCard onChange={refreshMember} />}
+      <MemberKeys />
       <ChangePassword />
     </div>
   );
