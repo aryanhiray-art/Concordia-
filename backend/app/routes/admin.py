@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from ..calendar_us import today_et
 from ..config import settings
 from ..db import audit, db, is_armed, kv_get, kv_set, set_armed
 from ..robinhood import vault
@@ -260,13 +261,14 @@ def run_phase(phase: str, dry_run: bool = True, owner: dict = Depends(require_ow
     if phase == "reweight":      # weekly accuracy → bot voting power
         return bots.score_and_reweight()
     if phase == "close":
-        session = svc.active_session()
+        # close TODAY's ballot (active_session can be the next day's after a close)
+        session = svc.session_for_trade_date(today_et().isoformat()) or svc.active_session()
         if not session:
             raise HTTPException(404, "no session")
         return {"session": svc.close_and_select(session["id"])}
     if phase == "execute":
         kv_set("halt", "0")
-        session = svc.active_session()
+        session = svc.session_for_trade_date(today_et().isoformat()) or svc.active_session()
         if not session:
             raise HTTPException(404, "no session")
         if session["status"] == "open":

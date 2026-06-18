@@ -18,9 +18,10 @@ def main() -> int:
     if not is_trading_day(today_et()):
         print("[close_vote] not a trading day — skipping")
         return 0
-    session = voting.active_session()
+    td = today_et().isoformat()
+    session = voting.session_for_trade_date(td)   # close TODAY's ballot, not the latest
     if not session or session["status"] != "open":
-        print(f"[close_vote] no open session to close (have {session and session['status']})")
+        print(f"[close_vote] no open session for {td} (have {session and session['status']})")
         return 0
     closed = voting.close_and_select(session["id"])
     picks = [p["symbol"] for p in voting.session_picks(closed)]

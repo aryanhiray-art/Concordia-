@@ -105,6 +105,19 @@ def get_session(session_id: int) -> dict | None:
     return dict(row) if row else None
 
 
+def session_for_trade_date(trade_date: str) -> dict | None:
+    """The session for a specific trade date (YYYY-MM-DD, ET).
+
+    Close/execute MUST target the day they run on — `active_session()` returns the
+    latest session, which after a close is the *next* trading day's (just-opened)
+    ballot. Executing that would trade an empty/future basket. Always resolve by
+    today's date instead.
+    """
+    with db() as conn:
+        row = conn.execute("SELECT * FROM vote_sessions WHERE trade_date=?", (trade_date,)).fetchone()
+    return dict(row) if row else None
+
+
 # ─── votes ───────────────────────────────────────────────────────────────────
 
 def set_member_allocations(session_id: int, member_id: int, allocs: list[dict]) -> list[dict]:

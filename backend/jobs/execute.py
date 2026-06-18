@@ -23,9 +23,15 @@ def main() -> int:
         print("[execute] not a trading day — skipping")
         return 0
     kv_set("halt", "0")
-    session = voting.active_session()
+    # Target TODAY's session by date — never active_session(), which after the
+    # close resolves to the next trading day's empty ballot.
+    td = today_et().isoformat()
+    session = voting.session_for_trade_date(td)
     if not session:
-        print("[execute] no session")
+        print(f"[execute] no session for {td} — skipping")
+        return 0
+    if session["status"] == "executed":
+        print(f"[execute] {td} already executed — skipping")
         return 0
     if session["status"] == "open":
         session = voting.close_and_select(session["id"])  # safety: close first
