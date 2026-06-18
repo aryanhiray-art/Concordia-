@@ -326,6 +326,20 @@ def run(session: dict, force_dry_run: bool = False) -> dict:
     if will_place:
         with db() as conn:
             conn.execute("UPDATE vote_sessions SET status='executed' WHERE id=?", (sid,))
+    # Cumulative truth for the session — a re-run places 0 NEW orders even though
+    # the first run may have placed many, so report the session total, not just
+    # this run, and a per-reason skip breakdown so the UI never under-reports.
+    this_run = summary["orders"]
+    skips: dict[str, int] = {}
+    for o in this_run:
+        if o.get("status") == "skipped":
+            reason = (o.get("alerts") or [{}])[0].get("alertType") if o.get("alerts") else o.get("note")
+            skips[reason or "skipped"] = skips.get(reason or "skipped", 0) + 1
+    with db() as conn:
+        summary["placed_total"] = conn.execute(
+            "SELECT COUNT(*) FROM executions WHERE session_id=? AND status='placed'", (sid,)
+        ).fetchone()[0]
+    summary["skipped"] = skips
     audit("system", "execute_done", session["trade_date"],
           {"mode": mode, "n_members": len(summary["members"])})
     return summary
