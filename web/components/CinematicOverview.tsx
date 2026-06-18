@@ -4,12 +4,23 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { sectorOf, sectorColor } from "@/lib/sectors";
 import type { Account } from "@/lib/types";
 
 // A representative market shape; we compress its daily returns to the member's
 // real club P&L and scale it to end at their real club value.
 const SPY = [680.73,678.87,671.40,676.47,680.59,684.83,687.96,690.38,690.31,687.85,687.01,681.92,683.17,687.72,691.81,689.58,689.51,694.07,695.16,693.77,690.36,692.24,691.66,677.58,685.40,688.98,689.23,692.73,695.49,695.42,694.04,691.97,695.41,689.53,686.19,677.62,690.62,693.95,692.12,691.96,681.27,681.75,682.85,686.29,684.48,689.43,682.39,687.35,693.15,689.30,685.99,686.38,680.33,685.13,681.31,672.38,678.27,677.18,676.33,666.06,662.29,669.03,670.79,661.43,659.80,648.57,655.38,653.18,656.82,645.09,650.34,655.24,655.83,658.93,659.22,676.01,679.91,679.46,686.10,694.46,699.94,701.66,710.14,708.72,711.21,713.94,715.17,718.66,720.65,723.77,733.83,737.62,739.30,742.31,748.17,738.65,741.25,745.64,750.59,754.60,756.48,759.57,757.09,737.55,741.75];
-const COLORS = ["#2DD4BF","#22D3EE","#60A5FA","#818CF8","#A78BFA","#475569"];
+
+// lighten/darken a hex by index so the stocks inside one sector stay visually
+// related (same hue) but distinguishable.
+function shade(hex: string, i: number, n: number): string {
+  const f = n <= 1 ? 1 : 1.3 - (i / (n - 1)) * 0.68; // 1.30 (lighter) → 0.62 (darker)
+  const h = hex.replace("#", "");
+  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+  const cl = (x: number) => Math.max(0, Math.min(255, Math.round(x * f)));
+  const to = (x: number) => x.toString(16).padStart(2, "0");
+  return `#${to(cl(r))}${to(cl(g))}${to(cl(b))}`;
+}
 
 export function CinematicOverview() {
   const { session } = useAuth();
@@ -99,22 +110,75 @@ export function CinematicOverview() {
     }
     const unscrub = () => { stage.classList.remove("scrubbing"); if (usd.length) readout(usd.length - 1); };
 
-    // ── donut: your holdings (or the consensus basket) by value ──
-    const totW = items.reduce((a, b) => a + (b.val || 0), 0) || 1;
-    const slices = items.slice(0, 5).map((b, i) => ({ nm: b.sym, co: (b.name && b.name !== b.sym) ? b.name : "", pc: Math.round((b.val || 0) / totW * 1000) / 10, c: COLORS[i] }));
-    const restPc = Math.round((100 - slices.reduce((a, s) => a + s.pc, 0)) * 10) / 10;
-    if (restPc > 0.5 && items.length > 5) slices.push({ nm: "Rest", co: `${items.length - 5} more`, pc: restPc, c: COLORS[5] });
-    const CC = 2 * Math.PI * 80, arcsEl = $("#arcs");
-    function drawDonut() {
-      while (arcsEl.children.length < 6) arcsEl.insertAdjacentHTML("beforeend", `<circle class="arc" cx="100" cy="100" r="80" stroke="#2DD4BF" stroke-dasharray="0 ${CC.toFixed(2)}"/>`);
+    // ── donut: holdings grouped by SECTOR; click a sector to morph into the
+    //    individual stocks within it, "‹ All sectors" to morph back ──
+    type Slc = { key: string; label: string; sub: string; pc: number; c: string; drill: boolean };
+    const bySector: Record<string, { sector: string; val: number; items: typeof items }> = {};
+    for (const it of items) {
+      const sec = sectorOf(it.sym);
+      (bySector[sec] ||= { sector: sec, val: 0, items: [] });
+      bySector[sec].val += (it.val || 0);
+      bySector[sec].items.push(it);
+    }
+    const sectorGroups = Object.values(bySector).sort((a, b) => b.val - a.val);
+    const GTOT = sectorGroups.reduce((a, g) => a + (g.val || 0), 0) || 1;
+    const pctOf = (v: number, tot: number) => Math.round((v / (tot || 1)) * 1000) / 10;
+
+    const CC = 2 * Math.PI * 80, GAP = 2.2, arcsEl = $("#arcs"), legEl = $("#leg"), ringEl = $("#donutring");
+    function paintArcs(slices: Slc[]) {
+      while (arcsEl.children.length < slices.length)
+        arcsEl.insertAdjacentHTML("beforeend", `<circle class="arc" cx="100" cy="100" r="80" stroke="#2DD4BF" stroke-dasharray="0 ${CC.toFixed(2)}"/>`);
       let off = 0;
-      for (let i = 0; i < 6; i++) { const c = arcsEl.children[i];
-        if (i < slices.length) { const len = slices[i].pc / 100 * CC; c.setAttribute("stroke", slices[i].c); c.setAttribute("stroke-dasharray", len.toFixed(2) + " " + (CC - len).toFixed(2)); c.setAttribute("stroke-dashoffset", (-off).toFixed(2)); off += len; }
-        else c.setAttribute("stroke-dasharray", "0 " + CC.toFixed(2));
+      for (let i = 0; i < arcsEl.children.length; i++) {
+        const c = arcsEl.children[i] as any;
+        if (i < slices.length && slices[i].pc > 0) {
+          const len = slices[i].pc / 100 * CC;
+          // draw slightly short of the full segment so neighbours don't share an
+          // anti-aliased seam (the high-contrast edges were reading as a notch);
+          // a clean butt cap + tiny gap = crisp straight radial edges.
+          const draw = Math.max(1, len - GAP);
+          c.setAttribute("stroke", slices[i].c);
+          c.setAttribute("stroke-dasharray", draw.toFixed(2) + " " + (CC - draw).toFixed(2));
+          c.setAttribute("stroke-dashoffset", (-off).toFixed(2));
+          c.style.cursor = slices[i].drill ? "pointer" : "default";
+          c.onclick = slices[i].drill ? (e: any) => { e.stopPropagation(); drillInto(slices[i].key); } : null;
+          off += len;
+        } else { c.setAttribute("stroke-dasharray", "0 " + CC.toFixed(2)); c.onclick = null; }
       }
-      const leg = $("#leg"); leg.style.opacity = "0";
-      setTimeout(() => { leg.innerHTML = slices.map((x) => `<div class="row"><span class="sw" style="background:${x.c};color:${x.c}"></span><span class="nm">${x.nm}${x.co ? `<s>${x.co}</s>` : ""}</span><span class="pc tnum">${x.pc}%</span></div>`).join(""); leg.style.opacity = "1"; }, 160);
-      $("#dctr").textContent = items.length ? String(items.length) : "—"; $("#dctrs").textContent = itemsLabel;
+    }
+    function paintLegend(slices: Slc[], sector: string | null) {
+      legEl.style.opacity = "0";
+      setTimeout(() => {
+        const back = sector ? `<button class="legback" data-back="1"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg>All sectors</button>` : "";
+        legEl.innerHTML = back + slices.map((x) =>
+          `<div class="row" ${x.drill ? `data-sec="${x.key}"` : ""}><span class="sw" style="background:${x.c};color:${x.c}"></span><span class="nm">${x.label}${x.sub ? `<s>${x.sub}</s>` : ""}</span><span class="pc tnum">${x.pc}%</span></div>`).join("");
+        legEl.style.opacity = "1";
+        (legEl.querySelector("[data-back]") as HTMLElement | null)?.addEventListener("click", (e) => { e.stopPropagation(); renderSectors(); });
+        legEl.querySelectorAll("[data-sec]").forEach((el: any) => el.addEventListener("click", (e: any) => { e.stopPropagation(); drillInto(el.getAttribute("data-sec")); }));
+      }, 150);
+    }
+    function pop() { ringEl.classList.remove("pop"); void (ringEl as HTMLElement).offsetWidth; ringEl.classList.add("pop"); }
+    function renderSectors() {
+      const slices: Slc[] = sectorGroups.map((g) => ({
+        key: g.sector, label: g.sector, sub: `${g.items.length} name${g.items.length === 1 ? "" : "s"}`,
+        pc: pctOf(g.val, GTOT), c: sectorColor(g.sector), drill: g.items.length > 0,
+      }));
+      $("#dctr").textContent = items.length ? String(items.length) : "—";
+      $("#dctrs").textContent = itemsLabel;
+      paintArcs(slices); paintLegend(slices, null); pop();
+    }
+    function drillInto(sector: string) {
+      const g = bySector[sector]; if (!g) return;
+      const sorted = [...g.items].sort((a, b) => (b.val || 0) - (a.val || 0));
+      const tot = g.val || sorted.reduce((a, x) => a + (x.val || 0), 0) || 1;
+      const base = sectorColor(sector);
+      const slices: Slc[] = sorted.map((it, i) => ({
+        key: it.sym, label: it.sym, sub: (it.name && it.name !== it.sym) ? it.name : "",
+        pc: pctOf(it.val || 0, tot), c: shade(base, i, sorted.length), drill: false,
+      }));
+      $("#dctr").textContent = String(g.items.length);
+      $("#dctrs").textContent = sector;
+      paintArcs(slices); paintLegend(slices, sector); pop();
     }
 
     // ── holdings ──
@@ -123,7 +187,7 @@ export function CinematicOverview() {
       ? items.map((h, i) => `<div class="holdrow" data-vote="1"><span class="htk">${h.sym}</span><div class="hn"><b>${h.name || h.sym}</b><s>${h.sym}</s></div>${spark(i % 3 !== 1)}<span class="hwt tnum">$${Math.round(h.val || 0).toLocaleString()}</span></div>`).join("")
       : `<div style="color:var(--subtle);font:500 13px/1.6 var(--font-inter);padding:8px 2px">No holdings yet — once the basket runs, your positions show here. <a href="/vote" style="color:var(--teal)">Cast your vote →</a></div>`;
 
-    drawChart("ALL"); drawDonut();
+    drawChart("ALL"); renderSectors();
     // count-up the hero
     if (!RM) { const el = $("#val"); let t0: number | null = null; const cu = (ts: number) => { if (!t0) t0 = ts; const p = Math.min((ts - t0) / 950, 1), e = 1 - Math.pow(1 - p, 3); el.textContent = fmt(value * e); if (p < 1) requestAnimationFrame(cu); }; requestAnimationFrame(cu); }
 
@@ -143,7 +207,7 @@ export function CinematicOverview() {
 
     // drag / wheel / touch
     let down = false, x0 = 0, moved = 0;
-    const pd = (e: PointerEvent) => { if ((e.target as HTMLElement).closest(".arw,.dots,.strip a,.tf,.ring,.leg,.scrolldn,a,button")) return; down = true; x0 = e.clientX; moved = 0; stage.classList.add("grab"); };
+    const pd = (e: PointerEvent) => { if ((e.target as HTMLElement).closest(".arw,.dots,.strip a,.tf,.donutring,.leg,.scrolldn,a,button")) return; down = true; x0 = e.clientX; moved = 0; stage.classList.add("grab"); };
     const pm = (e: PointerEvent) => { if (down) { moved = e.clientX - x0; return; } if (cur === 1) { const fr = stage.getBoundingClientRect(); if (e.clientX >= fr.left && e.clientX <= fr.right && e.clientY >= fr.top && e.clientY <= fr.bottom) scrub(e.clientX); } };
     const pu = () => { if (!down) return; down = false; stage.classList.remove("grab"); if (Math.abs(moved) > 45) go(cur + (moved < 0 ? 1 : -1)); };
     stage.addEventListener("pointerdown", pd); window.addEventListener("pointermove", pm); window.addEventListener("pointerup", pu);

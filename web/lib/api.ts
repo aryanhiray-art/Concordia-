@@ -1,6 +1,6 @@
 "use client";
 
-import type { Member, SessionView, UniverseItem, ExecutionRow, PowerView, Account } from "./types";
+import type { Member, SessionView, UniverseItem, ExecutionRow, PowerView, Account, ApiKey, ResearchResult } from "./types";
 
 // Empty base = same-origin (Vercel rewrites /api + /oauth to the forge backend).
 // Local dev sets NEXT_PUBLIC_CONCORD_API=http://localhost:8780.
@@ -78,5 +78,20 @@ export const api = {
   castVote: (allocations: { symbol: string; weight: number }[]) =>
     req<SessionView>("/api/vote/today", { method: "POST", body: JSON.stringify({ allocations }) }),
   results: () => req<{ session: SessionView | null; executions: ExecutionRow[] }>("/api/vote/results"),
+
+  // API keys (session login required) — for an external program / bot to vote for you
+  apiKeys: () => req<{ keys: ApiKey[] }>("/api/me/api-keys"),
+  createApiKey: (name: string) =>
+    req<{ id: number; name: string; prefix: string; key: string; created_at: number }>(
+      "/api/me/api-keys", { method: "POST", body: JSON.stringify({ name }) }),
+  revokeApiKey: (id: number) =>
+    req<{ ok: boolean }>(`/api/me/api-keys/${id}`, { method: "DELETE" }),
+
+  // research-voter program — reads your Robinhood watchlists → S&P 500 top-20 → vote
+  researchPreview: () => req<ResearchResult>("/api/program/research-preview"),
+  researchVote: (dry = false) =>
+    req<ResearchResult>("/api/program/research-vote", {
+      method: "POST", body: JSON.stringify({ dry_run: dry }),
+    }),
   // (owner/admin controls live on the forge dashboard, not in this member app)
 };

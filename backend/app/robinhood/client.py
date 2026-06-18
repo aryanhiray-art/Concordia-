@@ -121,6 +121,13 @@ class RobinhoodClient:
     def get_quotes(self, symbols: list[str]) -> dict:
         return self.mcp.call_tool("get_equity_quotes", {"symbols": symbols})
 
+    # ── research (watchlists) — best-effort; not all MCP deployments expose these ──
+    def get_watchlists(self) -> dict:
+        return self.mcp.call_tool("get_watchlists", {})
+
+    def get_watchlist_items(self, list_id: str) -> dict:
+        return self.mcp.call_tool("get_watchlist_items", {"list_id": list_id})
+
     # ── trade ─────────────────────────────────────────────────────────────
     def review_market_buy(self, account_number: str, symbol: str, dollar_amount: str) -> dict:
         """Simulate a dollar-denominated market buy (regular hours)."""

@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import time
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -42,6 +43,24 @@ def verify_password(password: str, stored: str | None) -> bool:
     except Exception:
         return False
     return hmac.compare_digest(dk, expected)
+
+# ─── API keys (for external programs that vote on a member's behalf) ──────────
+
+API_KEY_PREFIX = "ck_live_"
+
+
+def new_api_key() -> tuple[str, str, str]:
+    """Mint a key. Returns (full_key, prefix, key_hash).
+
+    The full key is shown to the user exactly once; we persist only `prefix`
+    (for display/lookup) and `key_hash` (sha256). Format: ck_live_<token>.
+    """
+    full = f"{API_KEY_PREFIX}{secrets.token_urlsafe(32)}"
+    return full, full[:16], hash_api_key(full)
+
+
+def hash_api_key(full: str) -> str:
+    return hashlib.sha256(full.encode()).hexdigest()
 
 # ─── Token vault ─────────────────────────────────────────────────────────────
 

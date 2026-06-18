@@ -22,6 +22,19 @@ def _token_from(request: Request) -> str | None:
     return request.cookies.get(COOKIE_NAME)
 
 
+def _api_key_from(request: Request) -> str | None:
+    """A presented API key, from `X-API-Key` or an `Authorization: Bearer ck_...`."""
+    k = request.headers.get("X-API-Key") or request.headers.get("x-api-key")
+    if k:
+        return k.strip()
+    auth = request.headers.get("Authorization") or request.headers.get("authorization")
+    if auth and auth.lower().startswith("bearer "):
+        tok = auth[7:].strip()
+        if tok.startswith("ck_"):
+            return tok
+    return None
+
+
 def client_ip(request: Request) -> str:
     """Real client IP, honouring the proxy chain (nginx + Next.js rewrites)."""
     xff = request.headers.get("x-forwarded-for")
@@ -46,22 +59,58 @@ def load_member(member_id: int) -> dict | None:
     return out
 
 
+def owner_member_id() -> int | None:
+    """The real owner member row (role='owner', else matched by OWNER_EMAIL)."""
+    with db() as conn:
+        row = conn.execute(
+            "SELECT id FROM members WHERE role='owner' ORDER BY id LIMIT 1"
+        ).fetchone()
+        if not row and settings.owner_email:
+            row = conn.execute(
+                "SELECT id FROM members WHERE lower(email)=? LIMIT 1", (settings.owner_email,)
+            ).fetchone()
+    return int(row["id"]) if row else None
+
+
 def current_member(request: Request) -> dict | None:
     payload = read_session(_token_from(request))
-    if not payload:
-        return None
-    member = load_member(int(payload["mid"]))
-    if not member:
-        return None
-    if int(payload.get("ver", 0)) != int(member.get("session_version", 1)):
-        return None  # session revoked
-    return member
+    if payload:
+        member = load_member(int(payload["mid"]))
+        if not member:
+            return None
+        if int(payload.get("ver", 0)) != int(member.get("session_version", 1)):
+            return None  # session revoked
+        member["_auth"] = "session"
+        return member
+    # No valid session — try an API key (Bearer ck_... or X-API-Key header).
+    ak = _api_key_from(request)
+    if ak:
+        from ..services import apikeys
+        mid = apikeys.resolve_member_id(ak)
+        if mid is not None:
+            member = load_member(mid)
+            if member:
+                member["_auth"] = "apikey"
+                return member
+    return None
 
 
 def require_member(request: Request) -> dict:
     member = current_member(request)
     if not member:
         raise HTTPException(status_code=401, detail="not authenticated")
+    return member
+
+
+def require_session_member(request: Request) -> dict:
+    """Member authenticated by an interactive session (not an API key).
+
+    Key management must not be reachable with an API key — otherwise a leaked key
+    could mint more keys for itself.
+    """
+    member = require_member(request)
+    if member.get("_auth") != "session":
+        raise HTTPException(status_code=403, detail="log in to manage API keys")
     return member
 
 

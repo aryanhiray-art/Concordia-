@@ -7,15 +7,31 @@ from pydantic import BaseModel
 from ..config import settings
 from ..db import audit, db, is_armed, kv_get, kv_set, set_armed
 from ..robinhood import vault
-from ..services import alloc, bots, executor, power
+from ..services import alloc, apikeys, bots, executor, power, research
 from ..services import voting as svc
-from .deps import load_member, require_owner
+from .deps import load_member, owner_member_id, require_owner
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
 class ArmBody(BaseModel):
     armed: bool
+
+
+class ApiKeyBody(BaseModel):
+    name: str = "API key"
+
+
+class ProgramVoteBody(BaseModel):
+    symbols: list[str] | None = None
+    dry_run: bool = False
+
+
+def _owner_mid() -> int:
+    mid = owner_member_id()
+    if mid is None:
+        raise HTTPException(404, "no owner member found")
+    return mid
 
 
 def _num(v):
@@ -169,6 +185,50 @@ def reset_password(member_id: int, owner: dict = Depends(require_owner)):
         )
     audit(owner["email"], "reset_password", row["email"], None)
     return {"ok": True, "email": row["email"], "temp_password": temp}
+
+
+@router.get("/api-keys")
+def admin_list_keys(owner: dict = Depends(require_owner)):
+    """The owner's API keys (for the research-voter program), creatable from forge."""
+    mid = _owner_mid()
+    return {"member_id": mid, "keys": apikeys.list_keys(mid)}
+
+
+@router.post("/api-keys")
+def admin_create_key(body: ApiKeyBody, owner: dict = Depends(require_owner)):
+    return apikeys.create_key(_owner_mid(), body.name)
+
+
+@router.delete("/api-keys/{key_id}")
+def admin_revoke_key(key_id: int, owner: dict = Depends(require_owner)):
+    if not apikeys.revoke_key(_owner_mid(), key_id):
+        raise HTTPException(404, "no such key")
+    return {"ok": True}
+
+
+@router.post("/program/research-vote")
+def admin_research_vote(body: ProgramVoteBody, owner: dict = Depends(require_owner)):
+    """Run the research-voter as the owner (forge 'Run now'). dry_run previews."""
+    return research.research_vote(_owner_mid(), override=body.symbols, dry=body.dry_run)
+
+
+class SeedResearchBody(BaseModel):
+    research: list[dict] | None = None   # [{symbol, appearances}]
+    symbols: list[str] | None = None
+
+
+@router.post("/program/seed-research")
+def admin_seed_research(body: SeedResearchBody, owner: dict = Depends(require_owner)):
+    """Seed the owner's research snapshot (fallback when a live watchlist read fails)."""
+    if body.research:
+        data = [{"symbol": str(r.get("symbol", "")).upper(), "appearances": int(r.get("appearances") or 1)}
+                for r in body.research if r.get("symbol")]
+    elif body.symbols:
+        data = [{"symbol": s.upper(), "appearances": 1} for s in body.symbols]
+    else:
+        raise HTTPException(400, "provide research or symbols")
+    research.set_snapshot(_owner_mid(), data)
+    return {"ok": True, "count": len(data), "research": data}
 
 
 @router.post("/arm")

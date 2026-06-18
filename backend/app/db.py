@@ -146,6 +146,22 @@ CREATE TABLE IF NOT EXISTS audit_log (
     target      TEXT,
     detail_json TEXT
 );
+
+-- Personal API keys: let a member connect an external program (e.g. the
+-- research-voter) that votes on their behalf. Only the sha256 hash is stored;
+-- the full key (ck_live_...) is shown once at creation.
+CREATE TABLE IF NOT EXISTS api_keys (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    member_id    INTEGER NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+    name         TEXT NOT NULL DEFAULT 'API key',
+    prefix       TEXT NOT NULL,             -- first chars (ck_live_xxxx), shown in UI
+    key_hash     TEXT NOT NULL,             -- sha256 hex of the full key
+    created_at   INTEGER NOT NULL,
+    last_used_at INTEGER,
+    revoked_at   INTEGER
+);
+CREATE INDEX IF NOT EXISTS ix_apikeys_member ON api_keys(member_id);
+CREATE INDEX IF NOT EXISTS ix_apikeys_prefix ON api_keys(prefix);
 """
 
 

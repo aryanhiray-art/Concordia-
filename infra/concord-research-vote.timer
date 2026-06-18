@@ -1,0 +1,9 @@
+[Unit]
+Description=Concord — research-voter casts the owner's ballot every trading morning (07:45 ET)
+
+[Timer]
+OnCalendar=*-*-* 07:45 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

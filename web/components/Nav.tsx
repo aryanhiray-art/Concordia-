@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/auth";
 const TABS = [
   { href: "/", label: "Overview" },
   { href: "/vote", label: "Vote" },
+  { href: "/program", label: "API bot" },
   { href: "/account", label: "Account" },
 ];
 

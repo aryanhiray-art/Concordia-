@@ -11,14 +11,18 @@ from pydantic import Field
 
 from ..db import audit, db
 from ..security import hash_password, verify_password
-from ..services import alloc, positions, power
-from .deps import load_member, require_member
+from ..services import alloc, apikeys, positions, power
+from .deps import load_member, require_member, require_session_member
 
 router = APIRouter(prefix="/api", tags=["member"])
 
 
 class ParticipateBody(BaseModel):
     on: bool
+
+
+class ApiKeyBody(BaseModel):
+    name: str = Field(default="API key", max_length=60)
 
 
 class PasswordBody(BaseModel):
@@ -88,6 +92,24 @@ def change_password(body: PasswordBody, member: dict = Depends(require_member)):
         conn.execute("UPDATE members SET password_hash=? WHERE id=?",
                      (hash_password(body.new_password), member["id"]))
     audit(f"member:{member['id']}", "change_password", None, None)
+    return {"ok": True}
+
+
+@router.get("/me/api-keys")
+def list_api_keys(member: dict = Depends(require_session_member)):
+    return {"keys": apikeys.list_keys(member["id"])}
+
+
+@router.post("/me/api-keys")
+def create_api_key(body: ApiKeyBody, member: dict = Depends(require_session_member)):
+    """Mint a key — returned ONCE. Use it as `Authorization: Bearer ck_...`."""
+    return apikeys.create_key(member["id"], body.name)
+
+
+@router.delete("/me/api-keys/{key_id}")
+def revoke_api_key(key_id: int, member: dict = Depends(require_session_member)):
+    if not apikeys.revoke_key(member["id"], key_id):
+        raise HTTPException(status_code=404, detail="no such key")
     return {"ok": True}
 
 

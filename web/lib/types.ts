@@ -51,6 +51,26 @@ export type Member = {
   robinhood: RobinhoodStatus;
 };
 
+export type ApiKey = {
+  id: number;
+  name: string;
+  prefix: string;
+  created_at: number;
+  last_used_at: number | null;
+  revoked_at: number | null;
+};
+
+export type ResearchResult = {
+  source: string;
+  research_count: number;
+  eligible: string[];
+  excluded: string[];
+  allocations: Alloc[];
+  dry_run: boolean;
+  error?: string;
+  session?: { id?: number; trade_date: string; status: string };
+};
+
 export type ExecutionRow = {
   symbol: string;
   side: string;
