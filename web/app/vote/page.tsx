@@ -40,31 +40,33 @@ export default function VotePage() {
       <div className="grid items-start gap-7 lg:grid-cols-[1.55fr_1fr]">
         <AllocSliders session={session} participating={participating && open} onVoted={() => refreshSession()} />
 
-        {/* forming basket — power-weighted consensus */}
-        <div className="glass rise p-5 sm:p-6">
-          <div className="flex items-center justify-between">
-            <span className="label !text-teal">Forming basket</span>
-            <span className="text-[11.5px] text-subtle">{session.voters} voter{session.voters === 1 ? "" : "s"}</span>
-          </div>
-          <p className="mt-1 text-[12px] text-subtle">top {session.top_n} by voting power</p>
-          {basket.length === 0 ? (
-            <p className="mt-5 text-[13px] text-subtle">No votes yet — yours could lead.</p>
-          ) : (
-            <div className="mt-4 flex flex-col gap-2.5">
-              {basket.map((b) => (
-                <div key={b.symbol} className="flex items-center gap-2.5">
-                  <span className="w-14 flex-none font-display text-[13px] font-semibold">{b.symbol}</span>
-                  <div className="bar flex-1"><i style={{ width: `${((b.weight || 0) / maxW) * 100}%` }} /></div>
-                  <span className="w-16 flex-none text-right text-[12px] tnum text-muted">{money(b.weight)}</span>
-                </div>
-              ))}
+        <div className="space-y-7">
+          {/* generate your own API key here — let a bot cast this vote for you */}
+          <MemberKeys />
+
+          {/* forming basket — power-weighted consensus */}
+          <div className="glass rise p-5 sm:p-6">
+            <div className="flex items-center justify-between">
+              <span className="label !text-teal">Forming basket</span>
+              <span className="text-[11.5px] text-subtle">{session.voters} voter{session.voters === 1 ? "" : "s"}</span>
             </div>
-          )}
+            <p className="mt-1 text-[12px] text-subtle">top {session.top_n} by voting power</p>
+            {basket.length === 0 ? (
+              <p className="mt-5 text-[13px] text-subtle">No votes yet — yours could lead.</p>
+            ) : (
+              <div className="mt-4 flex flex-col gap-2.5">
+                {basket.map((b) => (
+                  <div key={b.symbol} className="flex items-center gap-2.5">
+                    <span className="w-14 flex-none font-display text-[13px] font-semibold">{b.symbol}</span>
+                    <div className="bar flex-1"><i style={{ width: `${((b.weight || 0) / maxW) * 100}%` }} /></div>
+                    <span className="w-16 flex-none text-right text-[12px] tnum text-muted">{money(b.weight)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
-
-      {/* generate your own API key to let a bot cast this vote for you */}
-      <MemberKeys />
     </div>
   );
 }

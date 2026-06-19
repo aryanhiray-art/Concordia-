@@ -50,7 +50,7 @@ export function MemberKeys() {
   }
 
   return (
-    <div className="glass rise p-5 sm:p-6">
+    <div className="glass glasshine rise p-5 sm:p-6">
       <div className="flex items-center justify-between">
         <span className="label !text-teal">Vote via API</span>
         <span className="text-[11.5px] text-subtle">connect your own bot</span>
