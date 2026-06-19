@@ -36,6 +36,7 @@ body {
 /* ── Glass surfaces ─────────────────────────────────────────────────────── */
 /* frosted glass — replicated exactly from Concordia shell.css */
 .glass {
+  position: relative;
   background: rgba(12, 16, 22, 0.5);
   border: 1px solid var(--glassbd, rgba(255, 255, 255, 0.1));
   border-radius: 18px;
@@ -54,6 +55,16 @@ body {
 }
 .shine:hover::after { animation: sweep 1s var(--ease, cubic-bezier(.55,.05,.18,1)); }
 @keyframes sweep { 0% { left: -40%; opacity: 1; } 100% { left: 130%; opacity: 1; } }
+
+/* same glint via an inset overlay — for cards that can't use overflow:hidden
+   (e.g. the voting card, whose add-stock dropdown must escape the bounds) */
+.glint { position: absolute; inset: 0; z-index: 3; overflow: hidden; border-radius: inherit; pointer-events: none; }
+.glint::after {
+  content: ""; position: absolute; top: -50%; left: -40%; width: 42%; height: 200%; opacity: 0;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.12), rgba(45, 212, 191, 0.06), transparent);
+  transform: skewX(-18deg);
+}
+.glass:hover > .glint::after { animation: sweep 1s var(--ease, cubic-bezier(.55,.05,.18,1)); }
 
 /* ── Label / inputs ─────────────────────────────────────────────────────── */
 .label {

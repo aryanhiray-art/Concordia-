@@ -27,7 +27,7 @@ export function AllocSliders({
   // initialise rows from my saved allocations once per session
   useEffect(() => {
     setRows((session.my_picks || []).map((a: Alloc) => ({
-      symbol: a.symbol, name: names.current[a.symbol] || a.symbol, weight: a.weight,
+      symbol: a.symbol, name: names.current[a.symbol] || a.symbol, weight: Math.round(a.weight),
     })));
   }, [session.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -91,6 +91,7 @@ export function AllocSliders({
   const full = Math.round(total) >= 100;
   return (
     <div className="glass rise p-5 sm:p-6">
+      <span className="glint" aria-hidden />
       <div className="flex items-center justify-between border-b border-hair pb-3">
         <span className="label">Allocate your voting power</span>
         <span className={`font-display text-[13px] ${full ? "text-green" : "text-muted"}`}>

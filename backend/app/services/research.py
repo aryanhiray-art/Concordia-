@@ -143,12 +143,13 @@ def build_allocations(research: list[dict]) -> list[dict]:
     eff_cap = max(CAP, 100.0 / len(picks) + 1e-6)  # keep the cap feasible for small baskets
     weights = _apply_cap(weights, eff_cap)
     order = [s for s, _ in picks]
-    rounded = {s: round(weights[s], 1) for s in order}
-    drift = round(100.0 - sum(rounded.values()), 1)
-    if abs(drift) >= 0.1:
-        top = max(order, key=lambda s: rounded[s])
-        rounded[top] = round(rounded[top] + drift, 1)
-    return [{"symbol": s, "weight": rounded[s]} for s in order if rounded[s] > 0]
+    # WHOLE numbers that still sum to 100 — floor everything, then hand the
+    # leftover points to the names with the largest fractional remainders.
+    floored = {s: int(weights[s]) for s in order}
+    drift = 100 - sum(floored.values())
+    for s in sorted(order, key=lambda s: -(weights[s] - int(weights[s])))[:max(0, drift)]:
+        floored[s] += 1
+    return [{"symbol": s, "weight": floored[s]} for s in order if floored[s] > 0]
 
 
 # ─── the orchestration the endpoints call ────────────────────────────────────
