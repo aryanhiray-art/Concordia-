@@ -74,6 +74,16 @@ class Settings:
     bots_universe_size: int = _int("BOTS_UNIVERSE_SIZE", 120)   # tickers shown to each bot
     bot_start_power: float = _float("BOT_START_POWER", 100.0)   # initial voting power per bot
 
+    # Cadence — how often the club re-votes + trades, and how often voting power
+    # redistributes. A cash account settles T+1, so trading every day can't work
+    # (sell proceeds aren't buying power until the next business day). Testing
+    # default = ALTERNATE trading days (a settlement day always sits between
+    # rebalances) + WEEKLY power. Production target = weekly + monthly (set
+    # CYCLE_CADENCE=weekly, POWER_CADENCE=monthly in .env).
+    cycle_cadence: str = os.environ.get("CYCLE_CADENCE", "alternate").strip().lower()  # daily|alternate|weekly
+    power_cadence: str = os.environ.get("POWER_CADENCE", "weekly").strip().lower()      # weekly|monthly
+    cycle_anchor: str = os.environ.get("CYCLE_ANCHOR", "2026-06-22").strip()            # parity anchor for 'alternate'
+
     # Trading behaviour
     execution_mode: str = os.environ.get("EXECUTION_MODE", "dry_run").strip().lower()
     top_n: int = _int("TOP_N", 20)            # consensus basket size

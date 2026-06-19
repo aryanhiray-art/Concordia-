@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import time
 
-from ..calendar_us import at_et, is_trading_day, next_trading_day, now_et, today_et
+from ..calendar_us import at_et, is_cycle_day, next_cycle_day, now_et, today_et
 from ..config import settings
 from ..db import audit, db
 
@@ -94,8 +94,10 @@ def ensure_active_session() -> dict:
     if a and a["status"] == "open":
         return a
     td = today_et()
-    if not is_trading_day(td) or now_et().timestamp() >= at_et(td, settings.vote_close_at).timestamp():
-        td = next_trading_day(td)
+    # Open today's session only if today is a CYCLE day and we're before its
+    # close; otherwise open the next cycle day's (per the configured cadence).
+    if not is_cycle_day(td) or now_et().timestamp() >= at_et(td, settings.vote_close_at).timestamp():
+        td = next_cycle_day(td)
     return open_session_for(td)
 
 

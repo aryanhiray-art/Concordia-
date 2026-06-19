@@ -10,12 +10,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.calendar_us import is_power_day, today_et  # noqa: E402
 from app.db import init_db  # noqa: E402
 from app.services import bots  # noqa: E402
 
 
 def main() -> int:
     init_db()
+    if not is_power_day(today_et()):
+        print("[bot_reweight] not a power day (monthly cadence) — skipping")
+        return 0
     bots.seed_bots()
     res = bots.score_and_reweight()
     print(f"[bot_reweight] week {res['week']} (scored from {res['scored_from']}):")

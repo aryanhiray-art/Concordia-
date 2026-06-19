@@ -12,15 +12,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.calendar_us import is_trading_day, today_et  # noqa: E402
+from app.calendar_us import is_cycle_day, today_et  # noqa: E402
 from app.db import init_db, kv_set  # noqa: E402
 from app.services import executor, voting  # noqa: E402
 
 
 def main() -> int:
     init_db()
-    if not is_trading_day(today_et()):
-        print("[execute] not a trading day — skipping")
+    if not is_cycle_day(today_et()):
+        print("[execute] not a cycle day (cadence) — skipping")
         return 0
     kv_set("halt", "0")
     # Target TODAY's session by date — never active_session(), which after the

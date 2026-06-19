@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.calendar_us import is_trading_day, today_et  # noqa: E402
+from app.calendar_us import is_cycle_day, today_et  # noqa: E402
 from app.db import init_db  # noqa: E402
 from app.seed import seed_universe  # noqa: E402
 from app.services import bots, voting  # noqa: E402
@@ -21,8 +21,8 @@ def main() -> int:
     created = bots.seed_bots()
     if created:
         print(f"[bot_vote] seeded {created} bots")
-    if not is_trading_day(today_et()):
-        print("[bot_vote] not a trading day — skipping")
+    if not is_cycle_day(today_et()):
+        print("[bot_vote] not a cycle day (cadence) — skipping")
         return 0
     session = voting.ensure_active_session()
     if session["status"] != "open":

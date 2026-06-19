@@ -9,12 +9,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.calendar_us import is_power_day, today_et  # noqa: E402
 from app.db import init_db  # noqa: E402
 from app.services import power  # noqa: E402
 
 
 def main() -> int:
     init_db()
+    if not is_power_day(today_et()):
+        print("[weekly_power] not a power day (monthly cadence) — skipping")
+        return 0
     snaps = power.snapshot_all()
     week = power.week_start_et()
     print(f"[weekly_power] week {week}: re-allocated voting power for {len(snaps)} members")
