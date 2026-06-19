@@ -50,7 +50,7 @@ export function MemberKeys() {
   }
 
   return (
-    <div className="glass glasshine rise p-5 sm:p-6">
+    <div className="glass shine rise p-5 sm:p-6">
       <div className="flex items-center justify-between">
         <span className="label !text-teal">Vote via API</span>
         <span className="text-[11.5px] text-subtle">connect your own bot</span>
@@ -76,18 +76,16 @@ export function MemberKeys() {
         </div>
       )}
 
-      {keys.length > 0 && (
+      {keys.some((k) => !k.revoked_at) && (
         <div className="mt-5 flex flex-col gap-1.5">
-          {keys.map((k) => (
-            <div key={k.id} className={`flex items-center gap-3 rounded-xl border border-hair px-3 py-2.5 ${k.revoked_at ? "opacity-40" : ""}`}>
+          {keys.filter((k) => !k.revoked_at).map((k) => (
+            <div key={k.id} className="flex items-center gap-3 rounded-xl border border-hair px-3 py-2.5">
               <span className="font-mono text-[13px] text-ink">{k.prefix}…</span>
               <span className="text-[12.5px] text-muted">{k.name}</span>
               <span className="ml-auto text-[11.5px] text-subtle">
-                {k.revoked_at ? "revoked" : k.last_used_at ? `used ${fmtTime(k.last_used_at)}` : `made ${fmtTime(k.created_at)}`}
+                {k.last_used_at ? `used ${fmtTime(k.last_used_at)}` : `made ${fmtTime(k.created_at)}`}
               </span>
-              {!k.revoked_at && (
-                <button className="btn btn-ghost !px-2 !py-1 !text-[12px] hover:!text-red" onClick={() => revoke(k.id)}>Revoke</button>
-              )}
+              <button className="btn btn-ghost !px-2 !py-1 !text-[12px] hover:!text-red" onClick={() => revoke(k.id)}>Revoke</button>
             </div>
           ))}
         </div>

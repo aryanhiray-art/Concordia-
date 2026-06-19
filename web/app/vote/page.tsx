@@ -45,7 +45,7 @@ export default function VotePage() {
           <MemberKeys />
 
           {/* forming basket — power-weighted consensus */}
-          <div className="glass rise p-5 sm:p-6">
+          <div className="glass shine rise p-5 sm:p-6">
             <div className="flex items-center justify-between">
               <span className="label !text-teal">Forming basket</span>
               <span className="text-[11.5px] text-subtle">{session.voters} voter{session.voters === 1 ? "" : "s"}</span>

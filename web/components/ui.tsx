@@ -27,7 +27,7 @@ export function Wordmark() {
 }
 
 export function Card({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <div className={`glass p-5 sm:p-6 ${className}`}>{children}</div>;
+  return <div className={`glass shine p-5 sm:p-6 ${className}`}>{children}</div>;
 }
 
 type Variant = "go" | "glass" | "ok" | "danger" | "ghost";

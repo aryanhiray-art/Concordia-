@@ -49,7 +49,7 @@ export function Onboarding() {
   if (allDone) return null;
 
   return (
-    <div className="glass enter p-5 sm:p-6">
+    <div className="glass shine enter p-5 sm:p-6">
       <div className="flex items-center gap-2.5">
         <span className="dot bg-teal pulse" />
         <h2 className="font-display text-[16px] font-bold">Finish setting up</h2>
