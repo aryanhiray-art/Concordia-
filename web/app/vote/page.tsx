@@ -2,6 +2,7 @@
 
 import { useAuth } from "@/lib/auth";
 import { AllocSliders } from "@/components/AllocSliders";
+import { MemberKeys } from "@/components/MemberKeys";
 import { Countdown, LoadingScreen } from "@/components/ui";
 
 function money(n?: number | null) {
@@ -61,6 +62,9 @@ export default function VotePage() {
           )}
         </div>
       </div>
+
+      {/* generate your own API key to let a bot cast this vote for you */}
+      <MemberKeys />
     </div>
   );
 }
