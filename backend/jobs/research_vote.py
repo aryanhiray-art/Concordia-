@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.calendar_us import is_cycle_day, today_et  # noqa: E402
+from app.calendar_us import is_sell_day, today_et  # noqa: E402
 from app.db import init_db  # noqa: E402
 from app.routes.deps import owner_member_id  # noqa: E402
 from app.seed import seed_universe  # noqa: E402
@@ -23,7 +23,7 @@ from app.services import research  # noqa: E402
 def main() -> int:
     init_db()
     seed_universe()  # keeps the universe (and the S&P 500 cap) current
-    if not is_cycle_day(today_et()):
+    if not is_sell_day(today_et()):
         print("[research_vote] not a cycle day (cadence) — skipping")
         return 0
     mid = owner_member_id()

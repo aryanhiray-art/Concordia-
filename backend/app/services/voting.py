@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import time
 
-from ..calendar_us import at_et, is_cycle_day, next_cycle_day, now_et, today_et
+from ..calendar_us import at_et, is_sell_day, next_sell_day, now_et, today_et
 from ..config import settings
 from ..db import audit, db
 
@@ -94,16 +94,25 @@ def ensure_active_session() -> dict:
     if a and a["status"] == "open":
         return a
     td = today_et()
-    # Open today's session only if today is a CYCLE day and we're before its
-    # close; otherwise open the next cycle day's (per the configured cadence).
-    if not is_cycle_day(td) or now_et().timestamp() >= at_et(td, settings.vote_close_at).timestamp():
-        td = next_cycle_day(td)
+    # The votable session is the upcoming SELL/vote day's. Open today's only if
+    # today is a sell day and we're before its close; else the next sell day's.
+    if not is_sell_day(td) or now_et().timestamp() >= at_et(td, settings.vote_close_at).timestamp():
+        td = next_sell_day(td)
     return open_session_for(td)
 
 
 def get_session(session_id: int) -> dict | None:
     with db() as conn:
         row = conn.execute("SELECT * FROM vote_sessions WHERE id=?", (session_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def latest_session(status: str) -> dict | None:
+    """Most recent session in a given status (e.g. 'closed' = sold, awaiting buy)."""
+    with db() as conn:
+        row = conn.execute(
+            "SELECT * FROM vote_sessions WHERE status=? ORDER BY trade_date DESC LIMIT 1", (status,)
+        ).fetchone()
     return dict(row) if row else None
 
 

@@ -148,8 +148,10 @@ def _clear_replanable(session_id: int) -> None:
         )
 
 
-def run(session: dict, force_dry_run: bool = False) -> dict:
-    """Execute the closed session's basket. Returns a structured summary."""
+def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict:
+    """Execute the session's basket. `phase` = 'sell' (exit dropped names + trim
+    overweights), 'buy' (top each name up to target), or 'both'. Splitting sell
+    and buy across two trading days lets a cash account settle (T+1) between them."""
     if session["status"] == "open":
         raise ValueError("session is still open — close/tally first")
     picks = [p["symbol"] for p in voting.session_picks(session)]
@@ -158,12 +160,13 @@ def run(session: dict, force_dry_run: bool = False) -> dict:
 
     armed = is_armed()
     will_place = settings.is_live and armed and not force_dry_run
-    mode = "LIVE" if will_place else ("DRY_RUN(disarmed)" if settings.is_live else "DRY_RUN")
+    base = "LIVE" if will_place else ("DRY_RUN(disarmed)" if settings.is_live else "DRY_RUN")
+    mode = f"{base}·{phase}"
     sid = session["id"]
 
     _clear_replanable(sid)
     already = _placed_keys(sid)
-    summary = {"mode": mode, "trade_date": session["trade_date"], "picks": picks,
+    summary = {"mode": mode, "phase": phase, "trade_date": session["trade_date"], "picks": picks,
                "will_place": will_place, "members": [], "orders": []}
     audit("system", "execute_start", session["trade_date"],
           {"mode": mode, "picks": picks, "will_place": will_place})
@@ -216,7 +219,7 @@ def run(session: dict, force_dry_run: bool = False) -> dict:
         # the basket is fully sold; a name still in the basket but OVER its equal-
         # weight target is trimmed back to target, so the proceeds redistribute
         # into the rest of the new basket.
-        for symbol, qty in sorted(held.items()):
+        for symbol, qty in (sorted(held.items()) if phase in ("sell", "both") else []):
             price = prices.get(symbol)
             if symbol in want:
                 if price is None:
@@ -266,7 +269,7 @@ def run(session: dict, force_dry_run: bool = False) -> dict:
         # ── BUY phase: top each basket name up to its equal-weight target ──
         # need = target − current club value, so names already held aren't re-bought
         # and the proceeds from the sells above fund the newly-added names.
-        for symbol in basket:
+        for symbol in (basket if phase in ("buy", "both") else []):
             if (mid, symbol, "buy") in already:
                 msum["orders"].append({"symbol": symbol, "side": "buy", "status": "placed",
                                        "note": "already placed"})
@@ -323,7 +326,9 @@ def run(session: dict, force_dry_run: bool = False) -> dict:
             {"member_id": mid, **o} for o in msum["orders"]
         )
 
-    if will_place:
+    # Mark 'executed' only once the BUY phase completes the cycle — after the sell
+    # phase the session stays 'closed' so the next (buy) day can find + finish it.
+    if will_place and phase in ("buy", "both"):
         with db() as conn:
             conn.execute("UPDATE vote_sessions SET status='executed' WHERE id=?", (sid,))
     # Cumulative truth for the session — a re-run places 0 NEW orders even though
@@ -343,3 +348,26 @@ def run(session: dict, force_dry_run: bool = False) -> dict:
     audit("system", "execute_done", session["trade_date"],
           {"mode": mode, "n_members": len(summary["members"])})
     return summary
+
+
+def run_today(force_dry_run: bool = False) -> dict:
+    """Run the phase scheduled for today: SELL on a sell/vote day (close the ballot,
+    then exit dropped names), BUY on a buy day (top up the last sold basket with the
+    now-settled cash). Idle days do nothing. This is what the cron + the dashboard
+    'Execute now' button call."""
+    from ..calendar_us import cycle_phase, today_et
+    phase = cycle_phase(today_et())
+    if phase is None:
+        return {"ok": True, "note": "idle day — no sell or buy phase scheduled today", "orders": []}
+    if phase == "buy":
+        session = voting.latest_session("closed")   # the basket sold on the prior sell day
+        if not session:
+            return {"ok": True, "note": "no sold basket waiting to be bought", "orders": []}
+        return run(session, force_dry_run=force_dry_run, phase="buy")
+    # 'sell' or 'both' — close today's ballot, then sell (and buy too, if 'both')
+    session = voting.session_for_trade_date(today_et().isoformat())
+    if not session:
+        return {"ok": True, "note": "no session for today", "orders": []}
+    if session["status"] == "open":
+        session = voting.close_and_select(session["id"])
+    return run(session, force_dry_run=force_dry_run, phase=phase)

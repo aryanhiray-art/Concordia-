@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.calendar_us import next_cycle_day, today_et  # noqa: E402
+from app.calendar_us import next_sell_day, today_et  # noqa: E402
 from app.db import init_db  # noqa: E402
 from app.seed import seed_universe  # noqa: E402
 from app.services import voting  # noqa: E402
@@ -17,7 +17,7 @@ from app.services import voting  # noqa: E402
 def main() -> int:
     init_db()
     seed_universe()
-    target = next_cycle_day(today_et())   # next CYCLE day (cadence-aware), not just next trading day
+    target = next_sell_day(today_et())   # next CYCLE day (cadence-aware), not just next trading day
     session = voting.open_session_for(target)
     print(f"[open_vote] session for {session['trade_date']} status={session['status']} "
           f"closes_at={session['closes_at']}")

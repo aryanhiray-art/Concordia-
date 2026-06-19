@@ -75,34 +75,57 @@ def _trading_index(d: _dt.date) -> int:
     return n
 
 
-def _is_first_trading_day_of_week(d: _dt.date) -> bool:
+def _first_trading_day_of_week(d: _dt.date) -> _dt.date:
     cur = d - _dt.timedelta(days=d.weekday())  # Monday of d's ISO week
     for _ in range(7):
         if is_trading_day(cur):
-            return cur == d
+            return cur
         cur += _dt.timedelta(days=1)
-    return False
+    return d
 
 
-def is_cycle_day(d: _dt.date | None = None) -> bool:
-    """Does the club vote + rebalance on this date, per the configured cadence?"""
+def cycle_phase(d: _dt.date | None = None) -> str | None:
+    """What the club does on this date — a cycle is SPLIT across two trading days
+    so a cash account's T+1 settlement is respected:
+
+      'sell' = vote + sell the names that dropped from the new basket (keep the
+               ones that stayed); proceeds settle overnight.
+      'buy'  = buy the new basket with the now-settled proceeds (the next day).
+      'both' = sell + buy same day (daily cadence; ignores settlement — testing).
+      None   = idle (no trading today).
+    """
     from .config import settings
     d = d or today_et()
     if not is_trading_day(d):
-        return False
+        return None
     cad = settings.cycle_cadence
+    if cad == "daily":
+        return "both"
     if cad == "weekly":
-        return _is_first_trading_day_of_week(d)
-    if cad == "alternate":
-        return _trading_index(d) % 2 == 0
-    return True  # daily
+        first = _first_trading_day_of_week(d)
+        if d == first:
+            return "sell"
+        if d == next_trading_day(first):
+            return "buy"
+        return None
+    # 'alternate' (fast testing): even trading-day = sell, odd = buy. Every
+    # trading day is active — Mon sell → settles → Tue buy → Wed sell → Thu buy.
+    return "sell" if _trading_index(d) % 2 == 0 else "buy"
 
 
-def next_cycle_day(d: _dt.date | None = None) -> _dt.date:
-    """The next cycle day strictly after d."""
+def is_sell_day(d: _dt.date | None = None) -> bool:
+    return cycle_phase(d) in ("sell", "both")
+
+
+def is_buy_day(d: _dt.date | None = None) -> bool:
+    return cycle_phase(d) in ("buy", "both")
+
+
+def next_sell_day(d: _dt.date | None = None) -> _dt.date:
+    """The next vote/sell day strictly after d (where a new basket is decided)."""
     nd = next_trading_day(d or today_et())
     for _ in range(180):
-        if is_cycle_day(nd):
+        if cycle_phase(nd) in ("sell", "both"):
             return nd
         nd = next_trading_day(nd)
     return nd

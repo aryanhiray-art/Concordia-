@@ -12,31 +12,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.calendar_us import is_cycle_day, today_et  # noqa: E402
 from app.db import init_db, kv_set  # noqa: E402
-from app.services import executor, voting  # noqa: E402
+from app.services import executor  # noqa: E402
 
 
 def main() -> int:
     init_db()
-    if not is_cycle_day(today_et()):
-        print("[execute] not a cycle day (cadence) — skipping")
-        return 0
     kv_set("halt", "0")
-    # Target TODAY's session by date — never active_session(), which after the
-    # close resolves to the next trading day's empty ballot.
-    td = today_et().isoformat()
-    session = voting.session_for_trade_date(td)
-    if not session:
-        print(f"[execute] no session for {td} — skipping")
-        return 0
-    if session["status"] == "executed":
-        print(f"[execute] {td} already executed — skipping")
-        return 0
-    if session["status"] == "open":
-        session = voting.close_and_select(session["id"])  # safety: close first
-    summary = executor.run(session, force_dry_run=False)
-    print(f"[execute] mode={summary.get('mode')} picks={summary.get('picks')}")
+    # run_today picks the phase scheduled for today: SELL on a sell/vote day
+    # (close + exit dropped names), BUY on a buy day (top up the last sold basket),
+    # nothing on idle days.
+    summary = executor.run_today(force_dry_run=False)
+    print(f"[execute] mode={summary.get('mode')} phase={summary.get('phase')} note={summary.get('note')}")
     print(json.dumps(summary, indent=2, default=str))
     return 0
 

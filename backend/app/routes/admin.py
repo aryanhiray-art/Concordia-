@@ -268,10 +268,7 @@ def run_phase(phase: str, dry_run: bool = True, owner: dict = Depends(require_ow
         return {"session": svc.close_and_select(session["id"])}
     if phase == "execute":
         kv_set("halt", "0")
-        session = svc.session_for_trade_date(today_et().isoformat()) or svc.active_session()
-        if not session:
-            raise HTTPException(404, "no session")
-        if session["status"] == "open":
-            session = svc.close_and_select(session["id"])
-        return executor.run(session, force_dry_run=dry_run)
+        # run_today runs the phase scheduled for today (sell on a sell day, buy on a
+        # buy day) — honouring the split-cycle cadence, not a same-day full rebalance.
+        return executor.run_today(force_dry_run=dry_run)
     raise HTTPException(400, "phase must be open|close|execute|power|bots|reweight")
