@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""One-shot FRESH START: liquidate every connected member's CLUB holdings to cash.
+"""One-shot FRESH START: liquidate every connected member's account to all-cash.
 
-Sells only what the club itself bought (club_shares, reconstructed from placed
-executions) for every connected agentic member — a member's own non-club positions
-are never touched. Records the sells so club_shares nets back to ~0, so the club
-restarts from an all-cash base on the next sell day.
+Sells EVERY long position for every connected agentic member (both accounts are
+test accounts), so the club restarts from a clean cash base on the next sell day.
+Records the sells so club_shares nets back to ~0.
 
 Guarded: runs exactly once (kv flag), honors the halt kill switch, market-gated.
 systemd: a dated one-shot concord-fresh-start.timer fires it just after the open.
@@ -52,15 +51,14 @@ def main() -> int:
         acct = vault.account_number_for(mid)
         if not acct:
             continue
-        held = positions.club_shares(mid)                       # only what the club bought
+        held = {p["symbol"]: p["quantity"] for p in positions.live_positions(mid)}  # EVERY long position
         if not held:
-            print(f"[fresh_start] {m['display_name']}: no club holdings")
+            print(f"[fresh_start] {m['display_name']}: account already all-cash")
             continue
-        live = {p["symbol"]: p["quantity"] for p in positions.live_positions(mid)}
         client = vault.ensure_client(mid)
         sold = []
         for sym, q in held.items():
-            qfloor = math.floor(min(q, live.get(sym, 0.0)) * 1e6) / 1e6   # never over-request
+            qfloor = math.floor(q * 1e6) / 1e6   # never request more than held
             if qfloor <= 0:
                 continue
             qstr = f"{qfloor:.6f}"
