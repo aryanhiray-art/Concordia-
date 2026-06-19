@@ -1,0 +1,15 @@
+[Unit]
+Description=Concord — one-shot FRESH START: liquidate every connected member's club holdings to cash
+
+[Service]
+Type=oneshot
+User=concord
+Group=concord
+WorkingDirectory=/opt/concord/backend
+EnvironmentFile=/opt/concord/.env
+ExecStart=/opt/concord/backend/.venv/bin/python jobs/fresh_start.py
+TimeoutStartSec=600
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/concord

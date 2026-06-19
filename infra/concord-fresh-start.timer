@@ -1,0 +1,9 @@
+[Unit]
+Description=Concord — fresh-start liquidation, once on 2026-06-22 just after the open (then the cycle starts Tue 6/23)
+
+[Timer]
+OnCalendar=2026-06-22 09:32 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

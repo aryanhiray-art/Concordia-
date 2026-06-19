@@ -82,7 +82,8 @@ class Settings:
     # CYCLE_CADENCE=weekly, POWER_CADENCE=monthly in .env).
     cycle_cadence: str = os.environ.get("CYCLE_CADENCE", "alternate").strip().lower()  # daily|alternate|weekly
     power_cadence: str = os.environ.get("POWER_CADENCE", "weekly").strip().lower()      # weekly|monthly
-    cycle_anchor: str = os.environ.get("CYCLE_ANCHOR", "2026-06-22").strip()            # parity anchor for 'alternate'
+    cycle_anchor: str = os.environ.get("CYCLE_ANCHOR", "2026-06-23").strip()            # parity anchor; Tue 6/23 = first sell day
+    cycle_start_date: str = os.environ.get("CYCLE_START_DATE", "2026-06-23").strip()    # cadence dormant before this (Mon 6/22 = fresh-start liquidation only)
 
     # Trading behaviour
     execution_mode: str = os.environ.get("EXECUTION_MODE", "dry_run").strip().lower()

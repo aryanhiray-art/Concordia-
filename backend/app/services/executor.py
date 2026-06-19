@@ -206,6 +206,10 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
         per_pick = math.floor((budget / n_eff) * 100) / 100.0
         want = set(basket)
         held = positions.club_shares(mid)            # only what the CLUB bought
+        # live quantities actually in the account — we never request more than this
+        # (the club estimate can run slightly high → EQUITY_MAX_SELL_SHARES_EXCEEDED).
+        live = {p["symbol"]: p["quantity"] for p in positions.live_positions(mid)} \
+            if phase in ("sell", "both") else {}
         prices = _quotes(client, list(want | set(held)))
         msum["buying_power"] = round(buying_power, 2)
         msum["allocation"] = round(budget, 2)
@@ -235,6 +239,7 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
                                        "note": "already sold"})
                 continue
             ref_id = ref_id_for(sid, mid, f"SELL:{symbol}")
+            sell_qty = min(sell_qty, live.get(symbol, 0.0))   # cap to shares actually held
             qfloor = math.floor(sell_qty * 1e6) / 1e6   # never round UP past what we hold
             if qfloor <= 0:
                 continue
@@ -266,6 +271,10 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
                 _record(sid, mid, symbol, None, ref_id, "error", review=review, error=f"sell: {e}", side="sell")
                 msum["orders"].append({"symbol": symbol, "side": "sell", "status": "error", "note": str(e)})
 
+        # Only deploy what's actually SETTLED — any buy beyond buying power is
+        # deferred (it fills next buy day, once this cycle's sells settle), so we
+        # never trip EQUITY_NOT_ENOUGH_BP.
+        bp_left = buying_power
         # ── BUY phase: top each basket name up to its equal-weight target ──
         # need = target − current club value, so names already held aren't re-bought
         # and the proceeds from the sells above fund the newly-added names.
@@ -288,6 +297,13 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
                 msum["orders"].append({"symbol": symbol, "side": "buy", "status": "held",
                                        "note": f"at target (${held_val:.2f} ≥ ${per_pick:.2f})"})
                 continue
+            if need > bp_left + 0.005:                 # not enough SETTLED cash yet → defer
+                _record(sid, mid, symbol, need, ref_id_for(sid, mid, symbol), "skipped",
+                        error="deferred — beyond settled buying power")
+                msum["orders"].append({"symbol": symbol, "side": "buy", "status": "skipped",
+                                       "note": "defer · settles next cycle"})
+                continue
+            bp_left -= need
             if order_count >= settings.max_orders:
                 _record(sid, mid, symbol, need, ref_id_for(sid, mid, symbol), "skipped",
                         error="max_orders cap reached")

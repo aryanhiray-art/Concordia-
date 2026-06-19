@@ -98,6 +98,14 @@ def cycle_phase(d: _dt.date | None = None) -> str | None:
     d = d or today_et()
     if not is_trading_day(d):
         return None
+    # cadence is dormant before the start date (e.g. the day before is a one-off
+    # fresh-start liquidation, not a normal cycle day)
+    try:
+        sy, sm, sd = (int(x) for x in settings.cycle_start_date.split("-"))
+        if d < _dt.date(sy, sm, sd):
+            return None
+    except Exception:  # noqa: BLE001
+        pass
     cad = settings.cycle_cadence
     if cad == "daily":
         return "both"
