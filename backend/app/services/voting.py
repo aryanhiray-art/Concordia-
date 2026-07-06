@@ -8,6 +8,7 @@ universe's sort_order, then alphabetically). Sessions move open → closed
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 
 from ..calendar_us import at_et, is_sell_day, next_sell_day, now_et, today_et
@@ -195,28 +196,59 @@ def member_picks(session_id: int, member_id: int) -> list[dict]:
     return [{"symbol": r["symbol"], "weight": round(r["weight"], 2)} for r in rows]
 
 
-def tally(session_id: int) -> list[dict]:
+def _tally_rows(conn: sqlite3.Connection, session_id: int) -> list[sqlite3.Row]:
+    """Per-symbol vote rows with total weight + the bot slice of that weight."""
+    return conn.execute(
+        "SELECT v.symbol, COUNT(*) AS votes, "
+        "       SUM(MAX(COALESCE(s.voting_power,0), 1.0) * COALESCE(v.weight,100)/100.0) AS weight, "
+        "       SUM(CASE WHEN COALESCE(m.is_bot,0)=1 "
+        "           THEN MAX(COALESCE(s.voting_power,0), 1.0) * COALESCE(v.weight,100)/100.0 "
+        "           ELSE 0 END) AS bot_weight, "
+        "       u.name "
+        "FROM votes v "
+        "LEFT JOIN member_settings s ON s.member_id=v.member_id "
+        "LEFT JOIN members m ON m.id=v.member_id "
+        "LEFT JOIN universe u ON u.symbol=v.symbol "
+        "WHERE v.session_id=? GROUP BY v.symbol "
+        "ORDER BY weight DESC, votes DESC, v.symbol",
+        (session_id,),
+    ).fetchall()
+
+
+def tally(session_id: int, conn: sqlite3.Connection | None = None) -> list[dict]:
     """[{symbol, name, votes, weight}] for VOTED symbols, by voting-power weight.
 
     Each member's pick contributes their voting power (= account equity $), with
     a floor of 1 so members who haven't connected/snapshotted yet still count.
     The forming basket = the top-N by weight. (Universe is the whole S&P 500, so
     we only return symbols that actually got votes.)
+
+    Bot containment: if the bots' AGGREGATE weight exceeds
+    settings.bot_tally_share_max of the total, every bot contribution is scaled
+    by the single factor that brings the bots exactly to that share. Human
+    weights are never touched. `conn` lets a caller (close_and_select) tally
+    inside its own transaction; default None opens a fresh connection.
     """
-    with db() as conn:
-        rows = conn.execute(
-            "SELECT v.symbol, COUNT(*) AS votes, "
-            "       SUM(MAX(COALESCE(s.voting_power,0), 1.0) * COALESCE(v.weight,100)/100.0) AS weight, "
-            "       u.name "
-            "FROM votes v "
-            "LEFT JOIN member_settings s ON s.member_id=v.member_id "
-            "LEFT JOIN universe u ON u.symbol=v.symbol "
-            "WHERE v.session_id=? GROUP BY v.symbol "
-            "ORDER BY weight DESC, votes DESC, v.symbol",
-            (session_id,),
-        ).fetchall()
-    return [{"symbol": r["symbol"], "name": r["name"] or r["symbol"],
-             "votes": r["votes"], "weight": round(r["weight"] or 0, 2)} for r in rows]
+    if conn is None:
+        with db() as own:
+            rows = _tally_rows(own, session_id)
+    else:
+        rows = _tally_rows(conn, session_id)
+    entries = [{"symbol": r["symbol"], "name": r["name"] or r["symbol"],
+                "votes": r["votes"], "weight": float(r["weight"] or 0),
+                "_bot": float(r["bot_weight"] or 0)} for r in rows]
+    share_max = settings.bot_tally_share_max
+    bot_total = sum(e["_bot"] for e in entries)
+    human_total = sum(e["weight"] - e["_bot"] for e in entries)
+    total = bot_total + human_total
+    if 0 < share_max < 1 and total > 0 and human_total > 0 and bot_total / total > share_max:
+        # factor f: f·B / (f·B + H) == share_max  →  f = share·H / ((1−share)·B)
+        f = share_max * human_total / ((1.0 - share_max) * bot_total)
+        for e in entries:
+            e["weight"] = (e["weight"] - e["_bot"]) + e["_bot"] * f
+        entries.sort(key=lambda e: (-e["weight"], -e["votes"], e["symbol"]))
+    return [{"symbol": e["symbol"], "name": e["name"],
+             "votes": e["votes"], "weight": round(e["weight"], 2)} for e in entries]
 
 
 def voter_count(session_id: int) -> int:
@@ -228,23 +260,42 @@ def voter_count(session_id: int) -> int:
 
 
 def close_and_select(session_id: int) -> dict:
-    """Lock votes, choose the top-N consensus picks, persist them. Idempotent."""
-    sess = get_session(session_id)
-    if not sess:
-        raise ValueError("no such session")
-    if sess["status"] != "open":
-        return sess  # already closed/executed
-    ranked = tally(session_id)
-    top_n = sess["top_n"]
-    picks = [r for r in ranked if r["votes"] > 0][:top_n]
-    picks_json = json.dumps(picks)
+    """Lock votes, choose the top-N consensus picks, persist them. Idempotent.
+
+    Concurrency-safe: the close can race (close timer + admin button + execute
+    job). One connection takes the write lock up front (BEGIN IMMEDIATE),
+    re-reads the status inside the transaction, and the UPDATE is guarded with
+    `AND status='open'` — if another closer already won, this call returns that
+    closer's row unchanged and writes nothing.
+    """
     with db() as conn:
-        conn.execute(
-            "UPDATE vote_sessions SET status='closed', closed_at=?, picks_json=? WHERE id=?",
-            (int(time.time()), picks_json, session_id),
-        )
-        row = conn.execute("SELECT * FROM vote_sessions WHERE id=?", (session_id,)).fetchone()
-    audit("system", "close_session", sess["trade_date"],
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            sess = conn.execute(
+                "SELECT * FROM vote_sessions WHERE id=?", (session_id,)
+            ).fetchone()
+            if not sess:
+                raise ValueError("no such session")
+            if sess["status"] != "open":
+                conn.execute("COMMIT")
+                return dict(sess)  # already closed/executed
+            picks = [r for r in tally(session_id, conn=conn) if r["votes"] > 0][: sess["top_n"]]
+            cur = conn.execute(
+                "UPDATE vote_sessions SET status='closed', closed_at=?, picks_json=? "
+                "WHERE id=? AND status='open'",
+                (int(time.time()), json.dumps(picks), session_id),
+            )
+            we_closed = cur.rowcount == 1
+            row = conn.execute(
+                "SELECT * FROM vote_sessions WHERE id=?", (session_id,)
+            ).fetchone()
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+    if not we_closed:
+        return dict(row)  # another closer won the race — return their result
+    audit("system", "close_session", row["trade_date"],
           {"picks": [p["symbol"] for p in picks], "voters": voter_count(session_id)})
     return dict(row)
 

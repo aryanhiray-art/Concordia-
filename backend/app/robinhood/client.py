@@ -16,6 +16,27 @@ from ..config import settings
 PROTOCOL_VERSION = "2025-06-18"
 
 
+class RHError(RuntimeError):
+    """Base error for Robinhood MCP transport failures.
+
+    Subclasses RuntimeError so pre-existing broad handlers keep working; the
+    executor uses the typed subclasses to tell "re-OAuth needed" apart from
+    "try again next run".
+    """
+
+
+class RHAuthError(RHError):
+    """401/403 from the MCP endpoint — token revoked or expired beyond refresh.
+
+    Recovery requires member re-OAuth (or the admin rh-reset if the tokens are
+    actually fine and the failure was a fluke)."""
+
+
+class RHTransientError(RHError):
+    """Timeout / connection failure / 408 / 429 / 5xx — safe to retry later
+    without touching the stored connection status."""
+
+
 class McpClient:
     """Minimal MCP streamable-HTTP client (verbatim shape from refresh.py)."""
 
@@ -33,9 +54,16 @@ class McpClient:
         headers = dict(self.headers)
         if self.session_id:
             headers["Mcp-Session-Id"] = self.session_id
-        r = requests.post(self.url, json=payload, headers=headers, timeout=60)
+        try:
+            r = requests.post(self.url, json=payload, headers=headers, timeout=60)
+        except requests.RequestException as e:  # timeout / DNS / connection reset
+            raise RHTransientError(f"MCP connection error: {e}") from e
+        if r.status_code in (401, 403):
+            raise RHAuthError(f"MCP HTTP {r.status_code}: {r.text[:300]}")
+        if r.status_code in (408, 429) or r.status_code >= 500:
+            raise RHTransientError(f"MCP HTTP {r.status_code}: {r.text[:300]}")
         if r.status_code >= 400:
-            raise RuntimeError(f"MCP HTTP {r.status_code}: {r.text[:300]}")
+            raise RHError(f"MCP HTTP {r.status_code}: {r.text[:300]}")
         sid = r.headers.get("Mcp-Session-Id") or r.headers.get("mcp-session-id")
         if sid:
             self.session_id = sid
@@ -120,6 +148,11 @@ class RobinhoodClient:
 
     def get_quotes(self, symbols: list[str]) -> dict:
         return self.mcp.call_tool("get_equity_quotes", {"symbols": symbols})
+
+    def get_equity_orders(self, account_number: str) -> dict:
+        """Recent equity orders for the account. Used to verify whether an
+        errored place actually reached the broker before ever re-placing."""
+        return self.mcp.call_tool("get_equity_orders", {"account_number": account_number})
 
     # ── research (watchlists) — best-effort; not all MCP deployments expose these ──
     def get_watchlists(self) -> dict:

@@ -7,6 +7,10 @@ re-snapshotted the SAME way members' power is (a row in voting_power_history wit
 a week-over-week delta) — except a bot's new power compounds by how its picks
 actually performed: new_power = old_power x (1 + realized_return). Accurate bots
 gain influence; wrong bots lose it.
+
+Containment: a bot's power is clamped to [floor, settings.bot_power_cap] so an
+accurate streak can't compound a bot into dominating the tally; the tally also
+caps the bots' AGGREGATE share (settings.bot_tally_share_max) in voting.tally.
 """
 from __future__ import annotations
 
@@ -181,9 +185,11 @@ def score_and_reweight(week: str | None = None) -> dict:
         old = float(prev) if prev is not None else float(settings.bot_start_power)
         ret, n = _bot_week_return(mid, prev_week, this_week, prices)
         if ret is None:
-            new = old                      # no scorable picks → power unchanged
+            # no scorable picks → power unchanged (but never above the cap)
+            new = min(settings.bot_power_cap, old)
         else:
-            new = max(_POWER_FLOOR, round(old * (1.0 + ret), 2))
+            new = min(settings.bot_power_cap,
+                      max(_POWER_FLOOR, round(old * (1.0 + ret), 2)))
         delta = round(new - old, 2)
         with db() as conn:
             conn.execute(

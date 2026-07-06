@@ -165,8 +165,17 @@ Member chose **live real orders**. Guardrails regardless:
   only** — never `place_equity_order`.
 - Master **`ARMED`** switch (DB flag, default **false**). `live` + `ARMED`
   required for any real order. Surfaced loudly in the dashboard.
-- Per-member **`daily_cap_usd`** and **`max_orders`** caps; a global
-  `MAX_NOTIONAL_PER_MEMBER` ceiling in config.
+- Per-member **`max_orders`** cap, plus a global **`MAX_NOTIONAL_PER_MEMBER`**
+  ceiling (config, default $2,000) enforced in `alloc.rebalance_budget` — the
+  single sizing function behind both the executor's per-member budget and the
+  voting-power snapshot. Per-member **`daily_cap_usd`** is stored in
+  `member_settings` but **not yet enforced** (the executor call site does not
+  pass it through yet).
+- Bot containment: per-bot voting power is clamped to **`BOT_POWER_CAP`**
+  (default $300) at the weekly reweight, and the tally scales all bot vote
+  contributions down whenever their aggregate share of total weight would
+  exceed **`BOT_TALLY_SHARE_MAX`** (default 0.90) — humans always keep a floor
+  of the say.
 - Every order gets a fresh **`ref_id` UUID** (idempotency); retries reuse it.
 - **`review_equity_order` always precedes `place_equity_order`**; if review
   returns blocking alerts (buying power, PDT, halt), the order is `skipped`.

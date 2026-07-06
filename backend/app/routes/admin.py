@@ -188,6 +188,45 @@ def reset_password(member_id: int, owner: dict = Depends(require_owner)):
     return {"ok": True, "email": row["email"], "temp_password": temp}
 
 
+@router.post("/member/{member_id}/rh-reset")
+def rh_reset(member_id: int, owner: dict = Depends(require_owner)):
+    """Un-strand a member whose rh_accounts.status is stuck at 'error'.
+
+    A transient failure used to strand members permanently; now only auth
+    failures mark 'error', and this flips status back to 'connected' — but only
+    when an encrypted token bundle is still stored (no tokens → the member must
+    re-OAuth, resetting the flag would be a lie).
+    """
+    try:
+        res = vault.reset_status(member_id)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    if not res.get("ok"):
+        raise HTTPException(400, res.get("error") or "cannot reset")
+    audit(owner["email"], "rh_reset", str(member_id),
+          {"previous_status": res.get("previous_status")})
+    return {"ok": True, "member_id": member_id, "status": "connected",
+            "previous_status": res.get("previous_status")}
+
+
+@router.post("/member/{member_id}/dust-cleanup")
+def dust_cleanup(member_id: int, dry_run: bool = True, owner: dict = Depends(require_owner)):
+    """Sweep sub-$1 fill-drift crumbs on club-traded names for one member.
+
+    dry_run=true (default) returns the preview without recording or placing;
+    dry_run=false places only when execution_mode=live AND ARMED (same gate as
+    the executor).
+    """
+    if not load_member(member_id):
+        raise HTTPException(404, "no such member")
+    res = executor.dust_cleanup(member_id, dry_run=dry_run)
+    audit(owner["email"], "dust_cleanup", str(member_id),
+          {"dry_run": dry_run, "ok": res.get("ok"),
+           "orders": [{"symbol": o.get("symbol"), "status": o.get("status")}
+                      for o in res.get("orders", [])]})
+    return res
+
+
 @router.get("/api-keys")
 def admin_list_keys(owner: dict = Depends(require_owner)):
     """The owner's API keys (for the research-voter program), creatable from forge."""

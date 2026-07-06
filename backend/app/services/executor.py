@@ -2,8 +2,10 @@
 
 Sizing: each opted-in member buys every consensus pick with an equal
 dollar slice of their budget, where
-    budget   = min(buying_power × bp_pct%, daily_cap_usd, MAX_NOTIONAL_PER_MEMBER)
+    budget   = min(committed stake resolved vs TOTAL account value,
+                   daily_cap_usd if set, MAX_NOTIONAL_PER_MEMBER)
     per_pick = budget / N
+(the clamps live in alloc.rebalance_budget so every caller gets them)
 Orders are dollar-denominated MARKET buys in regular hours (the only form that
 supports a dollar amount + fractional shares).
 
@@ -24,6 +26,7 @@ import uuid
 from ..config import settings
 from ..db import audit, db, is_armed
 from ..robinhood import vault
+from ..robinhood.client import RHAuthError
 from . import alloc, positions, voting
 
 _REF_NS = uuid.UUID("c0c0c0c0-0000-4000-8000-000000000000")
@@ -88,7 +91,7 @@ def _opted_members() -> list[dict]:
     with db() as conn:
         rows = conn.execute(
             "SELECT m.id AS member_id, m.display_name, s.alloc_type, s.alloc_value,"
-            "       s.max_orders, a.account_number, a.agentic_allowed, a.status AS rh_status "
+            "       s.daily_cap_usd, s.max_orders, a.account_number, a.agentic_allowed, a.status AS rh_status "
             "FROM members m "
             "JOIN member_settings s ON s.member_id=m.id "
             "LEFT JOIN rh_accounts a ON a.member_id=m.id "
@@ -148,6 +151,100 @@ def _clear_replanable(session_id: int) -> None:
         )
 
 
+# ─── duplicate-buy recovery (A4) ─────────────────────────────────────────────
+# A live buy that raises AFTER the broker accepted it is recorded status='error';
+# _clear_replanable then deletes that row and a re-run would re-place full size.
+# So: capture the errored buy keys BEFORE the clear, and before re-placing any
+# of them verify against the broker's own recent orders. Never re-place blind.
+
+def _error_buy_rows(session_id: int) -> dict[tuple[int, str], dict]:
+    """(member_id, symbol) → {created_at, dollar_amount} for this session's
+    errored BUY rows. Must run BEFORE _clear_replanable deletes them."""
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT member_id, symbol, dollar_amount, created_at FROM executions "
+            "WHERE session_id=? AND side='buy' AND status='error'",
+            (session_id,),
+        ).fetchall()
+    return {(r["member_id"], r["symbol"]): {"created_at": r["created_at"],
+                                            "dollar_amount": _num(r["dollar_amount"])}
+            for r in rows}
+
+
+def _fetch_recent_orders(client, account_number: str) -> list[dict]:
+    """The member's recent equity orders, normalized to a flat list of dicts.
+
+    Payload shape can be {data:{orders:[...]}} / {data:{results:[...]}} /
+    {data:[...]} / a bare list — handle defensively (same as find_agentic_account).
+    """
+    payload = client.get_equity_orders(account_number)
+    data = payload.get("data", payload) if isinstance(payload, dict) else payload
+    if isinstance(data, dict):
+        orders = data.get("orders") or data.get("results") or []
+    elif isinstance(data, list):
+        orders = data
+    else:
+        orders = []
+    return [o for o in orders if isinstance(o, dict)]
+
+
+def _order_ts(order: dict) -> float | None:
+    """Best-effort epoch seconds for a broker order's creation time."""
+    import datetime
+    for key in ("created_at", "created_time", "updated_at"):
+        v = order.get(key)
+        if v is None:
+            continue
+        n = _num(v)
+        if n is not None:
+            return n
+        try:
+            return datetime.datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            continue
+    return None
+
+
+def _order_amount(order: dict) -> float | None:
+    """Best-effort dollar amount of a broker order (dollar-denominated buys)."""
+    for key in ("dollar_amount", "amount", "notional", "total_notional", "executed_notional"):
+        v = order.get(key)
+        if isinstance(v, dict):
+            v = v.get("amount")
+        n = _num(v)
+        if n is not None:
+            return n
+    return None
+
+
+def _match_recovered_order(orders: list[dict], ref_id: str, symbol: str, side: str,
+                           window_start: float, amount: float | None) -> dict | None:
+    """The broker order that IS our errored place, if any.
+
+    Match on our deterministic ref_id when the MCP echoes it; otherwise on
+    symbol+side with a created time inside the session window and a dollar
+    amount within $0.02 of what we tried to place.
+    """
+    for o in orders:
+        oref = o.get("ref_id") or o.get("client_order_id")
+        if oref and str(oref) == ref_id:
+            return o
+    for o in orders:
+        if str(o.get("symbol") or "").upper() != symbol.upper():
+            continue
+        if str(o.get("side") or "").lower() != side:
+            continue
+        ts = _order_ts(o)
+        if ts is None or ts < window_start:
+            continue
+        if amount is not None:
+            oamt = _order_amount(o)
+            if oamt is None or abs(oamt - amount) > 0.02:
+                continue
+        return o
+    return None
+
+
 def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict:
     """Execute the session's basket. `phase` = 'sell' (exit dropped names + trim
     overweights), 'buy' (top each name up to target), or 'both'. Splitting sell
@@ -164,6 +261,9 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
     mode = f"{base}·{phase}"
     sid = session["id"]
 
+    # A4: remember which buys ERRORED in a prior run of this session — the broker
+    # may have accepted them — before _clear_replanable deletes the evidence.
+    prior_error_buys = _error_buy_rows(sid)
     _clear_replanable(sid)
     already = _placed_keys(sid)
     summary = {"mode": mode, "phase": phase, "trade_date": session["trade_date"], "picks": picks,
@@ -171,41 +271,101 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
     audit("system", "execute_start", session["trade_date"],
           {"mode": mode, "picks": picks, "will_place": will_place})
 
+    def _skip_member(msum_: dict, reason: str, note: str | None = None) -> None:
+        """Record a skipped member: stable skip_reason on the summary row + one
+        audit entry, so a member silently missing from execution is explainable."""
+        msum_["skip_reason"] = reason
+        if note is not None:
+            msum_["note"] = note
+        summary["members"].append(msum_)
+        audit("system", "member_skipped", session["trade_date"],
+              {"member_id": msum_["member_id"], "reason": reason})
+
+    # Opted-OUT humans get a summary row too (bots excluded) — visibility only,
+    # they are never processed.
+    with db() as conn:
+        opted_out = conn.execute(
+            "SELECT m.id AS member_id, m.display_name FROM members m "
+            "LEFT JOIN member_settings s ON s.member_id=m.id "
+            "WHERE m.is_bot=0 AND COALESCE(s.opted_in,0)=0 ORDER BY m.id"
+        ).fetchall()
+    for r in opted_out:
+        _skip_member({"member_id": r["member_id"], "name": r["display_name"],
+                      "orders": [], "note": "opted out"}, "opted_out")
+
     from ..db import kv_get
-    for m in _opted_members():
+    members = _opted_members()
+    for m_idx, m in enumerate(members):
         if kv_get("halt") == "1":
             summary["halted"] = True
             audit("system", "execute_halted", session["trade_date"], None)
+            for hm in members[m_idx:]:
+                _skip_member({"member_id": hm["member_id"], "name": hm["display_name"],
+                              "orders": [], "note": "halted"}, "halted")
             break
         mid = m["member_id"]
         msum = {"member_id": mid, "name": m["display_name"], "orders": [], "note": None}
-        if not m.get("account_number") or not m.get("agentic_allowed") or m.get("rh_status") != "connected":
-            msum["note"] = "no connected agentic Robinhood account"
-            summary["members"].append(msum)
+        if not m.get("account_number") or not m.get("agentic_allowed"):
+            _skip_member(msum, "not_connected", "no connected agentic Robinhood account")
             continue
-        try:
-            client = vault.ensure_client(mid)
-            port = client.get_portfolio(m["account_number"])
-            pdata = port.get("data", port) if isinstance(port, dict) else {}
-            bp = pdata.get("buying_power") or (pdata.get("buying_power") or {})
-            buying_power = _num(bp.get("buying_power") if isinstance(bp, dict) else bp) or 0.0
-            total_value = (_num(pdata.get("total_value")) or _num(pdata.get("equity_value"))
-                           or buying_power)
-        except Exception as e:  # noqa: BLE001
-            msum["note"] = f"portfolio fetch failed: {type(e).__name__}: {e}"
-            vault.mark_status(mid, "error")
-            summary["members"].append(msum)
+        if m.get("rh_status") == "error":
+            _skip_member(msum, "rh_error_stranded",
+                         "Robinhood connection stranded in 'error' — admin rh-reset or re-OAuth")
+            continue
+        if m.get("rh_status") != "connected":
+            _skip_member(msum, "not_connected", "no connected agentic Robinhood account")
             continue
 
+        def _portfolio(mid_: int = mid, acct: str = m["account_number"]):
+            """One portfolio fetch attempt; returns (client, payload)."""
+            c = vault.ensure_client(mid_)
+            return c, c.get_portfolio(acct)
+
+        # A5: auth failures strand the member (needs re-OAuth / rh-reset); anything
+        # else is treated as transient — one retry, then skip THIS RUN only,
+        # leaving rh_status untouched so the next run tries again.
+        try:
+            try:
+                client, port = _portfolio()
+            except RHAuthError:
+                raise
+            except Exception:  # noqa: BLE001  transient/unknown → one retry after 2s
+                time.sleep(2)
+                client, port = _portfolio()
+        except RHAuthError as e:
+            vault.mark_status(mid, "error")
+            _skip_member(msum, "rh_error_stranded",
+                         f"portfolio fetch failed: {type(e).__name__}: {e}")
+            continue
+        except Exception as e:  # noqa: BLE001
+            msum["detail"] = f"{type(e).__name__}: {e}"
+            _skip_member(msum, "transient_rh_error",
+                         "transient portfolio error — will retry next run")
+            continue
+        pdata = port.get("data", port) if isinstance(port, dict) else {}
+        bp = pdata.get("buying_power") or (pdata.get("buying_power") or {})
+        buying_power = _num(bp.get("buying_power") if isinstance(bp, dict) else bp) or 0.0
+        total_value = (_num(pdata.get("total_value")) or _num(pdata.get("equity_value"))
+                       or buying_power)
+
         # Rebalance target = committed stake (frees cash via sells), NOT buying power.
-        budget = alloc.rebalance_budget(m["alloc_type"], m["alloc_value"], total_value, buying_power)
+        budget = alloc.rebalance_budget(m["alloc_type"], m["alloc_value"], total_value, buying_power,
+                                        daily_cap_usd=m.get("daily_cap_usd"))
+        held = positions.club_shares(mid)            # only what the CLUB bought
+        # No meaningful stake and nothing club-held to unwind → skip the member.
+        # (A budget under $1 with live club holdings still runs, so a member who
+        # zeroes their allocation gets liquidated rather than stranded.)
+        if budget < 1.00 and not held:
+            msum["buying_power"] = round(buying_power, 2)
+            msum["budget"] = round(budget, 2)
+            _skip_member(msum, "no_stake", "stake below $1 — nothing to deploy")
+            continue
         # Broker minimum is $1/order, so we can hold at most floor(budget) names at
         # equal weight. With a small stake the member holds the TOP names only.
         n_eff = max(1, min(len(picks), int(budget // 1.00)))
         basket = picks[:n_eff]
         per_pick = math.floor((budget / n_eff) * 100) / 100.0
         want = set(basket)
-        held = positions.club_shares(mid)            # only what the CLUB bought
         # live quantities actually in the account — we never request more than this
         # (the club estimate can run slightly high → EQUITY_MAX_SELL_SHARES_EXCEEDED).
         live = {p["symbol"]: p["quantity"] for p in positions.live_positions(mid)} \
@@ -240,10 +400,26 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
                 continue
             ref_id = ref_id_for(sid, mid, f"SELL:{symbol}")
             sell_qty = min(sell_qty, live.get(symbol, 0.0))   # cap to shares actually held
-            qfloor = math.floor(sell_qty * 1e6) / 1e6   # never round UP past what we hold
+            # A7: on a FULL exit, fills≠quotes leave dust (the club estimate runs a
+            # hair under the live quantity). If the leftover is dust-sized — ≤0.001
+            # shares or ≤$1 — it can only be club residue, so sweep the whole live
+            # quantity. A member's real personal position (≥$1) never trips this
+            # guard, because the guard is on the RESIDUAL itself being dust.
+            sweep = False
+            if why == "exited basket":
+                live_qty = live.get(symbol, 0.0)
+                residual = live_qty - sell_qty
+                if residual > 0 and (residual <= 0.001
+                                     or (price is not None and residual * price <= 1.00)):
+                    sell_qty, sweep = live_qty, True
+                    why = "exited basket · dust swept"
+            # never round UP past what we hold; a sweep keeps broker precision (8dp)
+            # so the crumb itself isn't floored back into existence.
+            scale = 1e8 if sweep else 1e6
+            qfloor = math.floor(sell_qty * scale) / scale
             if qfloor <= 0:
                 continue
-            qstr = f"{qfloor:.6f}"
+            qstr = f"{qfloor:.8f}" if sweep else f"{qfloor:.6f}"
             try:
                 review = client.review_market_sell(m["account_number"], symbol, qstr)
             except Exception as e:  # noqa: BLE001
@@ -275,6 +451,10 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
         # deferred (it fills next buy day, once this cycle's sells settle), so we
         # never trip EQUITY_NOT_ENOUGH_BP.
         bp_left = buying_power
+        # A4: lazy one-shot fetch of the member's recent broker orders, only when a
+        # prior run left an errored buy whose true fate is unknown.
+        recent_orders: list[dict] | None = None
+        orders_fetched = False
         # ── BUY phase: top each basket name up to its equal-weight target ──
         # need = target − current club value, so names already held aren't re-bought
         # and the proceeds from the sells above fund the newly-added names.
@@ -283,6 +463,39 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
                 msum["orders"].append({"symbol": symbol, "side": "buy", "status": "placed",
                                        "note": "already placed"})
                 continue
+            prior = prior_error_buys.get((mid, symbol))
+            if prior is not None:
+                # A4: this buy ERRORED in a prior run — the broker may have accepted
+                # it before the exception. Verify against the broker's own orders;
+                # NEVER re-place blind.
+                ref_id = ref_id_for(sid, mid, symbol)
+                if not orders_fetched:
+                    orders_fetched = True
+                    try:
+                        recent_orders = _fetch_recent_orders(client, m["account_number"])
+                    except Exception:  # noqa: BLE001
+                        recent_orders = None
+                if recent_orders is None:
+                    _record(sid, mid, symbol, prior.get("dollar_amount"), ref_id, "skipped",
+                            error="unverifiable prior error — manual check")
+                    msum["orders"].append({"symbol": symbol, "side": "buy", "status": "skipped",
+                                           "note": "unverifiable prior error — manual check"})
+                    continue
+                window_start = session.get("opened_at") or ((prior.get("created_at") or 0) - 3600)
+                matched = _match_recovered_order(recent_orders, ref_id, symbol, "buy",
+                                                 window_start, prior.get("dollar_amount"))
+                if matched is not None:
+                    place = {"_concord_recovered": True, "data": {"order": matched}}
+                    px, amt = prices.get(symbol), prior.get("dollar_amount")
+                    if px and amt:
+                        place["_concord_est_qty"] = round(amt / px, 6)  # est shares (async fill)
+                    _record(sid, mid, symbol, amt, ref_id, "placed", place=place)
+                    msum["orders"].append({"symbol": symbol, "side": "buy", "status": "placed",
+                                           "note": "recovered — prior errored place found at broker"})
+                    order_count += 1
+                    continue
+                # verified absent at the broker → the prior place never landed;
+                # fall through to the normal (re-)placement path.
             price = prices.get(symbol)
             if price is None:
                 # can't value an existing holding or estimate filled shares → skip,
@@ -364,6 +577,93 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
     audit("system", "execute_done", session["trade_date"],
           {"mode": mode, "n_members": len(summary["members"])})
     return summary
+
+
+def dust_cleanup(member_id: int, dry_run: bool = True) -> dict:
+    """Sweep sub-$1 crumb positions left on club-traded names (est-vs-fill drift).
+
+    Candidates = live long positions whose symbol appears in the member's club
+    execution history (placed orders) AND live value ≤ $1.00 AND quantity < 0.01
+    shares — sizes only ever produced by fill drift, never by a real personal
+    holding. Each candidate runs the same review→place→record pipeline as run(),
+    with a deterministic ref_id keyed 'DUST:{symbol}'. dry_run=True (default)
+    reviews and returns the preview WITHOUT recording or placing; a real place
+    additionally requires execution_mode=live + ARMED, exactly like run().
+    """
+    with db() as conn:
+        row = conn.execute(
+            "SELECT account_number, status FROM rh_accounts WHERE member_id=?", (member_id,)
+        ).fetchone()
+        club_syms = {r["symbol"] for r in conn.execute(
+            "SELECT DISTINCT symbol FROM executions WHERE member_id=? AND status='placed'",
+            (member_id,)
+        ).fetchall()}
+        latest_sid = conn.execute("SELECT COALESCE(MAX(id),0) FROM vote_sessions").fetchone()[0]
+    if not row or not row["account_number"] or row["status"] != "connected":
+        return {"ok": False, "error": "no connected Robinhood account",
+                "member_id": member_id, "orders": []}
+    acct = row["account_number"]
+    will_place = settings.is_live and is_armed() and not dry_run
+    try:
+        client = vault.ensure_client(member_id)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"client unavailable: {type(e).__name__}: {e}",
+                "member_id": member_id, "orders": []}
+    live = positions.live_positions(member_id)
+    prices = _quotes(client, [p["symbol"] for p in live])
+    out = {"ok": True, "member_id": member_id, "dry_run": dry_run,
+           "will_place": will_place, "orders": []}
+    for p in live:
+        symbol, qty = p["symbol"], p["quantity"]
+        if symbol not in club_syms or qty >= 0.01:
+            continue
+        price = prices.get(symbol)
+        if price is None or qty * price > 1.00:
+            continue                                   # can't verify it's dust → leave it
+        ref_id = ref_id_for(latest_sid, member_id, f"DUST:{symbol}")
+        qfloor = math.floor(qty * 1e8) / 1e8           # full sweep at broker precision
+        if qfloor <= 0:
+            continue
+        qstr = f"{qfloor:.8f}"
+        entry = {"symbol": symbol, "side": "sell", "qty": qstr,
+                 "value": round(qty * price, 4), "ref_id": ref_id}
+        try:
+            review = client.review_market_sell(acct, symbol, qstr)
+        except Exception as e:  # noqa: BLE001
+            if not dry_run:
+                _record(latest_sid, member_id, symbol, None, ref_id, "error",
+                        error=f"dust review: {e}", side="sell")
+            entry.update(status="error", note=str(e))
+            out["orders"].append(entry)
+            continue
+        blocked, alerts = has_blocking_alerts(review)
+        if blocked:
+            if not dry_run:
+                _record(latest_sid, member_id, symbol, None, ref_id, "skipped", review=review,
+                        error="blocking pre-trade alert", side="sell")
+            entry.update(status="skipped", alerts=alerts)
+            out["orders"].append(entry)
+            continue
+        if not will_place:
+            if not dry_run:
+                _record(latest_sid, member_id, symbol, None, ref_id, "reviewed",
+                        review=review, side="sell")
+            entry.update(status="reviewed")
+            out["orders"].append(entry)
+            continue
+        try:
+            place = client.place_market_sell(acct, symbol, qstr, ref_id=ref_id)
+            if isinstance(place, dict):
+                place["_concord_est_qty"] = qfloor     # shares sold (broker fill is async)
+            _record(latest_sid, member_id, symbol, None, ref_id, "placed", review=review,
+                    place=place, side="sell")
+            entry.update(status="placed")
+        except Exception as e:  # noqa: BLE001
+            _record(latest_sid, member_id, symbol, None, ref_id, "error", review=review,
+                    error=f"dust place: {e}", side="sell")
+            entry.update(status="error", note=str(e))
+        out["orders"].append(entry)
+    return out
 
 
 def run_today(force_dry_run: bool = False) -> dict:

@@ -73,6 +73,12 @@ class Settings:
     ollama_timeout: int = _int("OLLAMA_TIMEOUT", 120)
     bots_universe_size: int = _int("BOTS_UNIVERSE_SIZE", 120)   # tickers shown to each bot
     bot_start_power: float = _float("BOT_START_POWER", 100.0)   # initial voting power per bot
+    # Bot containment: a per-bot voting-power ceiling (the weekly reweight can
+    # compound but never past this), and a hard limit on the bots' AGGREGATE
+    # share of the tally weight — if bots exceed it, all bot vote contributions
+    # are scaled down so humans always keep at least (1 - share) of the say.
+    bot_power_cap: float = _float("BOT_POWER_CAP", 300.0)              # per-bot power ceiling ($)
+    bot_tally_share_max: float = _float("BOT_TALLY_SHARE_MAX", 0.90)   # max aggregate bot tally share (0–1)
 
     # Cadence — how often the club re-votes + trades, and how often voting power
     # redistributes. A cash account settles T+1, so trading every day can't work
@@ -101,6 +107,10 @@ class Settings:
     # small cash reserve so dollar market orders never trip a buying-power reject.
     cash_buffer_pct: float = _float("CASH_BUFFER_PCT", 1.0)   # % of BP kept as reserve
     max_orders: int = _int("MAX_ORDERS", 25)                  # hard per-member order ceiling
+    # Global safety ceiling on the $ any single member's stake can deploy per
+    # cycle. Enforced in alloc.rebalance_budget, which sizes both the executor's
+    # budget and the voting-power snapshot.
+    max_notional_per_member: float = _float("MAX_NOTIONAL_PER_MEMBER", 2000.0)
 
     @property
     def rh_redirect_uri(self) -> str:

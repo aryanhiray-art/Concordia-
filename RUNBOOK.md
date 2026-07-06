@@ -60,6 +60,8 @@ must be publicly reachable (it is, via nginx) **before** any member connects.
    If the badge says "connected · not agentic", they must enable Robinhood's
    Agentic account, then reconnect.
 4. In **Your account**, set buying-power %, daily cap, and tick **Participate**.
+   (The daily cap is stored but not yet enforced by the executor — the global
+   `MAX_NOTIONAL_PER_MEMBER` ceiling is what actually caps deployment; see §5.)
 
 ## 4. Daily flow (automatic, US/Eastern)
 
@@ -88,9 +90,14 @@ dashboard / `executions` table.
    between members, so an in-progress run stops; orders already sent stay sent.
 ```
 
-Caps that always apply (even live + armed): per-member `daily_cap_usd`,
-`max_orders`, and the global `MAX_NOTIONAL_PER_MEMBER`. Every order has a
-deterministic `ref_id` (uuid5) so retries never double-fill.
+Caps that always apply (even live + armed): per-member `max_orders`, and the
+global `MAX_NOTIONAL_PER_MEMBER` ceiling (default $2,000 — enforced in
+`alloc.rebalance_budget`, which sizes both the executor's per-member budget and
+the voting-power stake). Bot influence is capped too: `BOT_POWER_CAP` (per-bot
+voting power, default $300) and `BOT_TALLY_SHARE_MAX` (bots' aggregate share of
+the tally, default 0.90). Per-member `daily_cap_usd` is **stored in
+`member_settings` but not yet enforced** — do not rely on it as a live cap.
+Every order has a deterministic `ref_id` (uuid5) so retries never double-fill.
 
 ## 6. Manual ops
 

@@ -118,18 +118,32 @@ def exchange_code(code: str, verifier: str, client_id: str) -> dict:
 
 
 def refresh_bundle(bundle: dict) -> dict:
-    """Refresh-token grant — mirrors refresh.py:get_access_token."""
-    r = requests.post(
-        settings.rh_token_url,
-        data={
-            "grant_type": "refresh_token",
-            "refresh_token": bundle["refresh_token"],
-            "client_id": bundle["client_id"],
-            "resource": settings.rh_resource,
-        },
-        timeout=_TIMEOUT,
-    )
-    r.raise_for_status()
+    """Refresh-token grant — mirrors refresh.py:get_access_token.
+
+    Raises the TYPED errors the executor's skip/strand logic keys on: a
+    400/401/403 here means a revoked or expired refresh token (permanent — the
+    member must re-connect), anything else is transient. A bare
+    raise_for_status would surface requests.HTTPError, which the executor
+    would misread as transient and silently retry forever.
+    """
+    from .client import RHAuthError, RHTransientError
+    try:
+        r = requests.post(
+            settings.rh_token_url,
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": bundle["refresh_token"],
+                "client_id": bundle["client_id"],
+                "resource": settings.rh_resource,
+            },
+            timeout=_TIMEOUT,
+        )
+    except requests.RequestException as e:
+        raise RHTransientError(f"RH token refresh connection error: {e}") from e
+    if r.status_code in (400, 401, 403):
+        raise RHAuthError(f"RH token refresh rejected {r.status_code}: {r.text[:200]}")
+    if r.status_code >= 400:
+        raise RHTransientError(f"RH token refresh failed {r.status_code}: {r.text[:200]}")
     new = r.json()
     bundle.update(new)
     bundle["obtained_at"] = int(time.time())

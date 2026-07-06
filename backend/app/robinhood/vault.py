@@ -113,3 +113,26 @@ def complete_connection(member_id: int, bundle: dict) -> dict:
 def mark_status(member_id: int, status: str) -> None:
     with db() as conn:
         conn.execute("UPDATE rh_accounts SET status=? WHERE member_id=?", (status, member_id))
+
+
+def reset_status(member_id: int) -> dict:
+    """Un-strand a member whose rh_accounts.status got stuck at 'error'.
+
+    Only flips status back to 'connected' when an encrypted token bundle is
+    still stored — without tokens the member genuinely needs a fresh OAuth.
+    Returns {ok, previous_status}; raises LookupError when there is no
+    rh_accounts row at all.
+    """
+    with db() as conn:
+        row = conn.execute(
+            "SELECT status, enc_tokens FROM rh_accounts WHERE member_id=?", (member_id,)
+        ).fetchone()
+        if not row:
+            raise LookupError("member has no Robinhood account record")
+        if not row["enc_tokens"]:
+            return {"ok": False, "previous_status": row["status"],
+                    "error": "no stored tokens — member must reconnect via OAuth"}
+        conn.execute(
+            "UPDATE rh_accounts SET status='connected' WHERE member_id=?", (member_id,)
+        )
+    return {"ok": True, "previous_status": row["status"]}

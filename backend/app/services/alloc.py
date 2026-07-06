@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import time
 
+from ..config import settings
 from ..db import db, kv_get, kv_set
 from ..robinhood import vault
 
@@ -94,19 +95,29 @@ def resolve_allocation(alloc_type: str | None, alloc_value: float | None,
 
 
 def rebalance_budget(alloc_type: str | None, alloc_value: float | None,
-                     total_value: float | None, buying_power: float | None) -> float:
+                     total_value: float | None, buying_power: float | None,
+                     daily_cap_usd: float | None = None) -> float:
     """Target $ of the basket to HOLD — the committed stake, not free cash.
 
     Unlike resolve_allocation (which caps at buying power for an initial buy), the
     rebalance frees cash by selling, so the target must be the full committed
     stake even when it's already deployed in positions. For a $ stake that's the
     committed dollars (capped at total account value); for % it's % of equity.
+
+    Hard caps (safety, always applied): the global MAX_NOTIONAL_PER_MEMBER
+    ceiling from config, and — when the caller passes the member's
+    `daily_cap_usd` (>0 means set; None/0 means no cap) — that per-member cap.
     """
     tv = total_value or 0.0
     v = alloc_value or 0.0
     if alloc_type == "dollar":
-        return round(min(v, tv), 2)
-    return round(tv * (v / 100.0), 2)
+        target = min(v, tv)
+    else:  # percent (default)
+        target = tv * (v / 100.0)
+    target = min(target, settings.max_notional_per_member)
+    if daily_cap_usd is not None and daily_cap_usd > 0:
+        target = min(target, daily_cap_usd)
+    return round(max(0.0, target), 2)
 
 
 def member_allocation(member_id: int) -> dict:

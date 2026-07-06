@@ -66,7 +66,9 @@ def test_replace_picks_is_idempotent():
     m = _member("d@x.com")
     voting.set_member_picks(s["id"], m, ["AAPL", "MSFT"])
     voting.set_member_picks(s["id"], m, ["TSLA"])      # replace
-    assert voting.member_picks(s["id"], m) == ["TSLA"]
+    picks = voting.member_picks(s["id"], m)
+    assert [p["symbol"] for p in picks] == ["TSLA"]
+    assert picks[0]["weight"] == 100.0
 
 
 def test_dry_run_executor_handles_unconnected_members():

@@ -72,6 +72,12 @@ def snapshot_member(member_id: int, week: str | None = None) -> dict | None:
 
     Voting power = the $ the member commits to the club (their stake), not their
     whole account. Re-run on connect, on allocation change, and every Sunday.
+
+    The stake is measured against TOTAL account value (alloc.rebalance_budget —
+    the same sizing the executor's budget trusts), NOT against idle buying
+    power: once the stake is deployed into positions, buying power collapses to
+    loose cash and would wrongly crater the member's power (the $100-stake →
+    $5.20-power bug). resolve_allocation stays as-is for initial-buy sizing.
     """
     week = week or week_start_et()
     bal = alloc.member_balance(member_id)
@@ -81,9 +87,10 @@ def snapshot_member(member_id: int, week: str | None = None) -> dict | None:
         row = conn.execute(
             "SELECT alloc_type, alloc_value FROM member_settings WHERE member_id=?", (member_id,)
         ).fetchone()
-    power = alloc.resolve_allocation(
+    power = alloc.rebalance_budget(
         row["alloc_type"] if row else "percent",
         row["alloc_value"] if row else 0.0,
+        bal.get("total_value"),
         bal.get("buying_power"),
     )
     equity = bal.get("total_value")

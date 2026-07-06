@@ -1,0 +1,418 @@
+"""Tests for the audited executor fixes (A4/A5/A7/A8).
+
+A4 — duplicate-buy window: an errored live buy is verified against the broker's
+     own recent orders before EVER being re-placed (recover or skip, never blind).
+A5 — transient vs permanent Robinhood errors: only auth failures strand a member
+     (rh_status='error'); anything else retries once then skips this run only.
+A7 — full-position exits sweep dust-sized fill residue; personal positions are
+     never swept. Plus the standalone dust_cleanup pipeline.
+A8 — every skipped member carries a stable skip_reason (incl. opted-out rows).
+
+Run from backend/:  python -m pytest tests/ -q
+(uses a throwaway temp DB; the Robinhood client + vault are mocked — no network).
+"""
+import datetime
+import json
+import os
+import tempfile
+import time
+
+# Point the app at a throwaway DB + dummy secrets BEFORE importing app modules.
+os.environ.setdefault("CONCORD_DB_PATH", tempfile.mkstemp(suffix=".db")[1])
+os.environ.setdefault("SESSION_SECRET", "test-secret")
+from cryptography.fernet import Fernet  # noqa: E402
+
+os.environ.setdefault("CONCORD_FERNET_KEY", Fernet.generate_key().decode())
+os.environ.setdefault("TOP_N", "3")
+os.environ.setdefault("EXECUTION_MODE", "dry_run")
+
+import pytest  # noqa: E402
+
+from app.db import db, init_db  # noqa: E402
+from app.robinhood import vault  # noqa: E402
+from app.robinhood.client import RHAuthError, RHTransientError  # noqa: E402
+from app.seed import seed_universe  # noqa: E402
+from app.services import executor, voting  # noqa: E402
+
+
+def setup_module(_):
+    init_db()
+    seed_universe()
+
+
+@pytest.fixture(autouse=True)
+def _no_sleep(monkeypatch):
+    """The A5 retry sleeps 2s between attempts — skip that in tests."""
+    monkeypatch.setattr(executor.time, "sleep", lambda s: None)
+
+
+# ─── helpers ─────────────────────────────────────────────────────────────────
+
+def _member(email: str, opted_in: int = 1, alloc_value: float = 50.0,
+            connect: bool = True, rh_status: str = "connected") -> int:
+    with db() as conn:
+        cur = conn.execute(
+            "INSERT INTO members(email,display_name,role,created_at) VALUES(?,?,?,?)",
+            (email, email.split("@")[0], "member", int(time.time())),
+        )
+        mid = cur.lastrowid
+        conn.execute(
+            "INSERT INTO member_settings(member_id,opted_in,buying_power_pct,daily_cap_usd,"
+            "max_orders,alloc_type,alloc_value,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+            (mid, opted_in, 10.0, 500.0, 10, "percent", alloc_value, int(time.time())),
+        )
+        if connect:
+            conn.execute(
+                "INSERT INTO rh_accounts(member_id,account_number,agentic_allowed,enc_tokens,"
+                "connected_at,last_refresh_at,status) VALUES(?,?,?,?,?,?,?)",
+                (mid, f"ACC{mid}", 1, b"enc-tokens", int(time.time()), int(time.time()), rh_status),
+            )
+    return mid
+
+
+def _closed_session(trade_date: datetime.date, voter_mid: int, picks: list[str]) -> dict:
+    s = voting.open_session_for(trade_date)
+    voting.set_member_picks(s["id"], voter_mid, picks)
+    return voting.close_and_select(s["id"])
+
+
+def _mrow(summary: dict, mid: int) -> dict:
+    return next(r for r in summary["members"] if r["member_id"] == mid)
+
+
+def _exec_rows(sid: int, mid: int, symbol: str, side: str = "buy") -> list[dict]:
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM executions WHERE session_id=? AND member_id=? AND symbol=? AND side=?",
+            (sid, mid, symbol, side),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _rh_status(mid: int) -> str:
+    with db() as conn:
+        return conn.execute(
+            "SELECT status FROM rh_accounts WHERE member_id=?", (mid,)
+        ).fetchone()["status"]
+
+
+def _skip_audits() -> list[dict]:
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT detail_json FROM audit_log WHERE action='member_skipped'"
+        ).fetchall()
+    return [json.loads(r["detail_json"]) for r in rows]
+
+
+class FakeClient:
+    """Scripted RobinhoodClient double; records every call it receives."""
+
+    def __init__(self, *, quotes=None, positions=None, orders=None, orders_exc=None,
+                 portfolio_exc=None, buying_power=1000.0, total_value=1000.0):
+        self.calls: list[tuple] = []
+        self.quotes_map = quotes or {}
+        self.positions_list = positions or []
+        self.orders_list = orders or []
+        self.orders_exc = orders_exc
+        self.portfolio_exc = portfolio_exc
+        self.buying_power = buying_power
+        self.total_value = total_value
+
+    def get_portfolio(self, acct):
+        self.calls.append(("get_portfolio", acct))
+        if self.portfolio_exc is not None:
+            raise self.portfolio_exc
+        return {"data": {"buying_power": {"buying_power": str(self.buying_power)},
+                         "total_value": str(self.total_value)}}
+
+    def get_positions(self, acct):
+        self.calls.append(("get_positions", acct))
+        return {"data": {"positions": [
+            {"symbol": s, "type": "long", "quantity": str(q)} for s, q in self.positions_list
+        ]}}
+
+    def get_quotes(self, symbols):
+        self.calls.append(("get_quotes", tuple(symbols)))
+        return {"data": {"results": [
+            {"quote": {"symbol": s, "last_trade_price": str(self.quotes_map[s])}}
+            for s in symbols if s in self.quotes_map
+        ]}}
+
+    def get_equity_orders(self, acct):
+        self.calls.append(("get_equity_orders", acct))
+        if self.orders_exc is not None:
+            raise self.orders_exc
+        return {"data": {"orders": self.orders_list}}
+
+    def review_market_buy(self, acct, symbol, amt):
+        self.calls.append(("review_buy", acct, symbol, amt))
+        return {"data": {"order_checks": {}}}
+
+    def place_market_buy(self, acct, symbol, amt, ref_id=None):
+        self.calls.append(("place_buy", acct, symbol, amt, ref_id))
+        return {"data": {"order": {}}}
+
+    def review_market_sell(self, acct, symbol, qty):
+        self.calls.append(("review_sell", acct, symbol, qty))
+        return {"data": {"order_checks": {}}}
+
+    def place_market_sell(self, acct, symbol, qty, ref_id=None):
+        self.calls.append(("place_sell", acct, symbol, qty, ref_id))
+        return {"data": {"order": {}}}
+
+    def trades_for(self, kind: str, acct: str, symbol: str | None = None) -> list[tuple]:
+        """This account's recorded trade calls (the shared client sees every
+        member the executor touches — assertions must scope to one account)."""
+        return [c for c in self.calls
+                if c[0] == kind and c[1] == acct and (symbol is None or c[2] == symbol)]
+
+
+def _use_client(monkeypatch, client: FakeClient) -> None:
+    monkeypatch.setattr(vault, "ensure_client", lambda mid: client)
+
+
+# ─── A4: duplicate-buy window ────────────────────────────────────────────────
+
+def test_recovers_prior_errored_buy_from_broker(monkeypatch):
+    """A prior 'error' buy that the broker actually accepted is recovered as
+    'placed' (with _concord_recovered) instead of being re-placed/re-reviewed."""
+    mid = _member("a4-recover@x.com")
+    closed = _closed_session(datetime.date(2026, 12, 1), mid, ["AAPL"])
+    sid = closed["id"]
+    # a prior run recorded the buy as errored AFTER the broker may have accepted it
+    executor._record(sid, mid, "AAPL", 500.0, executor.ref_id_for(sid, mid, "AAPL"),
+                     "error", error="place: connection reset")
+    # broker shows a matching order (no ref echo → symbol+side+time+amount match)
+    iso_now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    client = FakeClient(
+        quotes={"AAPL": 200.0},
+        orders=[{"symbol": "AAPL", "side": "buy", "created_at": iso_now,
+                 "dollar_amount": "500.00", "state": "filled"}],
+    )
+    _use_client(monkeypatch, client)
+
+    summary = executor.run(closed, force_dry_run=True)
+
+    rows = _exec_rows(sid, mid, "AAPL", "buy")
+    assert len(rows) == 1 and rows[0]["status"] == "placed"
+    place = json.loads(rows[0]["place_json"])
+    assert place["_concord_recovered"] is True
+    # est qty stamped so club_shares reconstruction keeps working (500 / 200)
+    assert place["_concord_est_qty"] == pytest.approx(2.5)
+    # never re-placed and never even re-reviewed
+    assert not client.trades_for("place_buy", f"ACC{mid}")
+    assert not client.trades_for("review_buy", f"ACC{mid}", "AAPL")
+    order = next(o for o in _mrow(summary, mid)["orders"] if o["symbol"] == "AAPL")
+    assert order["status"] == "placed" and "recovered" in order["note"]
+
+
+def test_recovery_matches_on_ref_id_echo(monkeypatch):
+    """When the MCP echoes our deterministic ref_id, that alone matches."""
+    mid = _member("a4-refid@x.com")
+    closed = _closed_session(datetime.date(2026, 12, 2), mid, ["AAPL"])
+    sid = closed["id"]
+    ref_id = executor.ref_id_for(sid, mid, "AAPL")
+    executor._record(sid, mid, "AAPL", 500.0, ref_id, "error", error="place: boom")
+    # order carries our ref_id but a stale timestamp + different amount fields
+    client = FakeClient(quotes={"AAPL": 200.0},
+                        orders=[{"symbol": "AAPL", "side": "buy", "ref_id": ref_id}])
+    _use_client(monkeypatch, client)
+
+    executor.run(closed, force_dry_run=True)
+
+    rows = _exec_rows(sid, mid, "AAPL", "buy")
+    assert len(rows) == 1 and rows[0]["status"] == "placed"
+    assert json.loads(rows[0]["place_json"])["_concord_recovered"] is True
+    assert not client.trades_for("place_buy", f"ACC{mid}")
+
+
+def test_unverifiable_prior_error_is_skipped_not_replaced(monkeypatch):
+    """If the broker orders can't be fetched, NEVER re-place blind — skip."""
+    mid = _member("a4-unverif@x.com")
+    closed = _closed_session(datetime.date(2026, 12, 3), mid, ["AAPL"])
+    sid = closed["id"]
+    executor._record(sid, mid, "AAPL", 500.0, executor.ref_id_for(sid, mid, "AAPL"),
+                     "error", error="place: timeout")
+    client = FakeClient(quotes={"AAPL": 200.0}, orders_exc=RuntimeError("MCP HTTP 500"))
+    _use_client(monkeypatch, client)
+
+    summary = executor.run(closed, force_dry_run=True)
+
+    rows = _exec_rows(sid, mid, "AAPL", "buy")
+    assert len(rows) == 1 and rows[0]["status"] == "skipped"
+    assert rows[0]["error"] == "unverifiable prior error — manual check"
+    assert not client.trades_for("place_buy", f"ACC{mid}")
+    assert not client.trades_for("review_buy", f"ACC{mid}", "AAPL")
+    order = next(o for o in _mrow(summary, mid)["orders"] if o["symbol"] == "AAPL")
+    assert order["status"] == "skipped"
+
+
+def test_verified_absent_prior_error_replaces_normally(monkeypatch):
+    """Broker orders fetched fine but show NO matching order → the prior place
+    never landed, so the normal (re-)placement path proceeds."""
+    mid = _member("a4-absent@x.com")
+    closed = _closed_session(datetime.date(2026, 12, 4), mid, ["AAPL"])
+    sid = closed["id"]
+    executor._record(sid, mid, "AAPL", 500.0, executor.ref_id_for(sid, mid, "AAPL"),
+                     "error", error="place: 400 rejected")
+    client = FakeClient(quotes={"AAPL": 200.0}, orders=[])   # broker has nothing
+    _use_client(monkeypatch, client)
+
+    executor.run(closed, force_dry_run=True)
+
+    rows = _exec_rows(sid, mid, "AAPL", "buy")
+    assert len(rows) == 1 and rows[0]["status"] == "reviewed"   # dry run reviews
+    assert client.trades_for("review_buy", f"ACC{mid}", "AAPL")
+
+
+# ─── A5: transient vs permanent Robinhood errors ─────────────────────────────
+
+def test_transient_portfolio_error_skips_without_stranding(monkeypatch):
+    """A 503-style failure retries once, then skips THIS RUN; rh_status stays
+    'connected' so the next run tries again."""
+    mid = _member("a5-transient@x.com")
+    closed = _closed_session(datetime.date(2026, 12, 5), mid, ["AAPL"])
+    client = FakeClient(portfolio_exc=RHTransientError("MCP HTTP 503: upstream"))
+    _use_client(monkeypatch, client)
+
+    summary = executor.run(closed, force_dry_run=True)
+
+    row = _mrow(summary, mid)
+    assert row["skip_reason"] == "transient_rh_error"
+    assert row["note"] == "transient portfolio error — will retry next run"
+    assert _rh_status(mid) == "connected"
+    # one retry attempted → two portfolio fetches for this member's account
+    assert len([c for c in client.calls if c == ("get_portfolio", f"ACC{mid}")]) == 2
+    assert {"member_id": mid, "reason": "transient_rh_error"} in _skip_audits()
+
+
+def test_auth_error_strands_member(monkeypatch):
+    """A 401 marks rh_status='error' (needs re-OAuth / admin rh-reset), no retry."""
+    mid = _member("a5-auth@x.com")
+    closed = _closed_session(datetime.date(2026, 12, 6), mid, ["AAPL"])
+    client = FakeClient(portfolio_exc=RHAuthError("MCP HTTP 401: unauthorized"))
+    _use_client(monkeypatch, client)
+
+    summary = executor.run(closed, force_dry_run=True)
+
+    row = _mrow(summary, mid)
+    assert row["skip_reason"] == "rh_error_stranded"
+    assert _rh_status(mid) == "error"
+    assert len([c for c in client.calls if c == ("get_portfolio", f"ACC{mid}")]) == 1
+
+
+def test_vault_reset_status_unstrands():
+    """Admin rh-reset flips 'error' back to 'connected' only when tokens remain."""
+    mid = _member("a5-reset@x.com", opted_in=0, rh_status="error")
+    res = vault.reset_status(mid)
+    assert res["ok"] is True and res["previous_status"] == "error"
+    assert _rh_status(mid) == "connected"
+    # without stored tokens the reset refuses (member must re-OAuth)
+    with db() as conn:
+        conn.execute("UPDATE rh_accounts SET enc_tokens=NULL, status='error' WHERE member_id=?", (mid,))
+    res2 = vault.reset_status(mid)
+    assert res2["ok"] is False
+    assert _rh_status(mid) == "error"
+    with pytest.raises(LookupError):
+        vault.reset_status(999999)
+
+
+# ─── A7: full-position exits sweep dust ──────────────────────────────────────
+
+def test_exit_sell_sweeps_dust_residual(monkeypatch):
+    """Full exit with live=1.0000008 vs club estimate=1.0 sells the full live
+    quantity — the 0.0000008-share crumb is club residue, not a personal holding."""
+    mid = _member("a7-dust@x.com")
+    # club history: a placed buy estimated at 1.0 TSLA share (old session)
+    executor._record(90001, mid, "TSLA", 250.0, "old-ref-1", "placed",
+                     place={"_concord_est_qty": 1.0})
+    closed = _closed_session(datetime.date(2026, 12, 7), mid, ["AAPL"])  # TSLA dropped
+    client = FakeClient(quotes={"AAPL": 100.0, "TSLA": 250.0},
+                        positions=[("TSLA", "1.0000008")])
+    _use_client(monkeypatch, client)
+
+    summary = executor.run(closed, force_dry_run=True)
+
+    sells = client.trades_for("review_sell", f"ACC{mid}", "TSLA")
+    assert len(sells) == 1
+    assert float(sells[0][3]) == pytest.approx(1.0000008, abs=1e-9)
+    order = next(o for o in _mrow(summary, mid)["orders"]
+                 if o["symbol"] == "TSLA" and o["side"] == "sell")
+    assert "dust" in order["note"]
+    rows = _exec_rows(closed["id"], mid, "TSLA", "sell")
+    assert len(rows) == 1 and rows[0]["status"] == "reviewed"
+
+
+def test_exit_sell_never_sweeps_personal_position(monkeypatch):
+    """Live residual worth $500 (a personal holding) is NOT dust — only the club
+    estimate is sold."""
+    mid = _member("a7-personal@x.com")
+    executor._record(90002, mid, "TSLA", 250.0, "old-ref-2", "placed",
+                     place={"_concord_est_qty": 1.0})
+    closed = _closed_session(datetime.date(2026, 12, 8), mid, ["AAPL"])
+    # member personally holds 2 extra TSLA shares (~$500 at $250)
+    client = FakeClient(quotes={"AAPL": 100.0, "TSLA": 250.0},
+                        positions=[("TSLA", "3.0")])
+    _use_client(monkeypatch, client)
+
+    summary = executor.run(closed, force_dry_run=True)
+
+    sells = client.trades_for("review_sell", f"ACC{mid}", "TSLA")
+    assert len(sells) == 1
+    assert sells[0][3] == "1.000000"                     # est only, 6dp as before
+    order = next(o for o in _mrow(summary, mid)["orders"]
+                 if o["symbol"] == "TSLA" and o["side"] == "sell")
+    assert order["note"] == "exited basket"
+
+
+def test_dust_cleanup_dry_run_previews(monkeypatch):
+    """dust_cleanup finds sub-$1 sub-0.01-share crumbs on club-traded names only,
+    reviews them, and (dry_run) records/places nothing."""
+    mid = _member("a7-cleanup@x.com", opted_in=0)
+    # club traded NVDA (crumb) and MSFT (real position, too big to be dust)
+    executor._record(90003, mid, "NVDA", 100.0, "old-ref-3", "placed",
+                     place={"_concord_est_qty": 0.9992})
+    executor._record(90003, mid, "MSFT", 500.0, "old-ref-4", "placed",
+                     place={"_concord_est_qty": 5.0})
+    client = FakeClient(
+        quotes={"NVDA": 100.0, "MSFT": 100.0, "GME": 20.0},
+        positions=[("NVDA", "0.0008"), ("MSFT", "5.0"), ("GME", "0.0001")],  # GME = personal
+    )
+    _use_client(monkeypatch, client)
+
+    res = executor.dust_cleanup(mid, dry_run=True)
+
+    assert res["ok"] is True and res["will_place"] is False
+    assert [o["symbol"] for o in res["orders"]] == ["NVDA"]
+    entry = res["orders"][0]
+    assert entry["status"] == "reviewed"
+    assert float(entry["qty"]) == pytest.approx(0.0008)
+    assert entry["value"] == pytest.approx(0.08)
+    assert client.trades_for("review_sell", f"ACC{mid}", "NVDA")
+    assert not client.trades_for("place_sell", f"ACC{mid}")
+    # dry run records nothing: still only the seeded 'placed' row for NVDA
+    with db() as conn:
+        n = conn.execute("SELECT COUNT(*) FROM executions WHERE member_id=? AND symbol='NVDA'",
+                         (mid,)).fetchone()[0]
+    assert n == 1
+
+
+# ─── A8: skip_reason visibility ──────────────────────────────────────────────
+
+def test_opted_out_member_appears_with_skip_reason():
+    """Opted-OUT humans get a summary row (skip_reason='opted_out') + an audit
+    entry; unconnected voters get 'not_connected'."""
+    voter = _member("a8-voter@x.com", connect=False)
+    outsider = _member("a8-optout@x.com", opted_in=0, connect=False)
+    closed = _closed_session(datetime.date(2026, 12, 9), voter, ["AAPL"])
+
+    summary = executor.run(closed, force_dry_run=True)
+
+    out_row = _mrow(summary, outsider)
+    assert out_row["skip_reason"] == "opted_out"
+    assert out_row["orders"] == []
+    assert {"member_id": outsider, "reason": "opted_out"} in _skip_audits()
+    voter_row = _mrow(summary, voter)
+    assert voter_row["skip_reason"] == "not_connected"
+    assert voter_row["note"] == "no connected agentic Robinhood account"
+    assert {"member_id": voter, "reason": "not_connected"} in _skip_audits()
