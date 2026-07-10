@@ -54,6 +54,10 @@ def load_member(member_id: int) -> dict | None:
             (member_id,),
         ).fetchone()
     out = dict(m)
+    # Never serialize secret columns into API payloads (the members row reaches
+    # the owner dashboard + every load_member caller).
+    for _secret in ("password_hash", "password", "totp_secret", "session_token"):
+        out.pop(_secret, None)
     out["settings"] = dict(s) if s else None
     out["robinhood"] = dict(rh) if rh else None
     return out
