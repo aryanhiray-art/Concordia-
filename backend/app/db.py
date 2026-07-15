@@ -187,6 +187,17 @@ def init_db() -> None:
     with db() as conn:
         conn.executescript(_SCHEMA)
         _migrate(conn)
+    # Defence-in-depth (finding #32): the DB holds the Fernet-encrypted OAuth
+    # vault + hashed credentials — make it (and its WAL/SHM sidecars) owner-only
+    # rather than trusting the parent directory's mode alone.
+    try:
+        import os
+        for _suffix in ("", "-wal", "-shm"):
+            _p = settings.db_path + _suffix
+            if os.path.exists(_p):
+                os.chmod(_p, 0o600)
+    except OSError:
+        pass
 
 
 def _migrate(conn: sqlite3.Connection) -> None:

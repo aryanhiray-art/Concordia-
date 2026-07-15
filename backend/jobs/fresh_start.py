@@ -10,6 +10,7 @@ systemd: a dated one-shot concord-fresh-start.timer fires it just after the open
 """
 import json
 import math
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -17,7 +18,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.calendar_us import is_trading_day, today_et  # noqa: E402
-from app.db import audit, db, init_db, kv_get, kv_set  # noqa: E402
+from app.config import settings  # noqa: E402
+from app.db import audit, db, init_db, is_armed, kv_get, kv_set  # noqa: E402
 from app.robinhood import vault  # noqa: E402
 from app.services import positions  # noqa: E402
 
@@ -44,6 +46,20 @@ def main() -> int:
     if not is_trading_day(today_et()):
         print("[fresh_start] not a trading day — will retry next run")
         return 0
+    # Hardening (finding #6): fresh_start places REAL sells outside the executor's
+    # triple gate, so it now demands the same live+ARMED authority PLUS an explicit
+    # one-shot env opt-in, and defaults to CLUB-ONLY scope. A stray flag-clear or a
+    # partial DB restore can no longer market-sell a member's ENTIRE personal book.
+    if os.environ.get("FRESH_START_ALLOW", "").strip() != "1":
+        print("[fresh_start] FRESH_START_ALLOW is not '1' — refusing to liquidate. "
+              "Set it in the job env to authorize a fresh start.")
+        return 0
+    if not (settings.is_live and is_armed()):
+        print("[fresh_start] not live+ARMED — refusing real-money liquidation")
+        return 0
+    # 'club' (default) sells ONLY club-bought shares (never personal holdings);
+    # 'all' liquidates every long position (the original test-account behaviour).
+    scope = os.environ.get("FRESH_START_SCOPE", "club").strip().lower()
 
     total = 0
     for m in _connected_members():
@@ -51,7 +67,10 @@ def main() -> int:
         acct = vault.account_number_for(mid)
         if not acct:
             continue
-        held = {p["symbol"]: p["quantity"] for p in positions.live_positions(mid)}  # EVERY long position
+        if scope == "all":
+            held = {p["symbol"]: p["quantity"] for p in positions.live_positions(mid)}  # EVERY long position
+        else:
+            held = dict(positions.club_shares(mid))   # club-bought only — never personal holdings
         if not held:
             print(f"[fresh_start] {m['display_name']}: account already all-cash")
             continue

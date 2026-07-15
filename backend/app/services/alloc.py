@@ -128,59 +128,60 @@ def member_allocation(member_id: int) -> dict:
         ).fetchone()
     bal = member_balance(member_id)
     bp = (bal or {}).get("buying_power")
+    tv = (bal or {}).get("total_value")
     atype = (row["alloc_type"] if row else "percent")
     aval = (row["alloc_value"] if row else 0.0)
     return {
         "type": atype,
         "value": aval,
-        "resolved_usd": resolve_allocation(atype, aval, bp),
+        # Resolve against TOTAL account value via rebalance_budget — the same
+        # figure the executor + voting power use — NOT resolve_allocation, which
+        # caps at buying power and made a deployed $100 stake read as ~$5 on the
+        # dashboard while voting power correctly showed ~$100 (finding #18).
+        "resolved_usd": rebalance_budget(atype, aval, tv, bp),
         "balance": bal,
     }
 
 
 def club_pnl(member_id: int) -> dict:
-    """Profit tracked ONLY on club-placed orders: current value vs invested.
+    """Unrealized P&L on the club's CURRENTLY-HELD shares for this member.
 
-    Sums the shares + cost the executor actually bought for this member (placed
-    executions), values them at current quotes. Zero until live trades exist.
+    Shares = the sign-aware, fill-based net from positions.club_shares (buys −
+    sells, real fills preferred over the estimate). Cost basis + market value use
+    the broker's average buy price and the live quote, so a rotated-out name
+    doesn't distort the number. (finding #7 — the old version summed SELL share
+    quantities with NO sign, grossly misreporting P&L.)
     """
-    with db() as conn:
-        rows = conn.execute(
-            "SELECT symbol, dollar_amount, place_json FROM executions "
-            "WHERE member_id=? AND status='placed'", (member_id,)
-        ).fetchall()
-    invested = 0.0
-    shares: dict[str, float] = {}
-    for r in rows:
-        invested += _num(r["dollar_amount"]) or 0.0
-        try:
-            order = (json.loads(r["place_json"]).get("data") or {}).get("order") or {}
-            q = _num(order.get("cumulative_quantity")) or _num(order.get("quantity")) or 0.0
-        except Exception:  # noqa: BLE001
-            q = 0.0
-        shares[r["symbol"]] = shares.get(r["symbol"], 0.0) + q
+    from . import positions
+    shares = positions.club_shares(member_id)   # club-only, sign-aware, fill-based
     if not shares:
-        return {"invested": round(invested, 2), "value": 0.0, "profit": 0.0, "profit_pct": None, "positions": 0}
-    value = 0.0
+        return {"invested": 0.0, "value": 0.0, "profit": 0.0, "profit_pct": None, "positions": 0}
+    avg: dict[str, float] = {}
+    last: dict[str, float] = {}
     try:
         acct = vault.account_number_for(member_id)
         client = vault.ensure_client(member_id)
-        syms = [s for s, q in shares.items() if q]
-        quotes: dict[str, float] = {}
+        pos = (client.get_positions(acct).get("data") or {}).get("positions") or []
+        for p in pos:
+            s = p.get("symbol")
+            if s:
+                avg[s] = _num(p.get("average_buy_price")) or 0.0
+        syms = list(shares)
         for i in range(0, len(syms), 20):
             res = (client.get_quotes(syms[i:i + 20]).get("data") or {}).get("results") or []
             for e in res:
                 q = e.get("quote") or {}
                 if q.get("symbol"):
-                    quotes[q["symbol"]] = _num(q.get("last_trade_price")) or 0.0
-        value = sum(qty * quotes.get(sym, 0.0) for sym, qty in shares.items())
+                    last[q["symbol"]] = _num(q.get("last_trade_price")) or 0.0
     except Exception:  # noqa: BLE001
-        value = 0.0
+        pass
+    invested = sum(qty * (avg.get(sym) or last.get(sym) or 0.0) for sym, qty in shares.items())
+    value = sum(qty * (last.get(sym) or avg.get(sym) or 0.0) for sym, qty in shares.items())
     profit = value - invested
     return {
         "invested": round(invested, 2),
         "value": round(value, 2),
         "profit": round(profit, 2),
         "profit_pct": round(profit / invested * 100, 2) if invested else None,
-        "positions": len([s for s, q in shares.items() if q]),
+        "positions": len(shares),
     }

@@ -101,13 +101,21 @@ def signup(body: SignupBody, request: Request, resp: Response):
     _default_settings(member["id"])
     _log_event(member["id"], "signup", request)
     audit(f"member:{member['id']}", "signup", email, {"role": role})
+    # Count SUCCESSFUL signups against the per-IP window too (finding #24) — else
+    # someone who knows the shared invite code could mass-create accounts (each a
+    # floored voting-power sybil) without ever tripping the limit.
+    ratelimit.record(f"signup:{ip}")
     return _issue(resp, member)
 
 
 @router.post("/login")
 def login(body: LoginBody, request: Request, resp: Response):
     ip = client_ip(request)
-    ekey, ikey = f"login:{body.email}", f"loginip:{ip}"
+    # Key the account-lockout window by email+IP, not email alone (finding #22):
+    # otherwise anyone who knows a victim's email can burn 8 attempts from any IP
+    # and lock the victim out even with the correct password. Per-IP (ikey) still
+    # caps an IP hammering many accounts.
+    ekey, ikey = f"login:{body.email}:{ip}", f"loginip:{ip}"
     if ratelimit.too_many(ekey, 8, 900) or ratelimit.too_many(ikey, 40, 900):
         raise HTTPException(status_code=429, detail="too many attempts — try again in a few minutes")
     with db() as conn:

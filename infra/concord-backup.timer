@@ -1,0 +1,9 @@
+[Unit]
+Description=Concord — daily off-box-capable backup of concord.db (02:30 ET)
+
+[Timer]
+OnCalendar=*-*-* 02:30 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target

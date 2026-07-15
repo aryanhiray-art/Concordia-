@@ -118,3 +118,81 @@ sudo -u concord sqlite3 /opt/concord/backend/concord.db \
 
 Owner API also exposes `POST /api/admin/arm`, `/api/admin/kill`,
 `/api/admin/run/{open|close|execute}` and `GET /api/admin/overview`.
+
+## 7. Backups & disaster recovery
+
+`concord.db` is the **only** store of the Fernet-encrypted per-member Robinhood
+OAuth vault, the `executions` ledger, and the club's owned-shares basis. Losing
+the disk without a backup is unrecoverable — so `concord-backup.timer` runs
+daily.
+
+| Time (ET) | Timer | What happens |
+|-----------|-------|--------------|
+| 02:30 | `concord-backup` | WAL-safe hot copy → `/opt/concord/backups/`, keeps newest 14, ships off-box if configured |
+
+The job uses SQLite's online backup API (`jobs/backup.py`) — a consistent hot
+copy, **never** a `cp` of the live WAL DB. Each copy is `concord-YYYYMMDD-HHMMSS.db`,
+mode `0600`, owned by `concord`.
+
+### Two secrets you MUST back up SEPARATELY, out of band
+
+The backup contains the **encrypted** vault but **not** the key that decrypts it.
+These live only in `/opt/concord/.env` and are **never** written into the backup
+dir (by design):
+
+- **`CONCORD_FERNET_KEY`** — without it, every member's RH token inside any DB
+  backup is permanently undecryptable (they'd all have to reconnect Robinhood).
+- **`CONCORD_ADMIN_TOKEN`** — the static service token the forge-dashboard uses
+  to reach owner endpoints; lose it and the dashboard can't authenticate until
+  you mint + redeploy a new one. (`SESSION_SECRET` rotating just logs members
+  out — less critical, but back it up too.)
+
+Copy those three values into a password manager / out-of-band secret store. Do
+**not** drop them in `/opt/concord/backups/`.
+
+### Off-box shipping (recommended)
+
+Set `CONCORD_BACKUP_DEST` in `/opt/concord/.env` and `systemctl restart` is not
+needed (the timer reads env fresh each run):
+
+```bash
+# a) an scp/rsync remote (concord user needs an SSH key + known_hosts entry;
+#    concord's home is /opt/concord, so the key lives at /opt/concord/.ssh/):
+CONCORD_BACKUP_DEST=backupuser@backup-host:/srv/concord-backups/
+# b) OR a second mounted volume on this box:
+CONCORD_BACKUP_DEST=/mnt/backup-volume/concord/
+```
+
+For a **local** volume path, also add it to `ReadWritePaths=` in
+`concord-backup.service` (ProtectSystem=strict blocks writes outside
+`/opt/concord`). Off-box failures only **warn** — the local backup still
+succeeds and the job exits 0.
+
+### Restore
+
+```bash
+# 1. stop everything that writes the DB
+systemctl stop concord-api.service
+systemctl stop 'concord-*.timer'
+# 2. move the (possibly corrupt) live DB aside and clear stale WAL/SHM
+cd /opt/concord/backend
+mv concord.db concord.db.old.$(date +%s) 2>/dev/null || true
+rm -f concord.db-wal concord.db-shm
+# 3. drop a chosen backup in place (a plain .db — no WAL to replay)
+sudo -u concord cp /opt/concord/backups/concord-YYYYMMDD-HHMMSS.db concord.db
+chown concord:concord concord.db && chmod 600 concord.db
+# 4. CONFIRM /opt/concord/.env still holds the ORIGINAL CONCORD_FERNET_KEY that
+#    encrypted this DB (from your out-of-band backup) — else the vault is useless.
+# 5. bring it back up
+systemctl start concord-api.service
+systemctl start 'concord-*.timer'
+```
+
+### Manual ops
+
+```bash
+# run a backup by hand
+cd /opt/concord/backend && sudo -u concord ./.venv/bin/python jobs/backup.py
+# list backups
+ls -la /opt/concord/backups/
+```

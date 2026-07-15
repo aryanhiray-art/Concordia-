@@ -8,7 +8,7 @@ from ..calendar_us import today_et
 from ..config import settings
 from ..db import audit, db, is_armed, kv_get, kv_set, set_armed
 from ..robinhood import vault
-from ..services import alloc, apikeys, bots, executor, power, research
+from ..services import alloc, apikeys, bots, executor, power, reconcile, research
 from ..services import voting as svc
 from .deps import load_member, owner_member_id, require_owner
 
@@ -76,9 +76,12 @@ def overview(owner: dict = Depends(require_owner)):
         "bot_voting_power": round(bot_power, 2),
         "human_count": sum(1 for m in mdicts if not m["is_bot"]),
         "bot_count": sum(1 for m in mdicts if m["is_bot"]),
-        # Owner-only: the shareable invite code + owner email, surfaced here so the
-        # forge dashboard can show them. Recovery for forgotten passwords is the
-        # member app's self-serve reset (invite code + email → new password).
+        # Owner-only (require_owner + the proxy's independent owner auth): the
+        # shareable invite code + owner email, surfaced so the forge dashboard can
+        # display them. NOTE: password recovery is owner-mediated ONLY
+        # (POST /member/{id}/reset-password); there is deliberately no invite-code
+        # self-serve reset — a shared-invite reset would let any member reset
+        # another member's account.
         "invite_code": settings.invite_code,
         "owner_email": settings.owner_email,
         "schedule": {"open": settings.vote_open_at, "close": settings.vote_close_at,
@@ -227,6 +230,32 @@ def dust_cleanup(member_id: int, dry_run: bool = True, owner: dict = Depends(req
     return res
 
 
+@router.post("/member/{member_id}/reconcile")
+def reconcile_member(member_id: int, dry_run: bool = True, owner: dict = Depends(require_owner)):
+    """Reconcile a member's placed executions to their REAL broker fills.
+
+    Rewrites estimate-based quantities to actual fills so club_shares is truth-
+    based (the "not all shares get sold" fix), promotes errored-but-filled orders,
+    and demotes broker-rejected rows. Places NO orders. dry_run=true (default)
+    previews the changes without writing.
+    """
+    if not load_member(member_id):
+        raise HTTPException(404, "no such member")
+    res = reconcile.reconcile_fills(member_id, dry_run=dry_run)
+    audit(owner["email"], "reconcile", str(member_id),
+          {"dry_run": dry_run, "changed": res.get("changed"),
+           "promoted": len(res.get("promoted", [])), "demoted": len(res.get("demoted", []))})
+    return res
+
+
+@router.post("/reconcile")
+def reconcile_all_members(dry_run: bool = True, owner: dict = Depends(require_owner)):
+    """Reconcile every connected member's fills (no orders placed). dry_run previews."""
+    res = reconcile.reconcile_all(dry_run=dry_run)
+    audit(owner["email"], "reconcile_all", None, {"dry_run": dry_run})
+    return res
+
+
 @router.get("/api-keys")
 def admin_list_keys(owner: dict = Depends(require_owner)):
     """The owner's API keys (for the research-voter program), creatable from forge."""
@@ -306,8 +335,9 @@ def run_phase(phase: str, dry_run: bool = True, owner: dict = Depends(require_ow
             raise HTTPException(404, "no session")
         return {"session": svc.close_and_select(session["id"])}
     if phase == "execute":
-        kv_set("halt", "0")
-        # run_today runs the phase scheduled for today (sell on a sell day, buy on a
-        # buy day) — honouring the split-cycle cadence, not a same-day full rebalance.
+        # Do NOT clear halt here (finding #15) — if the club is halted, execution
+        # stays blocked until the owner explicitly re-arms. run_today runs the
+        # phase scheduled for today (sell on a sell day, buy on a buy day),
+        # honouring the split-cycle cadence, not a same-day full rebalance.
         return executor.run_today(force_dry_run=dry_run)
     raise HTTPException(400, "phase must be open|close|execute|power|bots|reweight")

@@ -1,0 +1,20 @@
+[Unit]
+Description=Concord — WAL-safe online backup of concord.db (+ off-box ship if configured)
+
+[Service]
+Type=oneshot
+User=concord
+Group=concord
+WorkingDirectory=/opt/concord/backend
+EnvironmentFile=/opt/concord/.env
+ExecStart=/opt/concord/backend/.venv/bin/python jobs/backup.py
+TimeoutStartSec=600
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/concord
+# app-created files (DB copies, WAL) default to 0600, not 0644
+UMask=077
+# If CONCORD_BACKUP_DEST is a LOCAL mount path OUTSIDE /opt/concord, add it here
+# too, e.g.  ReadWritePaths=/opt/concord /mnt/backups  (ProtectSystem=strict
+# blocks writes elsewhere). Remote scp/rsync targets need no ReadWritePaths entry.

@@ -1,8 +1,10 @@
 """Minimal US equity market-calendar gate.
 
 Weekend + NYSE full-holiday awareness so the open/close/execute jobs never fire
-on a non-trading day. Holiday set covers 2026–2027; extend annually (or swap for
-`pandas_market_calendars` if it lands in the venv).
+on a non-trading day. The holiday set is hand-maintained — EXTEND IT ANNUALLY (or
+swap for `pandas_market_calendars` if it lands in the venv). `calendar_covers()`
++ the executor's pre-trade guard (finding #17) make a lapsed table fail loudly
+(refuse to place real orders) rather than silently trading on a closed day.
 """
 from __future__ import annotations
 
@@ -19,7 +21,20 @@ _HOLIDAYS: set[str] = {
     # 2027
     "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
     "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
+    # 2028 (Jan 1 falls on a Saturday → not observed as a weekday closure)
+    "2028-01-17", "2028-02-21", "2028-04-14", "2028-05-29", "2028-06-19",
+    "2028-07-04", "2028-09-04", "2028-11-23", "2028-12-25",
+    # 2029
+    "2029-01-01", "2029-01-15", "2029-02-19", "2029-03-30", "2029-05-28",
+    "2029-06-19", "2029-07-04", "2029-09-03", "2029-11-22", "2029-12-25",
+    # 2030
+    "2030-01-01", "2030-01-21", "2030-02-18", "2030-04-19", "2030-05-27",
+    "2030-06-19", "2030-07-04", "2030-09-02", "2030-11-28", "2030-12-25",
 }
+
+# Last year the hand-maintained table is authoritative for. Beyond this we can't
+# know the holidays, so the executor refuses to place REAL orders (finding #17).
+_MAX_HOLIDAY_YEAR = max(int(h[:4]) for h in _HOLIDAYS)
 
 
 def now_et() -> _dt.datetime:
@@ -28,6 +43,11 @@ def now_et() -> _dt.datetime:
 
 def today_et() -> _dt.date:
     return now_et().date()
+
+
+def calendar_covers(d: _dt.date | None = None) -> bool:
+    """Is the holiday table authoritative for this date's year? (finding #17)."""
+    return (d or today_et()).year <= _MAX_HOLIDAY_YEAR
 
 
 def is_trading_day(d: _dt.date | None = None) -> bool:

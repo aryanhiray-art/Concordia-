@@ -32,7 +32,10 @@ class PasswordBody(BaseModel):
 
 class AllocationBody(BaseModel):
     type: str = Field(pattern="^(percent|dollar)$")
-    value: float = Field(ge=0)
+    # allow_inf_nan=False rejects Infinity/NaN — Pydantic v2 otherwise accepts
+    # inf (inf >= 0), which is stored verbatim and then 500s the JSON encoder on
+    # every read of the member's account (a self-inflicted DoS, finding #29).
+    value: float = Field(ge=0, le=1_000_000_000, allow_inf_nan=False)
 
 
 @router.get("/me")
@@ -67,6 +70,15 @@ def me_holdings(member: dict = Depends(require_member)):
 def set_allocation(body: AllocationBody, member: dict = Depends(require_member)):
     if body.type == "percent" and body.value > 100:
         raise HTTPException(status_code=422, detail="percent must be 0–100")
+    # Vote-weight freeze (finding #9): you can't change your stake while a basket
+    # you voted in is closed-but-not-yet-executed — that window is exactly when
+    # your frozen vote weight is being turned into real orders on every account.
+    from ..services import voting as _voting
+    if _voting.member_in_closed_unexecuted_session(member["id"]):
+        raise HTTPException(
+            status_code=409,
+            detail="allocation is locked while this cycle's basket is executing — try again once it completes",
+        )
     with db() as conn:
         conn.execute(
             "UPDATE member_settings SET alloc_type=?, alloc_value=?, updated_at=strftime('%s','now') "
@@ -88,9 +100,14 @@ def change_password(body: PasswordBody, member: dict = Depends(require_member)):
         row = conn.execute("SELECT password_hash FROM members WHERE id=?", (member["id"],)).fetchone()
     if not row or not row["password_hash"] or not verify_password(body.current_password, row["password_hash"]):
         raise HTTPException(status_code=403, detail="current password is wrong")
+    # Bump session_version so ALL existing sessions/tokens are revoked on a
+    # password change (finding #3) — otherwise a stolen token survives the reset
+    # for its full 7-day TTL. Mirrors the owner reset-password path (admin.py).
     with db() as conn:
-        conn.execute("UPDATE members SET password_hash=? WHERE id=?",
-                     (hash_password(body.new_password), member["id"]))
+        conn.execute(
+            "UPDATE members SET password_hash=?, session_version=session_version+1 WHERE id=?",
+            (hash_password(body.new_password), member["id"]),
+        )
     audit(f"member:{member['id']}", "change_password", None, None)
     return {"ok": True}
 

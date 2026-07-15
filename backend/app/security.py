@@ -16,7 +16,7 @@ import os
 import secrets
 import time
 
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 
 from .config import settings
 
@@ -65,15 +65,26 @@ def hash_api_key(full: str) -> str:
 # ─── Token vault ─────────────────────────────────────────────────────────────
 
 
-def _fernet() -> Fernet:
-    key = settings.fernet_key
-    if not key:
+def _fernet() -> MultiFernet:
+    """Vault cipher as a MultiFernet key ring (finding #21).
+
+    Encrypts with the PRIMARY key; decrypts with any key in the ring — so the
+    vault key can be rotated (add the new key first in CONCORD_FERNET_KEYS, keep
+    the old one to decrypt existing ciphertext, re-encrypt lazily) without
+    stranding stored Robinhood tokens. Falls back to the single CONCORD_FERNET_KEY.
+    """
+    keys = list(settings.fernet_keys)
+    if not keys and settings.fernet_key:
+        keys = [settings.fernet_key]
+    elif settings.fernet_key and settings.fernet_key not in keys:
+        keys.append(settings.fernet_key)  # legacy single key still decrypts old data
+    if not keys:
         raise RuntimeError(
             "CONCORD_FERNET_KEY is not set — refusing to handle Robinhood tokens. "
             "Generate one: python -c \"from cryptography.fernet import Fernet;"
             "print(Fernet.generate_key().decode())\""
         )
-    return Fernet(key.encode() if isinstance(key, str) else key)
+    return MultiFernet([Fernet(k.encode() if isinstance(k, str) else k) for k in keys])
 
 
 def encrypt_tokens(bundle: dict) -> bytes:
@@ -82,7 +93,12 @@ def encrypt_tokens(bundle: dict) -> bytes:
 
 
 def decrypt_tokens(blob: bytes) -> dict:
-    return json.loads(_fernet().decrypt(blob).decode())
+    try:
+        return json.loads(_fernet().decrypt(blob).decode())
+    except InvalidToken as e:
+        # Key rotated out / lost, or corrupt ciphertext — surface a clear signal
+        # so the caller can prompt a re-connect instead of a bare crash (finding #21).
+        raise RuntimeError("token vault decrypt failed — Robinhood re-connect required") from e
 
 
 # ─── Signed sessions ─────────────────────────────────────────────────────────

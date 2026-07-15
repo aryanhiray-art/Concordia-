@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import time
 import uuid
 
@@ -27,7 +28,7 @@ from ..config import settings
 from ..db import audit, db, is_armed
 from ..robinhood import vault
 from ..robinhood.client import RHAuthError
-from . import alloc, positions, voting
+from . import alloc, positions, reconcile, voting
 
 _REF_NS = uuid.UUID("c0c0c0c0-0000-4000-8000-000000000000")
 
@@ -257,10 +258,35 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
 
     armed = is_armed()
     will_place = settings.is_live and armed and not force_dry_run
+    # Human-quorum floor (finding #10): never spend real money on a basket chosen
+    # without human participation. If fewer than MIN_HUMAN_VOTERS humans voted
+    # this session, drop to review-only so the ~20 bots can't auto-buy a basket on
+    # a zero/low-human-turnout day.
+    quorum_blocked = False
+    if will_place and voting.human_voter_count(session["id"]) < settings.min_human_voters:
+        will_place, quorum_blocked = False, True
+    # Calendar-coverage guard (finding #17): if the hand-maintained holiday table
+    # has lapsed past its last covered year we can't know today is a trading day —
+    # refuse to place REAL orders (review-only) rather than risk trading a closed
+    # market. Extend calendar_us._HOLIDAYS to clear this.
+    from ..calendar_us import calendar_covers, today_et as _today_et
+    calendar_stale = False
+    if will_place and not calendar_covers(_today_et()):
+        will_place, calendar_stale = False, True
     base = "LIVE" if will_place else ("DRY_RUN(disarmed)" if settings.is_live else "DRY_RUN")
     mode = f"{base}·{phase}"
     sid = session["id"]
 
+    # Reconcile prior fills to TRUTH before clearing/planning: promotes any order
+    # that errored on our side but actually FILLED at the broker to 'placed' (so
+    # an errored SELL is captured, not silently re-attempted — finding #2; the
+    # errored-buy case A4 handled at run time), rewrites estimate quantities to
+    # real fills so club_shares is fill-based (the "not all shares sold" fix), and
+    # demotes broker-rejected 'placed' rows. Best-effort; never blocks a run.
+    try:
+        reconcile.reconcile_all()
+    except Exception:  # noqa: BLE001
+        pass
     # A4: remember which buys ERRORED in a prior run of this session — the broker
     # may have accepted them — before _clear_replanable deletes the evidence.
     prior_error_buys = _error_buy_rows(sid)
@@ -268,6 +294,14 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
     already = _placed_keys(sid)
     summary = {"mode": mode, "phase": phase, "trade_date": session["trade_date"], "picks": picks,
                "will_place": will_place, "members": [], "orders": []}
+    if quorum_blocked:
+        summary["quorum_blocked"] = True
+        summary["note"] = (f"human quorum not met (< {settings.min_human_voters} human voter(s)) — "
+                           f"review only, no real orders placed")
+    if calendar_stale:
+        summary["calendar_stale"] = True
+        summary["note"] = ("market-holiday calendar has lapsed — review only; extend "
+                           "calendar_us._HOLIDAYS before trading resumes")
     audit("system", "execute_start", session["trade_date"],
           {"mode": mode, "picks": picks, "will_place": will_place})
 
@@ -376,6 +410,10 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
         msum["budget"] = round(budget, 2)
         msum["per_pick"] = per_pick
         order_count = 0
+        # Per-member order ceiling = the tighter of the global cap and this
+        # member's own max_orders (finding #35 — the column was fetched but the
+        # global was always used).
+        member_max_orders = min(settings.max_orders, int(m.get("max_orders") or settings.max_orders))
 
         # ── SELL phase: exit dropped names + trim overweight basket names ──
         # Sells come ONLY from `held` (club-bought, reconstructed from executions),
@@ -449,8 +487,10 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
 
         # Only deploy what's actually SETTLED — any buy beyond buying power is
         # deferred (it fills next buy day, once this cycle's sells settle), so we
-        # never trip EQUITY_NOT_ENOUGH_BP.
-        bp_left = buying_power
+        # never trip EQUITY_NOT_ENOUGH_BP. Hold back the small cash reserve
+        # (finding #28 — deployable() was defined but never used) so a sequence of
+        # dollar market orders doesn't exhaust buying power on the last leg.
+        bp_left = deployable(buying_power)
         # A4: lazy one-shot fetch of the member's recent broker orders, only when a
         # prior run left an errored buy whose true fate is unknown.
         recent_orders: list[dict] | None = None
@@ -517,7 +557,7 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
                                        "note": "defer · settles next cycle"})
                 continue
             bp_left -= need
-            if order_count >= settings.max_orders:
+            if order_count >= member_max_orders:
                 _record(sid, mid, symbol, need, ref_id_for(sid, mid, symbol), "skipped",
                         error="max_orders cap reached")
                 msum["orders"].append({"symbol": symbol, "side": "buy", "status": "skipped", "note": "max_orders cap"})
@@ -557,9 +597,18 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
 
     # Mark 'executed' only once the BUY phase completes the cycle — after the sell
     # phase the session stays 'closed' so the next (buy) day can find + finish it.
+    # And only when NO order is left in an unresolved 'error' state, so the next
+    # run's reconcile/A4 pass can still capture a buy the broker accepted but our
+    # side errored on (finding #13 — an early flip made A4 dead on the cron path).
     if will_place and phase in ("buy", "both"):
         with db() as conn:
-            conn.execute("UPDATE vote_sessions SET status='executed' WHERE id=?", (sid,))
+            err = conn.execute(
+                "SELECT COUNT(*) FROM executions WHERE session_id=? AND status='error'", (sid,)
+            ).fetchone()[0]
+            if err == 0:
+                conn.execute("UPDATE vote_sessions SET status='executed' WHERE id=?", (sid,))
+            else:
+                summary["executed_deferred"] = f"{err} error row(s) — session kept open for fill recovery"
     # Cumulative truth for the session — a re-run places 0 NEW orders even though
     # the first run may have placed many, so report the session total, not just
     # this run, and a per-reason skip breakdown so the UI never under-reports.
@@ -667,6 +716,31 @@ def dust_cleanup(member_id: int, dry_run: bool = True) -> dict:
 
 
 def run_today(force_dry_run: bool = False) -> dict:
+    """Single-flight wrapper around the day's phase run.
+
+    A file lock (finding #8) prevents a timer run and a dashboard 'Execute now'
+    (or two quick clicks) from executing concurrently — the check-then-act on
+    _placed_keys plus place()-before-record could otherwise let two runs both
+    place the same order, relying only on broker ref_id dedup.
+    """
+    import fcntl
+    import tempfile
+    lock_path = os.path.join(tempfile.gettempdir(), "concord-execute.lock")
+    lf = open(lock_path, "w")  # noqa: SIM115
+    try:
+        try:
+            fcntl.flock(lf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError):
+            return {"ok": False, "note": "another execute run is already in progress", "orders": []}
+        try:
+            return _run_today_locked(force_dry_run=force_dry_run)
+        finally:
+            fcntl.flock(lf, fcntl.LOCK_UN)
+    finally:
+        lf.close()
+
+
+def _run_today_locked(force_dry_run: bool = False) -> dict:
     """Run the phase scheduled for today: SELL on a sell/vote day (close the ballot,
     then exit dropped names), BUY on a buy day (top up the last sold basket with the
     now-settled cash). Idle days do nothing. This is what the cron + the dashboard

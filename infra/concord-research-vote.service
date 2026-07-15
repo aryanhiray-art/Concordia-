@@ -13,3 +13,5 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/opt/concord
+# app-created files (DB, WAL) default to 0600, not 0644
+UMask=077

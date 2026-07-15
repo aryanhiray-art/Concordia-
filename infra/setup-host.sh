@@ -34,6 +34,28 @@ fi
 chown concord:concord "$CONCORD_HOME/.env"
 chmod 600 "$CONCORD_HOME/.env"
 
+echo "── 4b. admin service token (idempotent — never overwrites an existing one) ──"
+# Static backend-to-backend token the forge-dashboard uses for owner endpoints.
+# Mint one iff the .env value is empty or still the placeholder; re-fix ownership
+# because a root `sed -i`/append would otherwise reclaim the file from concord.
+CUR_TOK=$(grep -E '^CONCORD_ADMIN_TOKEN=' "$CONCORD_HOME/.env" | head -1 | cut -d= -f2-)
+case "$CUR_TOK" in
+  ""|change-me*)
+    TOK=$(python3 -c "import secrets;print('svc-'+secrets.token_urlsafe(24))")
+    if grep -qE '^CONCORD_ADMIN_TOKEN=' "$CONCORD_HOME/.env"; then
+      sed -i "s|^CONCORD_ADMIN_TOKEN=.*|CONCORD_ADMIN_TOKEN=$TOK|" "$CONCORD_HOME/.env"
+    else
+      printf 'CONCORD_ADMIN_TOKEN=%s\n' "$TOK" >> "$CONCORD_HOME/.env"
+    fi
+    chown concord:concord "$CONCORD_HOME/.env"
+    chmod 600 "$CONCORD_HOME/.env"
+    echo "  -> generated CONCORD_ADMIN_TOKEN. Back it up out-of-band (it can't be recovered)."
+    ;;
+  *)
+    echo "  -> CONCORD_ADMIN_TOKEN already set — leaving it."
+    ;;
+esac
+
 echo "── 5. seed universe ──"
 ( cd "$CONCORD_HOME/backend" && sudo -u concord ./.venv/bin/python -m app.seed )
 
@@ -42,6 +64,7 @@ cp "$CONCORD_HOME"/infra/concord-*.service "$CONCORD_HOME"/infra/concord-*.timer
 systemctl daemon-reload
 systemctl enable --now concord-api.service
 systemctl enable --now concord-open-vote.timer concord-close-vote.timer concord-execute.timer
+systemctl enable --now concord-backup.timer
 
 echo "── done. nginx: install infra/nginx-concord-api.conf and reload. ──"
 systemctl --no-pager status concord-api.service | head -5

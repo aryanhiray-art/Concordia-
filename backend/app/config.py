@@ -44,6 +44,10 @@ class Settings:
 
     session_secret: str = os.environ.get("SESSION_SECRET", "dev-insecure-session-secret")
     fernet_key: str = os.environ.get("CONCORD_FERNET_KEY", "")
+    # Optional comma-separated key RING for rotation (primary first). MultiFernet
+    # decrypts with any key in the ring, and re-encrypts with the primary — so you
+    # can rotate the vault key without stranding existing tokens (finding #21).
+    fernet_keys_raw: str = os.environ.get("CONCORD_FERNET_KEYS", "")
 
     invite_code: str = os.environ.get("INVITE_CODE", "concord")
     owner_email: str = os.environ.get("OWNER_EMAIL", "").strip().lower()
@@ -111,6 +115,11 @@ class Settings:
     # cycle. Enforced in alloc.rebalance_budget, which sizes both the executor's
     # budget and the voting-power snapshot.
     max_notional_per_member: float = _float("MAX_NOTIONAL_PER_MEMBER", 2000.0)
+    # Human-quorum floor: the minimum number of HUMAN voters a session needs
+    # before the executor will place REAL orders. Below this it drops to
+    # review-only, so a basket chosen by the bots alone (zero/low human turnout)
+    # is never bought with real money (finding #10).
+    min_human_voters: int = _int("MIN_HUMAN_VOTERS", 1)
 
     @property
     def rh_redirect_uri(self) -> str:
@@ -121,6 +130,39 @@ class Settings:
     @property
     def is_live(self) -> bool:
         return self.execution_mode == "live"
+
+    @property
+    def is_prod(self) -> bool:
+        return self.app_env.strip().lower() == "prod"
+
+    @property
+    def fernet_keys(self) -> list[str]:
+        """Rotation key ring (primary first). Empty when only the single key is set."""
+        return [k.strip() for k in self.fernet_keys_raw.split(",") if k.strip()]
+
+
+# Placeholder/insecure defaults that MUST NOT be used in production. Boot fails
+# closed (main.startup) if any of these is still in effect when app_env=prod.
+_INSECURE_SESSION_SECRETS = {"", "dev-insecure-session-secret", "change-me", "changeme"}
+_INSECURE_INVITE_CODES = {"", "concord", "change-me", "changeme"}
+
+
+def insecure_prod_config() -> list[str]:
+    """Names of critical secrets still at an insecure default while app_env=prod.
+
+    Empty list = safe to boot. The Fernet key already fails closed in security._fernet;
+    this covers the session secret (forgeable owner sessions) + the invite code.
+    """
+    if not settings.is_prod:
+        return []
+    problems: list[str] = []
+    if settings.session_secret.strip() in _INSECURE_SESSION_SECRETS:
+        problems.append("SESSION_SECRET")
+    if settings.invite_code.strip().lower() in _INSECURE_INVITE_CODES:
+        problems.append("INVITE_CODE")
+    if not settings.fernet_key:
+        problems.append("CONCORD_FERNET_KEY")
+    return problems
 
 
 settings = Settings()

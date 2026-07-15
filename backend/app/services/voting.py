@@ -159,12 +159,26 @@ def set_member_allocations(session_id: int, member_id: int, allocs: list[dict]) 
     if total > 100.0 and total > 0:                    # never let a member exceed 100%
         clean = [(s, w * 100.0 / total) for s, w in clean]
     now = int(time.time())
+    # TOCTOU-safe (finding #16): take the write lock, re-check 'open' INSIDE the
+    # transaction, and do the DELETE+INSERT atomically. A vote that read 'open'
+    # microseconds before close_and_select commits can no longer land against a
+    # just-closed session, and a concurrent tally reader never sees the member
+    # with zero votes mid-rewrite.
     with db() as conn:
-        conn.execute("DELETE FROM votes WHERE session_id=? AND member_id=?", (session_id, member_id))
-        conn.executemany(
-            "INSERT OR IGNORE INTO votes(session_id,member_id,symbol,weight,created_at) VALUES(?,?,?,?,?)",
-            [(session_id, member_id, s, round(w, 4), now) for s, w in clean],
-        )
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute("SELECT status FROM vote_sessions WHERE id=?", (session_id,)).fetchone()
+            if not row or row["status"] != "open":
+                raise ValueError("voting is closed for this session")
+            conn.execute("DELETE FROM votes WHERE session_id=? AND member_id=?", (session_id, member_id))
+            conn.executemany(
+                "INSERT OR IGNORE INTO votes(session_id,member_id,symbol,weight,created_at) VALUES(?,?,?,?,?)",
+                [(session_id, member_id, s, round(w, 4), now) for s, w in clean],
+            )
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
     audit(f"member:{member_id}", "vote", sess["trade_date"],
           {"allocs": [{"symbol": s, "weight": round(w, 2)} for s, w in clean]})
     return [{"symbol": s, "weight": round(w, 4)} for s, w in clean]
@@ -257,6 +271,39 @@ def voter_count(session_id: int) -> int:
             "SELECT COUNT(DISTINCT member_id) AS n FROM votes WHERE session_id=?", (session_id,)
         ).fetchone()
     return row["n"] if row else 0
+
+
+def human_voter_count(session_id: int) -> int:
+    """Distinct HUMAN (non-bot) members who voted in this session.
+
+    The execution human-quorum floor (finding #10) uses this: a basket chosen on
+    a zero-human-turnout day is bot-only and must never be bought with real money.
+    """
+    with db() as conn:
+        row = conn.execute(
+            "SELECT COUNT(DISTINCT v.member_id) AS n FROM votes v "
+            "JOIN members m ON m.id=v.member_id "
+            "WHERE v.session_id=? AND COALESCE(m.is_bot,0)=0",
+            (session_id,),
+        ).fetchone()
+    return row["n"] if row else 0
+
+
+def member_in_closed_unexecuted_session(member_id: int) -> bool:
+    """True if this member voted in a session that is CLOSED but not yet EXECUTED.
+
+    During that window the member's vote weight is already frozen into the locked
+    basket but the money hasn't been deployed — so their allocation must not be
+    editable, else they could inflate power at close and withdraw stake before
+    execute (free-rider, finding #9).
+    """
+    with db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM vote_sessions vs JOIN votes v ON v.session_id=vs.id "
+            "WHERE vs.status='closed' AND v.member_id=? LIMIT 1",
+            (member_id,),
+        ).fetchone()
+    return row is not None
 
 
 def close_and_select(session_id: int) -> dict:

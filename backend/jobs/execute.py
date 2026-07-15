@@ -12,13 +12,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.db import init_db, kv_set  # noqa: E402
+from app.db import init_db  # noqa: E402
 from app.services import executor  # noqa: E402
 
 
 def main() -> int:
     init_db()
-    kv_set("halt", "0")
+    # NOTE: we do NOT clear `halt` here (finding #15). halt is a durable kill
+    # switch — clearing it is an explicit owner action (re-arm), never a silent
+    # side effect of a scheduled run, so a halt set to cancel a pending
+    # liquidation can't be wiped by the next execute.
     # run_today picks the phase scheduled for today: SELL on a sell/vote day
     # (close + exit dropped names), BUY on a buy day (top up the last sold basket),
     # nothing on idle days.
