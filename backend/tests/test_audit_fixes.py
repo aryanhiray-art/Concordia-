@@ -74,8 +74,11 @@ class OrdersClient:
         self.positions = positions or []   # list of (symbol, qty, avg_buy_price)
         self.quotes = quotes or {}
 
-    def get_equity_orders(self, acct):
-        return {"data": {"orders": self.orders}}
+    def get_equity_orders(self, acct, cursor=None, placed_agent=None):
+        orders = self.orders
+        if placed_agent:   # honour the filter like the real API
+            orders = [o for o in orders if o.get("placed_agent", "agentic") == placed_agent]
+        return {"data": {"orders": orders, "next": None}}
 
     def get_positions(self, acct):
         return {"data": {"positions": [
@@ -95,18 +98,28 @@ def _use(monkeypatch, client):
     monkeypatch.setattr(vault, "ensure_client", lambda m: client)
 
 
+def _now_iso():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def _order(symbol, side, state, cum, agent="agentic", created=None):
+    """A broker order row (note: real RH returns ref_id=null, so we match on
+    symbol+side+time among placed_agent='agentic' orders)."""
+    return {"symbol": symbol, "side": side, "state": state,
+            "cumulative_quantity": str(cum), "quantity": str(cum),
+            "placed_agent": agent, "created_at": created or _now_iso()}
+
+
 # ─── fill reconciliation ─────────────────────────────────────────────────────
 
 def test_reconcile_rewrites_estimate_to_real_fill(monkeypatch):
     """A placed buy on an ESTIMATE (2.5) is corrected to the broker's real fill
-    (2.4), so club_shares becomes fill-based."""
+    (2.4) via symbol+side+time match, so club_shares becomes fill-based."""
     mid = _member("rec-fill@x.com")
     executor._record(70001, mid, "AAPL", 500.0, "rc-ref-1", "placed",
                      place={"data": {"order": {}}, "_concord_est_qty": 2.5})
     assert positions.club_shares(mid).get("AAPL") == pytest.approx(2.5)   # estimate first
-    _use(monkeypatch, OrdersClient(orders=[
-        {"ref_id": "rc-ref-1", "symbol": "AAPL", "side": "buy",
-         "state": "filled", "cumulative_quantity": "2.4"}]))
+    _use(monkeypatch, OrdersClient(orders=[_order("AAPL", "buy", "filled", "2.4")]))
 
     res = reconcile.reconcile_fills(mid)
 
@@ -121,9 +134,7 @@ def test_reconcile_promotes_errored_sell_that_filled(monkeypatch):
     executor._record(70002, mid, "MSFT", 500.0, "b-ref", "placed", place={"_concord_est_qty": 3.0})
     executor._record(70002, mid, "MSFT", None, "s-ref", "error", side="sell", error="place: boom")
     assert positions.club_shares(mid).get("MSFT") == pytest.approx(3.0)   # sell not yet counted
-    _use(monkeypatch, OrdersClient(orders=[
-        {"ref_id": "s-ref", "symbol": "MSFT", "side": "sell",
-         "state": "filled", "cumulative_quantity": "3.0"}]))
+    _use(monkeypatch, OrdersClient(orders=[_order("MSFT", "sell", "filled", "3.0")]))
 
     res = reconcile.reconcile_fills(mid)
 
@@ -137,9 +148,7 @@ def test_reconcile_demotes_broker_rejected_placed(monkeypatch):
     mid = _member("rec-reject@x.com")
     executor._record(70003, mid, "NVDA", 100.0, "r-ref", "placed", place={"_concord_est_qty": 1.0})
     assert positions.club_shares(mid).get("NVDA") == pytest.approx(1.0)
-    _use(monkeypatch, OrdersClient(orders=[
-        {"ref_id": "r-ref", "symbol": "NVDA", "side": "buy",
-         "state": "rejected", "cumulative_quantity": "0"}]))
+    _use(monkeypatch, OrdersClient(orders=[_order("NVDA", "buy", "rejected", "0")]))
 
     res = reconcile.reconcile_fills(mid)
 
@@ -147,13 +156,12 @@ def test_reconcile_demotes_broker_rejected_placed(monkeypatch):
     assert "NVDA" not in positions.club_shares(mid)
 
 
-def test_reconcile_leaves_estimate_when_no_ref_match(monkeypatch):
-    """Never a fuzzy match: an order without OUR ref_id can't reconcile a row
-    (it could be the member's personal order) — the estimate is kept."""
-    mid = _member("rec-nomatch@x.com")
+def test_reconcile_excludes_personal_orders(monkeypatch):
+    """A PERSONAL (placed_agent='user') order of the same symbol is NEVER matched
+    — reconciliation can't touch personal shares — so the estimate is kept."""
+    mid = _member("rec-personal@x.com")
     executor._record(70004, mid, "TSLA", 250.0, "t-ref", "placed", place={"_concord_est_qty": 1.0})
-    _use(monkeypatch, OrdersClient(orders=[
-        {"symbol": "TSLA", "side": "buy", "state": "filled", "cumulative_quantity": "1.2"}]))
+    _use(monkeypatch, OrdersClient(orders=[_order("TSLA", "buy", "filled", "1.2", agent="user")]))
 
     res = reconcile.reconcile_fills(mid)
 
@@ -161,13 +169,25 @@ def test_reconcile_leaves_estimate_when_no_ref_match(monkeypatch):
     assert positions.club_shares(mid).get("TSLA") == pytest.approx(1.0)
 
 
+def test_reconcile_ignores_far_off_time(monkeypatch):
+    """An agentic order far outside the time window (a different cycle) is not
+    matched to this execution."""
+    mid = _member("rec-faroff@x.com")
+    executor._record(70006, mid, "KO", 50.0, "k-ref", "placed", place={"_concord_est_qty": 0.6})
+    old = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=4)).isoformat()
+    _use(monkeypatch, OrdersClient(orders=[_order("KO", "buy", "filled", "0.7", created=old)]))
+
+    res = reconcile.reconcile_fills(mid)
+
+    assert res["changed"] == 0
+    assert positions.club_shares(mid).get("KO") == pytest.approx(0.6)
+
+
 def test_reconcile_dry_run_writes_nothing(monkeypatch):
     mid = _member("rec-dry@x.com")
     executor._record(70010, mid, "AAPL", 500.0, "d-ref", "placed",
                      place={"data": {"order": {}}, "_concord_est_qty": 2.5})
-    _use(monkeypatch, OrdersClient(orders=[
-        {"ref_id": "d-ref", "symbol": "AAPL", "side": "buy",
-         "state": "filled", "cumulative_quantity": "2.4"}]))
+    _use(monkeypatch, OrdersClient(orders=[_order("AAPL", "buy", "filled", "2.4")]))
 
     res = reconcile.reconcile_fills(mid, dry_run=True)
 

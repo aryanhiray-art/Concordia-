@@ -149,10 +149,21 @@ class RobinhoodClient:
     def get_quotes(self, symbols: list[str]) -> dict:
         return self.mcp.call_tool("get_equity_quotes", {"symbols": symbols})
 
-    def get_equity_orders(self, account_number: str) -> dict:
+    def get_equity_orders(self, account_number: str, cursor: str | None = None,
+                          placed_agent: str | None = None) -> dict:
         """Recent equity orders for the account. Used to verify whether an
-        errored place actually reached the broker before ever re-placing."""
-        return self.mcp.call_tool("get_equity_orders", {"account_number": account_number})
+        errored place actually reached the broker, and to reconcile real fills.
+
+        `placed_agent='agentic'` returns ONLY orders this agent placed (the club's
+        own) — the boundary that keeps reconciliation from ever touching a
+        member's personal ('user') order. `cursor` pages older orders.
+        """
+        args: dict = {"account_number": account_number}
+        if cursor:
+            args["cursor"] = cursor
+        if placed_agent:
+            args["placed_agent"] = placed_agent
+        return self.mcp.call_tool("get_equity_orders", args)
 
     # ── research (watchlists) — best-effort; not all MCP deployments expose these ──
     def get_watchlists(self) -> dict:

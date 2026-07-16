@@ -27,7 +27,9 @@ happened).
 """
 from __future__ import annotations
 
+import datetime
 import json
+from urllib.parse import parse_qs, urlparse
 
 from ..db import db
 from ..robinhood import vault
@@ -38,6 +40,16 @@ _FILLED_STATES = {"filled", "partially_filled"}
 # States that mean the order positively did NOT put shares in the account.
 _DEAD_STATES = {"cancelled", "canceled", "rejected", "failed", "voided"}
 
+# The Robinhood agentic API returns ref_id=null on every order, so we CANNOT
+# match on our ref_id. Instead we match a club execution to a broker order by
+# symbol + side + closest created-time, but ONLY among orders this agent placed
+# (placed_agent='agentic') — a member's personal ('user') order is never a
+# candidate, so reconciliation can never touch personal shares. (symbol,side,day)
+# is unique among agentic orders, and cycles are ≥1 day apart, so the window
+# below (well under the inter-cycle gap) yields an unambiguous 1:1 match.
+_MATCH_TOLERANCE_S = 20 * 3600      # ±20h
+_MAX_ORDER_PAGES = 12               # paginate deep enough to cover the club's history
+
 
 def _num(v) -> float | None:
     try:
@@ -46,35 +58,80 @@ def _num(v) -> float | None:
         return None
 
 
-def _fetch_orders(client, account_number: str) -> list[dict]:
-    """The member's recent equity orders as a flat list (defensive on shape)."""
-    payload = client.get_equity_orders(account_number)
-    data = payload.get("data", payload) if isinstance(payload, dict) else payload
-    if isinstance(data, dict):
-        orders = data.get("orders") or data.get("results") or []
-    elif isinstance(data, list):
-        orders = data
-    else:
-        orders = []
-    return [o for o in orders if isinstance(o, dict)]
+def _parse_ts(v) -> float | None:
+    """Epoch seconds from an order's created time (epoch number or ISO string)."""
+    if v is None:
+        return None
+    n = _num(v)
+    if n is not None:
+        return n
+    try:
+        return datetime.datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
 
 
-def _index_by_ref(orders: list[dict]) -> dict[str, dict]:
-    """ref_id / client_order_id → order. Prefer a filled order if a ref repeats."""
-    by_ref: dict[str, dict] = {}
+def _cursor_from_next(nxt) -> str | None:
+    if not nxt:
+        return None
+    try:
+        c = parse_qs(urlparse(str(nxt)).query).get("cursor")
+        return c[0] if c else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _fetch_agentic_orders(client, account_number: str) -> list[dict]:
+    """All recent AGENTIC equity orders (club orders only — never personal),
+    following pagination. The placed_agent='agentic' filter is the club/personal
+    safety boundary; we also drop any explicitly non-agentic row defensively."""
+    out: list[dict] = []
+    cursor: str | None = None
+    for _ in range(_MAX_ORDER_PAGES):
+        payload = client.get_equity_orders(account_number, cursor=cursor, placed_agent="agentic")
+        data = payload.get("data", payload) if isinstance(payload, dict) else payload
+        if isinstance(data, dict):
+            orders = data.get("orders") or data.get("results") or []
+            nxt = data.get("next")
+        elif isinstance(data, list):
+            orders, nxt = data, None
+        else:
+            orders, nxt = [], None
+        out += [o for o in orders
+                if isinstance(o, dict) and o.get("placed_agent") in (None, "agentic")]
+        cursor = _cursor_from_next(nxt)
+        if not cursor or not orders:
+            break
+    return out
+
+
+def _index_orders(orders: list[dict]) -> dict[tuple[str, str], list[tuple[float, dict]]]:
+    """(SYMBOL, side) → [(created_ts, order), …] for closest-time matching."""
+    idx: dict[tuple[str, str], list[tuple[float, dict]]] = {}
     for o in orders:
-        ref = o.get("ref_id") or o.get("client_order_id")
-        if not ref:
+        sym = str(o.get("symbol") or "").upper()
+        side = str(o.get("side") or "").lower()
+        ts = _parse_ts(o.get("created_at") or o.get("created_time") or o.get("updated_at"))
+        if not sym or not side or ts is None:
             continue
-        ref = str(ref)
-        prev = by_ref.get(ref)
-        if prev is None:
-            by_ref[ref] = o
-            continue
-        # keep whichever looks more "done"
-        if str(o.get("state") or "").lower() in _FILLED_STATES:
-            by_ref[ref] = o
-    return by_ref
+        idx.setdefault((sym, side), []).append((ts, o))
+    return idx
+
+
+def _match_order(idx, symbol: str, side: str, exec_ts: float | None) -> dict | None:
+    """The agentic order best matching this execution: same symbol+side, created
+    closest in time, within the tolerance window. None if nothing close enough."""
+    cands = idx.get((str(symbol).upper(), str(side).lower()))
+    if not cands or exec_ts is None:
+        return None
+    best, best_dt = None, None
+    for ots, o in cands:
+        dt = abs(ots - exec_ts)
+        if best_dt is None or dt < best_dt:
+            best, best_dt = o, dt
+    if best is not None and best_dt is not None and best_dt <= _MATCH_TOLERANCE_S:
+        return best
+    return None
 
 
 def _order_state(o: dict) -> str:
@@ -120,7 +177,7 @@ def reconcile_fills(member_id: int, client=None, account_number: str | None = No
         args.append(session_id)
     with db() as conn:
         rows = [dict(r) for r in conn.execute(
-            f"SELECT id, session_id, symbol, side, status, ref_id, place_json, dollar_amount "
+            f"SELECT id, session_id, symbol, side, status, ref_id, place_json, dollar_amount, created_at "
             f"FROM executions WHERE {where}", args
         ).fetchall()]
     if not rows:
@@ -129,21 +186,21 @@ def reconcile_fills(member_id: int, client=None, account_number: str | None = No
     try:
         if client is None:
             client = vault.ensure_client(member_id)
-        orders = _fetch_orders(client, account_number)
+        orders = _fetch_agentic_orders(client, account_number)
     except RHError as e:
         return {"ok": False, "member_id": member_id, "error": f"broker read failed: {type(e).__name__}: {e}",
                 "reconciled": []}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "member_id": member_id, "error": f"broker read failed: {type(e).__name__}: {e}",
                 "reconciled": []}
-    by_ref = _index_by_ref(orders)
+    idx = _index_orders(orders)
+    out["agentic_orders"] = len(orders)
 
     updates: list[tuple] = []          # (place_json, status, id) to write
     for r in rows:
-        ref = r.get("ref_id")
-        order = by_ref.get(str(ref)) if ref else None
+        order = _match_order(idx, r["symbol"], r["side"], _num(r.get("created_at")))
         if order is None:
-            # No ref match → do NOT guess. An estimate-based placed row simply
+            # No close agentic order → do NOT guess. An estimate-based placed row
             # keeps its estimate; an error row stays for A4 / the next cycle.
             out["unmatched"] += 1
             continue
