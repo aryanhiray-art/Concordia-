@@ -120,6 +120,12 @@ class Settings:
     # review-only, so a basket chosen by the bots alone (zero/low human turnout)
     # is never bought with real money (finding #10).
     min_human_voters: int = _int("MIN_HUMAN_VOTERS", 1)
+    # Size each buy against what the member's account ACTUALLY holds right now
+    # (live positions), not the club's reconstructed ledger — so ledger drift, a
+    # partial fill, or a manual sale can never mis-size a buy, and a liquidated
+    # account is correctly seen as empty and rebought next cycle. SELLs still
+    # gate on the club ledger (never sell a member's personal shares).
+    buy_sizing_account: bool = _bool("BUY_SIZING_ACCOUNT", True)
 
     @property
     def rh_redirect_uri(self) -> str:

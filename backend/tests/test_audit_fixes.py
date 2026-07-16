@@ -45,7 +45,8 @@ def teardown_module(_):
             conn.execute(f"DELETE FROM {t}")
 
 
-def _member(email, opted_in=1, alloc_value=50.0, connect=True, is_bot=0):
+def _member(email, opted_in=1, alloc_value=50.0, connect=True, is_bot=0,
+            alloc_type="percent"):
     with db() as conn:
         cur = conn.execute(
             "INSERT INTO members(email,display_name,role,is_bot,created_at) VALUES(?,?,?,?,?)",
@@ -55,7 +56,7 @@ def _member(email, opted_in=1, alloc_value=50.0, connect=True, is_bot=0):
         conn.execute(
             "INSERT INTO member_settings(member_id,opted_in,buying_power_pct,daily_cap_usd,"
             "max_orders,alloc_type,alloc_value,updated_at) VALUES(?,?,?,?,?,?,?,?)",
-            (mid, opted_in, 10.0, 500.0, 10, "percent", alloc_value, int(time.time())),
+            (mid, opted_in, 10.0, 500.0, 10, alloc_type, alloc_value, int(time.time())),
         )
         if connect:
             conn.execute(
@@ -96,6 +97,31 @@ class OrdersClient:
 def _use(monkeypatch, client):
     monkeypatch.setattr(vault, "account_number_for", lambda m: f"ACC{m}")
     monkeypatch.setattr(vault, "ensure_client", lambda m: client)
+
+
+class RunClient(OrdersClient):
+    """OrdersClient + the portfolio/review/place surface executor.run needs."""
+
+    def __init__(self, buying_power=1000.0, total_value=1000.0, **kw):
+        super().__init__(**kw)
+        self.bp = buying_power
+        self.tv = total_value
+        self.calls = []
+
+    def get_portfolio(self, acct):
+        return {"data": {"buying_power": {"buying_power": str(self.bp)}, "total_value": str(self.tv)}}
+
+    def review_market_buy(self, a, s, amt):
+        self.calls.append(("rb", s, amt)); return {"data": {"order_checks": {}}}
+
+    def place_market_buy(self, a, s, amt, ref_id=None):
+        self.calls.append(("pb", s, amt, ref_id)); return {"data": {"order": {}}}
+
+    def review_market_sell(self, a, s, q):
+        self.calls.append(("rs", s, q)); return {"data": {"order_checks": {}}}
+
+    def place_market_sell(self, a, s, q, ref_id=None):
+        self.calls.append(("ps", s, q, ref_id)); return {"data": {"order": {}}}
 
 
 def _now_iso():
@@ -253,3 +279,45 @@ def test_human_voter_count_and_vote_freeze():
     voting.close_and_select(s["id"])
     # frozen once closed-but-not-executed: can't change stake mid-execution
     assert voting.member_in_closed_unexecuted_session(human) is True
+
+
+# ─── buy sizing reads the live account, not the ledger (owner request) ────────
+
+def _buy_status(summary, mid, symbol):
+    row = next(r for r in summary["members"] if r["member_id"] == mid)
+    o = next(o for o in row["orders"] if o["symbol"] == symbol and o["side"] == "buy")
+    return o["status"]
+
+
+def test_buy_sizes_from_live_account_not_ledger(monkeypatch):
+    """The ledger THINKS the club holds 0.03 AAPL (~$6 > the $5 target), which
+    under ledger-sizing would read 'at target' and skip. But the ACCOUNT is empty
+    (sold), so account-sizing correctly rebuys to target."""
+    mid = _member("buy-live@x.com", alloc_type="dollar", alloc_value=5.0)
+    executor._record(80001, mid, "AAPL", 5.0, "x", "placed",
+                     place={"data": {"order": {"cumulative_quantity": "0.03"}}})
+    s = voting.open_session_for(datetime.date(2027, 4, 6))
+    voting.set_member_picks(s["id"], mid, ["AAPL"])
+    closed = voting.close_and_select(s["id"])
+    _use(monkeypatch, RunClient(quotes={"AAPL": 200.0}, positions=[], buying_power=1000, total_value=1000))
+
+    summary = executor.run(closed, force_dry_run=True, phase="buy")
+
+    assert _buy_status(summary, mid, "AAPL") == "reviewed"   # account empty → rebuys
+
+
+def test_buy_holds_when_account_already_at_target(monkeypatch):
+    """Same ledger, but now the ACCOUNT really holds 0.03 AAPL (~$6 ≥ $5 target)
+    → account-sizing sees it's at target and does NOT re-buy."""
+    mid = _member("buy-attarget@x.com", alloc_type="dollar", alloc_value=5.0)
+    executor._record(80002, mid, "AAPL", 5.0, "y", "placed",
+                     place={"data": {"order": {"cumulative_quantity": "0.03"}}})
+    s = voting.open_session_for(datetime.date(2027, 4, 8))
+    voting.set_member_picks(s["id"], mid, ["AAPL"])
+    closed = voting.close_and_select(s["id"])
+    _use(monkeypatch, RunClient(quotes={"AAPL": 200.0}, positions=[("AAPL", 0.03, 190.0)],
+                                buying_power=1000, total_value=1000))
+
+    summary = executor.run(closed, force_dry_run=True, phase="buy")
+
+    assert _buy_status(summary, mid, "AAPL") == "held"      # account holds it → no re-buy

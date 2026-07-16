@@ -400,10 +400,11 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
         basket = picks[:n_eff]
         per_pick = math.floor((budget / n_eff) * 100) / 100.0
         want = set(basket)
-        # live quantities actually in the account — we never request more than this
-        # (the club estimate can run slightly high → EQUITY_MAX_SELL_SHARES_EXCEEDED).
-        live = {p["symbol"]: p["quantity"] for p in positions.live_positions(mid)} \
-            if phase in ("sell", "both") else {}
+        # Live account holdings — the source of truth for BOTH the sell cap (never
+        # request more than actually held) AND buy sizing (below). Fetched every
+        # phase now (including buy days), so buy sizing reads the real account, not
+        # the remembered ledger.
+        live = {p["symbol"]: p["quantity"] for p in positions.live_positions(mid)}
         prices = _quotes(client, list(want | set(held)))
         msum["buying_power"] = round(buying_power, 2)
         msum["allocation"] = round(budget, 2)
@@ -544,7 +545,11 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
                         error="no quote for sizing")
                 msum["orders"].append({"symbol": symbol, "side": "buy", "status": "skipped", "note": "no quote"})
                 continue
-            held_val = held.get(symbol, 0.0) * price
+            # How much of this name is ALREADY held — read from the live account
+            # (buy_sizing_account) so a drifted/stale ledger or a manual sale can't
+            # mis-size the top-up; fall back to the club ledger only if disabled.
+            held_now = live.get(symbol, 0.0) if settings.buy_sizing_account else held.get(symbol, 0.0)
+            held_val = held_now * price
             need = round(per_pick - held_val, 2)
             if need < 1.00:
                 msum["orders"].append({"symbol": symbol, "side": "buy", "status": "held",
