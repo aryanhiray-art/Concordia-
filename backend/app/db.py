@@ -43,9 +43,11 @@ CREATE TABLE IF NOT EXISTS member_settings (
     buying_power_pct REAL NOT NULL DEFAULT 0,
     daily_cap_usd    REAL NOT NULL DEFAULT 0,
     max_orders       INTEGER NOT NULL DEFAULT 25,
-    voting_power     REAL NOT NULL DEFAULT 0,         -- current weight = allocated $ stake
+    voting_power     REAL NOT NULL DEFAULT 0,         -- current weight (blended when POWER_MODEL=blend)
     alloc_type       TEXT NOT NULL DEFAULT 'percent', -- 'percent' | 'dollar'
     alloc_value      REAL NOT NULL DEFAULT 0,         -- pct of buying power, or fixed USD
+    accuracy            REAL NOT NULL DEFAULT 0,      -- EWMA vote-weighted excess return vs benchmark (signed)
+    cycles_participated INTEGER NOT NULL DEFAULT 0,   -- scored cycles → confidence ramp
     updated_at       INTEGER NOT NULL
 );
 
@@ -94,7 +96,8 @@ CREATE TABLE IF NOT EXISTS vote_sessions (
     closes_at  INTEGER,                               -- epoch of the lock time
     closed_at  INTEGER,
     top_n      INTEGER NOT NULL,
-    picks_json TEXT                                   -- set at close
+    picks_json TEXT,                                  -- set at close
+    scored_at  INTEGER                                -- when reputation scored this cycle's picks (idempotency)
 );
 
 CREATE TABLE IF NOT EXISTS votes (
@@ -104,6 +107,17 @@ CREATE TABLE IF NOT EXISTS votes (
     weight     REAL NOT NULL DEFAULT 100,    -- % of this member's voting power on this pick
     created_at INTEGER NOT NULL,
     PRIMARY KEY (session_id, member_id, symbol)
+);
+
+-- Entry price of every VOTED symbol (+ the benchmark) captured at session close,
+-- so a member's vote-weighted return vs the benchmark can be scored a cycle later
+-- (accuracy = paper basis on what you backed, even picks that lost the vote).
+CREATE TABLE IF NOT EXISTS cycle_prices (
+    session_id  INTEGER NOT NULL REFERENCES vote_sessions(id) ON DELETE CASCADE,
+    symbol      TEXT NOT NULL,                        -- ticker, or the benchmark symbol
+    price       REAL NOT NULL,
+    captured_at INTEGER NOT NULL,
+    PRIMARY KEY (session_id, symbol)
 );
 
 -- A bot's per-session picks with the price at vote time, so we can score the
@@ -202,7 +216,7 @@ def init_db() -> None:
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Add columns to pre-existing tables (deployed DBs predate these fields)."""
-    _ALLOWED = {"members", "member_settings", "votes"}
+    _ALLOWED = {"members", "member_settings", "votes", "vote_sessions"}
 
     def cols(t: str) -> set[str]:
         assert t in _ALLOWED, f"unexpected table {t!r}"  # PRAGMA can't be parameterized
@@ -228,6 +242,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE member_settings ADD COLUMN alloc_type TEXT NOT NULL DEFAULT 'percent'")
     if "alloc_value" not in s:
         conn.execute("ALTER TABLE member_settings ADD COLUMN alloc_value REAL NOT NULL DEFAULT 0")
+    # Reputation (blended voting power): per-member EWMA accuracy + confidence ramp.
+    if "accuracy" not in s:
+        conn.execute("ALTER TABLE member_settings ADD COLUMN accuracy REAL NOT NULL DEFAULT 0")
+    if "cycles_participated" not in s:
+        conn.execute("ALTER TABLE member_settings ADD COLUMN cycles_participated INTEGER NOT NULL DEFAULT 0")
+    if "scored_at" not in cols("vote_sessions"):
+        conn.execute("ALTER TABLE vote_sessions ADD COLUMN scored_at INTEGER")
 
 
 # ─── kv flags ────────────────────────────────────────────────────────────────

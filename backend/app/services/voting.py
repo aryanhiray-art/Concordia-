@@ -344,6 +344,14 @@ def close_and_select(session_id: int) -> dict:
         return dict(row)  # another closer won the race — return their result
     audit("system", "close_session", row["trade_date"],
           {"picks": [p["symbol"] for p in picks], "voters": voter_count(session_id)})
+    # Capture entry prices for accuracy scoring a cycle later. Runs regardless of
+    # POWER_MODEL so the price history is already there whenever blend is switched
+    # on. Best-effort — never let a quote hiccup fail the close.
+    try:
+        from . import reputation
+        reputation.capture_cycle_prices(session_id)
+    except Exception:  # noqa: BLE001
+        pass
     return dict(row)
 
 

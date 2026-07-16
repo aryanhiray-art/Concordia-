@@ -110,7 +110,19 @@ def snapshot_member(member_id: int, week: str | None = None) -> dict | None:
 
 
 def snapshot_all() -> list[dict]:
-    """Re-allocate voting power for every connected member (the Sunday job)."""
+    """Re-allocate voting power for every member (the Sunday job).
+
+    POWER_MODEL=blend delegates to the ETHGlobal 50/50 capital+accuracy model
+    (reputation.resolve_and_snapshot: score matured cycles, then snapshot everyone,
+    humans + bots, one formula). Legacy 'stake' mode = committed stake per member.
+    """
+    from ..config import settings
+    if settings.power_model == "blend":
+        from . import reputation
+        res = reputation.resolve_and_snapshot()
+        return [{"member_id": s["member_id"], "week_start": week_start_et(), "power": s["power"],
+                 "equity": s["capital"], "prev_power": None, "delta": s["delta"]}
+                for s in res["power"]]
     week = week_start_et()
     with db() as conn:
         ids = [r["member_id"] for r in conn.execute(

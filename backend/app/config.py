@@ -127,6 +127,20 @@ class Settings:
     # gate on the club ledger (never sell a member's personal shares).
     buy_sizing_account: bool = _bool("BUY_SIZING_ACCOUNT", True)
 
+    # ── Voting-power model (the ETHGlobal Concordia 50/50 formula) ──
+    # 'stake'  = voting power is committed stake only (legacy).
+    # 'blend'  = VP = capital_share·CAPITAL + (accuracy_share·confidence)·ACCURACY,
+    #            i.e. money AND merit. OFF by default so shipping the code doesn't
+    #            change live weights until you set POWER_MODEL=blend. Cold start:
+    #            with no accuracy history yet, 'blend' reduces to pure stake, so
+    #            the switch is seamless and accuracy phases in over CONFIDENCE_CYCLES.
+    power_model: str = os.environ.get("POWER_MODEL", "stake").strip().lower()
+    capital_bps: int = _int("CAPITAL_BPS", 5000)          # 50% capital weight
+    accuracy_bps: int = _int("ACCURACY_BPS", 5000)        # 50% accuracy weight
+    ewma_alpha_bps: int = _int("EWMA_ALPHA_BPS", 2500)    # 0.25 accuracy smoothing
+    confidence_cycles: int = _int("CONFIDENCE_CYCLES", 12)  # accuracy phase-in length
+    benchmark_symbol: str = os.environ.get("BENCHMARK_SYMBOL", "SPY").strip().upper()
+
     @property
     def rh_redirect_uri(self) -> str:
         # localhost only (Robinhood agentic requirement). Override via env if
