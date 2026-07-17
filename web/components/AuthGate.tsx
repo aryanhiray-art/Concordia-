@@ -10,6 +10,7 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
   const [invite, setInvite] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPw, setShowPw] = useState(false);
   const [name, setName] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -73,9 +74,20 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
           )}
           <div>
             <label className="label mb-2">Password</label>
-            <input className="input" placeholder={mode === "signup" ? "Create a password (8+ chars)" : "Your password"}
-              type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-              autoComplete={mode === "signup" ? "new-password" : "current-password"} />
+            <div className="relative">
+              <input className="input pr-11" placeholder={mode === "signup" ? "Create a password (8+ chars)" : "Your password"}
+                type={showPw ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)}
+                autoComplete={mode === "signup" ? "new-password" : "current-password"} />
+              <button type="button" onClick={() => setShowPw((s) => !s)} tabIndex={-1}
+                aria-label={showPw ? "Hide password" : "Show password"} title={showPw ? "Hide password" : "Show password"}
+                className="absolute inset-y-0 right-0 flex items-center pr-3.5 text-subtle transition-colors hover:text-teal">
+                {showPw ? (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9.9 4.24A9.1 9.1 0 0 1 12 4c7 0 10 8 10 8a18.4 18.4 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" /><path d="M6.6 6.6A18.4 18.4 0 0 0 2 12s3 8 10 8a9.1 9.1 0 0 0 5.4-1.6" /><path d="M2 2l20 20" /></svg>
+                ) : (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3-8 10-8 10 8 10 8-3 8-10 8-10-8-10-8Z" /><circle cx="12" cy="12" r="3" /></svg>
+                )}
+              </button>
+            </div>
           </div>
           {err && <div className="text-[13px] text-red">⚠ {err}</div>}
           <Button type="submit" variant="go" className="w-full !py-3.5" busy={busy}>
