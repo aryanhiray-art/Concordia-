@@ -175,14 +175,21 @@ def test_confidence_ramp_damps_new_members(monkeypatch):
     assert snaps[a]["confidence"] == pytest.approx(0.5)
 
 
-def test_bot_capital_zero_earns_via_accuracy(monkeypatch):
-    """A bot holds no capital → weight comes purely from accuracy (× confidence)."""
+def test_bot_fake_stake_participates_like_human(monkeypatch):
+    """Bots carry a FAKE stake (BOT_STAKE_USD) so they vote as funded members: cold
+    start → power == the fake stake; accuracy then tilts it exactly like a human."""
+    from app.config import settings
     human = _member("bz-h@x.com", alloc_value=100.0)
     bot = _member("bz-bot@x.com", is_bot=1, connect=False)
-    _set(bot, accuracy=0.1, cycles_participated=12)
-    _set(human, accuracy=0.0, cycles_participated=12)
     _mock_balance(monkeypatch, {human: {"total_value": 1000, "buying_power": 1000}})
-    snaps = {s["member_id"]: s for s in reputation.snapshot_power_all()}
-    assert snaps[bot]["capital"] == 0.0
-    assert snaps[bot]["power"] == pytest.approx(50.0)     # accuracy half of the $100 human pool
-    assert snaps[human]["power"] == pytest.approx(50.0)
+
+    cold = {s["member_id"]: s for s in reputation.snapshot_power_all()}
+    assert cold[bot]["capital"] == pytest.approx(settings.bot_stake_usd)   # fake stake, not 0
+    assert cold[bot]["power"] == pytest.approx(100.0)                      # cold start == its stake
+    assert cold[human]["power"] == pytest.approx(100.0)
+
+    _set(bot, accuracy=0.1, cycles_participated=12)                        # bot proves accuracy
+    _set(human, accuracy=0.0, cycles_participated=12)
+    hot = {s["member_id"]: s for s in reputation.snapshot_power_all()}
+    assert hot[bot]["power"] == pytest.approx(150.0)                       # stake share + accuracy half
+    assert hot[human]["power"] == pytest.approx(50.0)

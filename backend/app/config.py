@@ -140,6 +140,11 @@ class Settings:
     ewma_alpha_bps: int = _int("EWMA_ALPHA_BPS", 2500)    # 0.25 accuracy smoothing
     confidence_cycles: int = _int("CONFIDENCE_CYCLES", 12)  # accuracy phase-in length
     benchmark_symbol: str = os.environ.get("BENCHMARK_SYMBOL", "SPY").strip().upper()
+    # While bots are test stand-ins for humans they carry a FAKE stake (capital),
+    # so under blend they participate like funded members instead of collapsing to
+    # $0 (they hold no real money). Lower toward 0 as real humans join and the bots
+    # should fade. Set BOT_STAKE_USD=0 to make bots pure-accuracy (no fake capital).
+    bot_stake_usd: float = _float("BOT_STAKE_USD", 100.0)
 
     @property
     def rh_redirect_uri(self) -> str:

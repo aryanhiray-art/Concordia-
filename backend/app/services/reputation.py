@@ -138,10 +138,11 @@ def score_matured_cycles() -> list[dict]:
 # ── blended power snapshot ───────────────────────────────────────────────────
 
 def _member_capital(m: dict) -> float:
-    """Committed stake ($) — the CapitalShare numerator. Bots hold no real money,
-    so their capital is 0: they earn voting weight only by demonstrated accuracy."""
+    """Committed stake ($) — the CapitalShare numerator. Bots hold no real money;
+    while they're test stand-ins for humans they carry a FAKE stake (bot_stake_usd)
+    so they vote as funded members. Set BOT_STAKE_USD=0 to make bots pure-accuracy."""
     if m["is_bot"]:
-        return 0.0
+        return float(settings.bot_stake_usd)
     bal = alloc.member_balance(m["member_id"])
     if not bal:
         return 0.0
