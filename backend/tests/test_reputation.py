@@ -193,3 +193,64 @@ def test_bot_fake_stake_participates_like_human(monkeypatch):
     hot = {s["member_id"]: s for s in reputation.snapshot_power_all()}
     assert hot[bot]["power"] == pytest.approx(150.0)                       # stake share + accuracy half
     assert hot[human]["power"] == pytest.approx(50.0)
+
+
+# ─── fail-safe snapshot + scoring gates (re-audit ranks 4, 10) ───────────────
+
+def test_snapshot_skips_member_on_failed_balance_read(monkeypatch):
+    """A CONNECTED member whose live balance read FAILS is SKIPPED — prior power is
+    carried, never overwritten with 0 (fail-safe, not the fail-open regression)."""
+    a = _member("fs-a@x.com", alloc_value=100.0)
+    b = _member("fs-b@x.com", alloc_value=100.0)
+    _set(b, voting_power=77.0)                       # B has prior power to preserve
+    _mock_balance(monkeypatch, {a: {"total_value": 1000, "buying_power": 1000}})  # B absent → None (failed read)
+
+    snaps = {s["member_id"]: s for s in reputation.snapshot_power_all()}
+
+    assert a in snaps and b not in snaps             # A written, B skipped
+    with db() as c:
+        vp = c.execute("SELECT voting_power FROM member_settings WHERE member_id=?", (b,)).fetchone()["voting_power"]
+        zeros = c.execute("SELECT COUNT(*) n FROM voting_power_history WHERE member_id=? AND power=0", (b,)).fetchone()["n"]
+    assert vp == pytest.approx(77.0)                 # carried forward, NOT zeroed
+    assert zeros == 0                                # no power=0 history row
+
+
+def test_score_skips_non_measurement(monkeypatch):
+    """used==0 (no pick had both an entry AND exit price) → accuracy + cycles unchanged."""
+    mid = _member("nm@x.com")
+    _set(mid, accuracy=0.08, cycles_participated=5)
+    s1 = voting.open_session_for(datetime.date(2027, 6, 1))
+    voting.set_member_picks(s1["id"], mid, ["AAPL"])
+    monkeypatch.setattr(reputation.market, "quotes", lambda syms: {"AAPL": 200.0, "SPY": 400.0})
+    reputation.capture_cycle_prices(s1["id"])
+    s2 = voting.open_session_for(datetime.date(2027, 6, 3))   # AAPL NOT re-voted → no exit price
+    monkeypatch.setattr(reputation.market, "quotes", lambda syms: {"SPY": 420.0})
+    reputation.capture_cycle_prices(s2["id"])
+
+    reputation.score_matured_cycles()
+
+    acc, cyc = _acc(mid)
+    assert acc == pytest.approx(0.08) and cyc == 5   # non-measurement did NOT decay/ramp
+
+
+def test_score_skips_cycle_when_benchmark_missing(monkeypatch):
+    """No benchmark price → the cycle is NOT sealed (scored_at stays NULL) so it retries,
+    instead of silently scoring raw return."""
+    mid = _member("bench@x.com")
+    _set(mid, accuracy=0.05, cycles_participated=3)
+    s1 = voting.open_session_for(datetime.date(2027, 6, 8))
+    voting.set_member_picks(s1["id"], mid, ["AAPL"])
+    monkeypatch.setattr(reputation.market, "quotes", lambda syms: {"AAPL": 200.0})   # NO SPY
+    reputation.capture_cycle_prices(s1["id"])
+    s2 = voting.open_session_for(datetime.date(2027, 6, 10))
+    voting.set_member_picks(s2["id"], mid, ["AAPL"])
+    monkeypatch.setattr(reputation.market, "quotes", lambda syms: {"AAPL": 220.0})   # NO SPY
+    reputation.capture_cycle_prices(s2["id"])
+
+    reputation.score_matured_cycles()
+
+    with db() as c:
+        scored_at = c.execute("SELECT scored_at FROM vote_sessions WHERE id=?", (s1["id"],)).fetchone()["scored_at"]
+    acc, cyc = _acc(mid)
+    assert scored_at is None                         # not sealed → will retry with real benchmark
+    assert acc == pytest.approx(0.05) and cyc == 3   # untouched

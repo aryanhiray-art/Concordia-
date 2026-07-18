@@ -79,7 +79,13 @@ def score_cycle(scored_session_id: int, exit_prices: dict[str, float]) -> dict:
     entry = _prices_for(scored_session_id)
     bench = settings.benchmark_symbol
     be, bx = entry.get(bench), exit_prices.get(bench)
-    sp_ret = (bx / be - 1.0) if (be and bx) else 0.0
+    if not be or not bx:
+        # No benchmark price on one side → can't compute excess-vs-benchmark. SKIP the
+        # whole cycle (caller must NOT set scored_at) so it retries with real data,
+        # rather than silently scoring RAW return (sp_ret=0) and sealing it.
+        return {"scored_session": scored_session_id, "scored": False,
+                "reason": "missing_benchmark_price", "members": []}
+    sp_ret = bx / be - 1.0
     with db() as conn:
         rows = conn.execute(
             "SELECT member_id, symbol, weight FROM votes WHERE session_id=?", (scored_session_id,)).fetchall()
@@ -97,6 +103,12 @@ def score_cycle(scored_session_id: int, exit_prices: dict[str, float]) -> dict:
                 continue
             this += (w / 100.0) * ((x / e - 1.0) - sp_ret)   # vote-weighted excess vs benchmark
             used += 1
+        if used == 0:
+            # Not a single pick had both an entry AND exit price → this is a NON-
+            # measurement, not "the member scored 0". Do NOT decay their accuracy or
+            # ramp their confidence on it.
+            scored.append({"member_id": mid, "picks_scored": 0, "skipped": "no_measurable_picks"})
+            continue
         with db() as conn:
             row = conn.execute("SELECT accuracy FROM member_settings WHERE member_id=?", (mid,)).fetchone()
             old = float(row["accuracy"]) if row and row["accuracy"] is not None else 0.0
@@ -106,8 +118,8 @@ def score_cycle(scored_session_id: int, exit_prices: dict[str, float]) -> dict:
                 "WHERE member_id=?", (new, int(time.time()), mid))
         scored.append({"member_id": mid, "cycle_excess_pct": round(this * 100, 3),
                        "accuracy": round(new, 5), "picks_scored": used})
-    return {"scored_session": scored_session_id, "benchmark_return_pct": round(sp_ret * 100, 3),
-            "members": scored}
+    return {"scored_session": scored_session_id, "scored": True,
+            "benchmark_return_pct": round(sp_ret * 100, 3), "members": scored}
 
 
 def score_matured_cycles() -> list[dict]:
@@ -127,8 +139,13 @@ def score_matured_cycles() -> list[dict]:
         if not nxt:
             continue   # not matured yet — no exit prices captured for a later cycle
         res = score_cycle(s["id"], _prices_for(nxt["id"]))
+        if not res.get("scored"):
+            continue   # e.g. missing benchmark price — leave unscored so it retries
         with db() as conn:
-            conn.execute("UPDATE vote_sessions SET scored_at=? WHERE id=?", (int(time.time()), s["id"]))
+            # Claim atomically (guard scored_at IS NULL) so a concurrent run / retry
+            # can't double-apply the non-idempotent EWMA to the same cycle.
+            conn.execute("UPDATE vote_sessions SET scored_at=? WHERE id=? AND scored_at IS NULL",
+                         (int(time.time()), s["id"]))
         out.append(res)
     if out:
         audit("system", "accuracy_scored", None, {"cycles": len(out)})
@@ -158,6 +175,24 @@ def _member_equity(m: dict) -> float:
     return ((bal.get("total_value") if bal else None) or 0.0)
 
 
+def _member_snapshot_inputs(m: dict) -> tuple[float, float, bool]:
+    """(capital, equity, ok) from ONE balance fetch. ok=False means a CONNECTED
+    member's live balance read FAILED (transient Robinhood error) — the caller must
+    SKIP the write and carry the member's prior power, never persist a 0 from a
+    failed read (that would collapse a funded member's vote for a whole week)."""
+    if m["is_bot"]:
+        fs = float(settings.bot_stake_usd)
+        return fs, fs, True
+    if (m.get("rh_status") or "") != "connected":
+        return 0.0, 0.0, True   # legitimately uncommitted — no connected account, genuine 0
+    bal = alloc.member_balance(m["member_id"])
+    if not bal:
+        return 0.0, 0.0, False  # connected but the read FAILED — do NOT zero their power
+    cap = alloc.rebalance_budget(m["alloc_type"], m["alloc_value"],
+                                 bal.get("total_value"), bal.get("buying_power")) or 0.0
+    return cap, (bal.get("total_value") or 0.0), True
+
+
 def snapshot_power_all() -> list[dict]:
     """Blended VP for every member. Peer-relative shares, then rescaled to the $
     capital pool so numbers stay dollar-readable and cold-start (no accuracy) == the
@@ -165,18 +200,24 @@ def snapshot_power_all() -> list[dict]:
     with db() as conn:
         members = [dict(r) for r in conn.execute(
             "SELECT m.id AS member_id, COALESCE(m.is_bot,0) AS is_bot, s.alloc_type, s.alloc_value, "
-            "       COALESCE(s.accuracy,0) AS accuracy, COALESCE(s.cycles_participated,0) AS cycles_participated "
-            "FROM members m JOIN member_settings s ON s.member_id=m.id").fetchall()]
-    caps = {m["member_id"]: max(0.0, _member_capital(m)) for m in members}
-    eqs = {m["member_id"]: _member_equity(m) for m in members}   # real account value for history/graph
+            "       COALESCE(s.accuracy,0) AS accuracy, COALESCE(s.cycles_participated,0) AS cycles_participated, "
+            "       a.status AS rh_status "
+            "FROM members m JOIN member_settings s ON s.member_id=m.id "
+            "LEFT JOIN rh_accounts a ON a.member_id=m.id").fetchall()]
+    inputs = {m["member_id"]: _member_snapshot_inputs(m) for m in members}
+    # FAIL-SAFE: drop members whose live balance read failed — carry their prior power.
+    active = [m for m in members if inputs[m["member_id"]][2]]
+    skipped = [m["member_id"] for m in members if not inputs[m["member_id"]][2]]
+    caps = {m["member_id"]: max(0.0, inputs[m["member_id"]][0]) for m in active}
+    eqs = {m["member_id"]: inputs[m["member_id"]][1] for m in active}   # real account value for history/graph
     total_cap = sum(caps.values())
-    total_pos_acc = sum(max(0.0, float(m["accuracy"])) for m in members)
+    total_pos_acc = sum(max(0.0, float(m["accuracy"])) for m in active)
     cap_w = settings.capital_bps / 1e4
     acc_w = settings.accuracy_bps / 1e4
     conf_n = max(1, settings.confidence_cycles)
 
     raw: dict[int, float] = {}
-    for m in members:
+    for m in active:
         mid = m["member_id"]
         cap_share = (caps[mid] / total_cap) if total_cap > 0 else 0.0
         acc_share = (max(0.0, float(m["accuracy"])) / total_pos_acc) if total_pos_acc > 0 else 0.0
@@ -187,7 +228,7 @@ def snapshot_power_all() -> list[dict]:
     week = power_svc.week_start_et()
     now = int(time.time())
     out = []
-    for m in members:
+    for m in active:
         mid = m["member_id"]
         # rescale to the $ pool: cold-start (all accuracy 0) → power == raw stake
         vp = round((total_cap * raw[mid] / total_raw) if total_raw > 0 else caps[mid], 2)
@@ -205,7 +246,7 @@ def snapshot_power_all() -> list[dict]:
                     "accuracy": round(float(m["accuracy"]), 5),
                     "confidence": round(min(float(m["cycles_participated"]) / conf_n, 1.0), 3),
                     "power": vp, "delta": delta})
-    audit("system", "blended_power", week, {"members": len(out)})
+    audit("system", "blended_power", week, {"members": len(out), "skipped_read_fail": skipped})
     return out
 
 

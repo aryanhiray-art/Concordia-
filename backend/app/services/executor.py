@@ -173,12 +173,15 @@ def _error_buy_rows(session_id: int) -> dict[tuple[int, str], dict]:
 
 
 def _fetch_recent_orders(client, account_number: str) -> list[dict]:
-    """The member's recent equity orders, normalized to a flat list of dicts.
+    """The member's recent AGENTIC equity orders, normalized to a flat list.
 
-    Payload shape can be {data:{orders:[...]}} / {data:{results:[...]}} /
-    {data:[...]} / a bare list — handle defensively (same as find_agentic_account).
+    CRITICAL: request placed_agent='agentic' and drop anything not agentic — the
+    club/personal safety boundary (mirrors reconcile._fetch_agentic_orders). A
+    member's personal ('user') order must NEVER reach A4 buy-recovery, or a coincidental
+    personal buy could be matched into a phantom club holding and later market-sell the
+    member's PERSONAL shares. Payload shape handled defensively.
     """
-    payload = client.get_equity_orders(account_number)
+    payload = client.get_equity_orders(account_number, placed_agent="agentic")
     data = payload.get("data", payload) if isinstance(payload, dict) else payload
     if isinstance(data, dict):
         orders = data.get("orders") or data.get("results") or []
@@ -186,7 +189,7 @@ def _fetch_recent_orders(client, account_number: str) -> list[dict]:
         orders = data
     else:
         orders = []
-    return [o for o in orders if isinstance(o, dict)]
+    return [o for o in orders if isinstance(o, dict) and o.get("placed_agent") in (None, "agentic")]
 
 
 def _order_ts(order: dict) -> float | None:
@@ -219,24 +222,29 @@ def _order_amount(order: dict) -> float | None:
 
 
 def _match_recovered_order(orders: list[dict], ref_id: str, symbol: str, side: str,
-                           window_start: float, amount: float | None) -> dict | None:
+                           window_start: float, amount: float | None,
+                           window_end: float | None = None) -> dict | None:
     """The broker order that IS our errored place, if any.
 
     Match on our deterministic ref_id when the MCP echoes it; otherwise on
-    symbol+side with a created time inside the session window and a dollar
-    amount within $0.02 of what we tried to place.
+    symbol+side with a created time inside [window_start, window_end] and a dollar
+    amount within $0.02 of what we tried to place. The upper time bound keeps a LATER
+    personal buy of the same name/amount from being fuzzy-matched as our errored order.
+    Only agentic (club) orders are considered — `orders` is already agentic-scoped.
     """
     for o in orders:
         oref = o.get("ref_id") or o.get("client_order_id")
         if oref and str(oref) == ref_id:
             return o
     for o in orders:
+        if o.get("placed_agent") not in (None, "agentic"):
+            continue                                     # never fuzzy-match a personal order
         if str(o.get("symbol") or "").upper() != symbol.upper():
             continue
         if str(o.get("side") or "").lower() != side:
             continue
         ts = _order_ts(o)
-        if ts is None or ts < window_start:
+        if ts is None or ts < window_start or (window_end is not None and ts > window_end):
             continue
         if amount is not None:
             oamt = _order_amount(o)
@@ -401,10 +409,15 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
         per_pick = math.floor((budget / n_eff) * 100) / 100.0
         want = set(basket)
         # Live account holdings — the source of truth for BOTH the sell cap (never
-        # request more than actually held) AND buy sizing (below). Fetched every
-        # phase now (including buy days), so buy sizing reads the real account, not
-        # the remembered ledger.
-        live = {p["symbol"]: p["quantity"] for p in positions.live_positions(mid)}
+        # request more than actually held) AND buy sizing (below). Use the STRICT
+        # variant: if the positions read FAILS, we must NOT treat it as an empty
+        # account (buy sizing would re-buy the full basket) — skip the member this
+        # run and let the next cycle retry. Fails safe on both sell and buy.
+        try:
+            live = {p["symbol"]: p["quantity"] for p in positions.live_positions_strict(mid)}
+        except Exception:  # noqa: BLE001
+            _skip_member(msum, "transient_rh_error", "could not read live positions — skipping this run")
+            continue
         prices = _quotes(client, list(want | set(held)))
         msum["buying_power"] = round(buying_power, 2)
         msum["allocation"] = round(budget, 2)
@@ -524,8 +537,13 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
                                            "note": "unverifiable prior error — manual check"})
                     continue
                 window_start = session.get("opened_at") or ((prior.get("created_at") or 0) - 3600)
+                # Upper bound: the broker order (if it filled) was created just BEFORE
+                # we recorded the error — bound the match to that instant + a small skew
+                # buffer so a later personal buy of the same name can't be fuzzy-matched.
+                window_end = (prior.get("created_at") or int(time.time())) + 300
                 matched = _match_recovered_order(recent_orders, ref_id, symbol, "buy",
-                                                 window_start, prior.get("dollar_amount"))
+                                                 window_start, prior.get("dollar_amount"),
+                                                 window_end=window_end)
                 if matched is not None:
                     place = {"_concord_recovered": True, "data": {"order": matched}}
                     px, amt = prices.get(symbol), prior.get("dollar_amount")

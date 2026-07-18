@@ -8,6 +8,7 @@ positions are read separately and only used for the one-time full reset.
 from __future__ import annotations
 
 import json
+import time
 
 from ..db import db
 from ..robinhood import vault
@@ -93,19 +94,38 @@ def holdings_with_value(member_id: int) -> list[dict]:
     return out
 
 
-def live_positions(member_id: int) -> list[dict]:
-    """All long positions in the member's account: [{symbol, quantity}]. Best-effort."""
+def live_positions_strict(member_id: int) -> list[dict]:
+    """Long positions [{symbol, quantity}], but RAISE on a read failure instead of
+    returning [] — so a caller can tell 'the account is empty' from 'the read failed'.
+    Buy-sizing MUST use this: a silent [] on a throttle/timeout would size every basket
+    name as held-nothing and re-buy the full basket. Retries once. No connected
+    account → [] (a genuine, non-failed empty)."""
     acct = vault.account_number_for(member_id)
     if not acct:
         return []
+    last = None
+    for attempt in range(2):
+        try:
+            client = vault.ensure_client(member_id)
+            pos = (client.get_positions(acct).get("data") or {}).get("positions") or []
+            out = []
+            for p in pos:
+                q = _num(p.get("quantity")) or 0.0
+                if p.get("type") == "long" and q > 1e-9 and p.get("symbol"):
+                    out.append({"symbol": p["symbol"], "quantity": q})
+            return out
+        except Exception as e:  # noqa: BLE001
+            last = e
+            if attempt == 0:
+                time.sleep(1.0)
+    raise RuntimeError(f"live_positions read failed for member {member_id}: {last}")
+
+
+def live_positions(member_id: int) -> list[dict]:
+    """Best-effort long positions — [] on ANY read failure (lenient). Use this only
+    where an empty result on failure is safe (dust cleanup, liquidation). Buy-sizing
+    must NOT use this — see live_positions_strict."""
     try:
-        client = vault.ensure_client(member_id)
-        pos = (client.get_positions(acct).get("data") or {}).get("positions") or []
+        return live_positions_strict(member_id)
     except Exception:  # noqa: BLE001
         return []
-    out = []
-    for p in pos:
-        q = _num(p.get("quantity")) or 0.0
-        if p.get("type") == "long" and q > 1e-9 and p.get("symbol"):
-            out.append({"symbol": p["symbol"], "quantity": q})
-    return out

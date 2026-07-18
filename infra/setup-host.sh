@@ -13,8 +13,12 @@ id concord &>/dev/null || useradd --system --create-home --home-dir "$CONCORD_HO
 
 echo "── 2. deploy code → $CONCORD_HOME ──"
 mkdir -p "$CONCORD_HOME"
+# --delete prunes anything absent from source. EXCLUDE the runtime-only dirs that
+# live under $CONCORD_HOME but not in the repo, or a redeploy destroys them:
+#   backups/ = the DB backup store (the DR job's output); .ssh/ = the off-box ship key.
 rsync -a --delete --exclude '.venv' --exclude 'node_modules' --exclude '.next' \
-      --exclude 'concord.db*' --exclude '.env' "$SRC"/ "$CONCORD_HOME"/
+      --exclude 'concord.db*' --exclude '.env' --exclude 'backups/' --exclude '.ssh/' \
+      "$SRC"/ "$CONCORD_HOME"/
 chown -R concord:concord "$CONCORD_HOME"
 chmod 700 "$CONCORD_HOME"
 

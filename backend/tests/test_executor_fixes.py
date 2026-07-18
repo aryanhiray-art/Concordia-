@@ -138,11 +138,14 @@ class FakeClient:
             for s in symbols if s in self.quotes_map
         ]}}
 
-    def get_equity_orders(self, acct):
-        self.calls.append(("get_equity_orders", acct))
+    def get_equity_orders(self, acct, cursor=None, placed_agent=None):
+        self.calls.append(("get_equity_orders", acct, placed_agent))
         if self.orders_exc is not None:
             raise self.orders_exc
-        return {"data": {"orders": self.orders_list}}
+        orders = self.orders_list
+        if placed_agent:   # real API filters server-side; untagged test orders == agentic
+            orders = [o for o in orders if o.get("placed_agent", "agentic") == placed_agent]
+        return {"data": {"orders": orders}}
 
     def review_market_buy(self, acct, symbol, amt):
         self.calls.append(("review_buy", acct, symbol, amt))
@@ -263,6 +266,27 @@ def test_verified_absent_prior_error_replaces_normally(monkeypatch):
     rows = _exec_rows(sid, mid, "AAPL", "buy")
     assert len(rows) == 1 and rows[0]["status"] == "reviewed"   # dry run reviews
     assert client.trades_for("review_buy", f"ACC{mid}", "AAPL")
+
+
+def test_a4_ignores_personal_order(monkeypatch):
+    """A prior errored club buy + a PERSONAL ('user') broker order of the same
+    name/amount is NOT matched by A4 (the fetch is agentic-scoped) → no phantom club
+    'placed' row; the club re-reviews its own buy instead of adopting personal shares."""
+    mid = _member("a4-personal@x.com")
+    closed = _closed_session(datetime.date(2026, 12, 11), mid, ["AAPL"])
+    sid = closed["id"]
+    executor._record(sid, mid, "AAPL", 500.0, executor.ref_id_for(sid, mid, "AAPL"),
+                     "error", error="place: boom")
+    personal = {"symbol": "AAPL", "side": "buy", "state": "filled", "dollar_amount": 500.0,
+                "placed_agent": "user", "created_at": int(time.time())}   # member's OWN order
+    client = FakeClient(quotes={"AAPL": 200.0}, orders=[personal])
+    _use_client(monkeypatch, client)
+
+    executor.run(closed, force_dry_run=True)
+
+    rows = _exec_rows(sid, mid, "AAPL", "buy")
+    assert len(rows) == 1 and rows[0]["status"] == "reviewed"    # re-reviewed, NOT phantom 'placed'
+    assert all(r["status"] != "placed" for r in rows)            # personal order never adopted
 
 
 # ─── A5: transient vs permanent Robinhood errors ─────────────────────────────
