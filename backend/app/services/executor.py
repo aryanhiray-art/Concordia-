@@ -439,11 +439,9 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
                 continue
             ref_id = ref_id_for(sid, mid, f"SELL:{symbol}")
             sell_qty = min(sell_qty, live.get(symbol, 0.0))   # cap to shares actually held
-            # A7: on a FULL exit, fills≠quotes leave dust (the club estimate runs a
-            # hair under the live quantity). If the leftover is dust-sized — ≤0.001
-            # shares or ≤$1 — it can only be club residue, so sweep the whole live
-            # quantity. A member's real personal position (≥$1) never trips this
-            # guard, because the guard is on the RESIDUAL itself being dust.
+            # A7: on a FULL exit, sweep a DUST residual (≤0.001sh or ≤$1) up to the
+            # live quantity so the position closes cleanly — but NEVER sweep a real
+            # personal position (a ≥$1 residual), so a member's own shares are safe.
             sweep = False
             if why == "exited basket":
                 live_qty = live.get(symbol, 0.0)
@@ -452,13 +450,16 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
                                      or (price is not None and residual * price <= 1.00)):
                     sell_qty, sweep = live_qty, True
                     why = "exited basket · dust swept"
-            # never round UP past what we hold; a sweep keeps broker precision (8dp)
-            # so the crumb itself isn't floored back into existence.
-            scale = 1e8 if sweep else 1e6
+            # A full exit sells at broker precision (8dp): a 6dp floor of an exact
+            # reconciled fill strands a ~1e-6 crumb every time. sell_qty is already
+            # capped to what we hold (and to the club estimate unless swept), so 8dp
+            # never reaches personal shares. Trims keep 6dp — the name is retained.
+            full_exit = why.startswith("exited basket")
+            scale = 1e8 if full_exit else 1e6
             qfloor = math.floor(sell_qty * scale) / scale
             if qfloor <= 0:
                 continue
-            qstr = f"{qfloor:.8f}" if sweep else f"{qfloor:.6f}"
+            qstr = f"{qfloor:.8f}" if full_exit else f"{qfloor:.6f}"
             try:
                 review = client.review_market_sell(m["account_number"], symbol, qstr)
             except Exception as e:  # noqa: BLE001

@@ -359,7 +359,7 @@ def test_exit_sell_never_sweeps_personal_position(monkeypatch):
 
     sells = client.trades_for("review_sell", f"ACC{mid}", "TSLA")
     assert len(sells) == 1
-    assert sells[0][3] == "1.000000"                     # est only, 6dp as before
+    assert sells[0][3] == "1.00000000"                   # est only (1.0), full-exit 8dp; personal 2.0 untouched
     order = next(o for o in _mrow(summary, mid)["orders"]
                  if o["symbol"] == "TSLA" and o["side"] == "sell")
     assert order["note"] == "exited basket"

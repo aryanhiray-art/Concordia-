@@ -150,6 +150,14 @@ def _member_capital(m: dict) -> float:
                                   bal.get("total_value"), bal.get("buying_power")) or 0.0
 
 
+def _member_equity(m: dict) -> float:
+    """Real account value ($) for the history/graph row (bots = their fake stake)."""
+    if m["is_bot"]:
+        return float(settings.bot_stake_usd)
+    bal = alloc.member_balance(m["member_id"])
+    return ((bal.get("total_value") if bal else None) or 0.0)
+
+
 def snapshot_power_all() -> list[dict]:
     """Blended VP for every member. Peer-relative shares, then rescaled to the $
     capital pool so numbers stay dollar-readable and cold-start (no accuracy) == the
@@ -160,6 +168,7 @@ def snapshot_power_all() -> list[dict]:
             "       COALESCE(s.accuracy,0) AS accuracy, COALESCE(s.cycles_participated,0) AS cycles_participated "
             "FROM members m JOIN member_settings s ON s.member_id=m.id").fetchall()]
     caps = {m["member_id"]: max(0.0, _member_capital(m)) for m in members}
+    eqs = {m["member_id"]: _member_equity(m) for m in members}   # real account value for history/graph
     total_cap = sum(caps.values())
     total_pos_acc = sum(max(0.0, float(m["accuracy"])) for m in members)
     cap_w = settings.capital_bps / 1e4
@@ -189,7 +198,7 @@ def snapshot_power_all() -> list[dict]:
                 "INSERT INTO voting_power_history(member_id,week_start,power,equity,prev_power,delta,created_at) "
                 "VALUES(?,?,?,?,?,?,?) ON CONFLICT(member_id,week_start) DO UPDATE SET "
                 "power=excluded.power, equity=excluded.equity, prev_power=excluded.prev_power, delta=excluded.delta",
-                (mid, week, vp, round(caps[mid], 2), prev, delta, now))
+                (mid, week, vp, round(eqs[mid], 2), prev, delta, now))
             conn.execute("UPDATE member_settings SET voting_power=?, updated_at=? WHERE member_id=?",
                          (vp, now, mid))
         out.append({"member_id": mid, "is_bot": bool(m["is_bot"]), "capital": round(caps[mid], 2),

@@ -67,20 +67,27 @@ def main() -> int:
         acct = vault.account_number_for(mid)
         if not acct:
             continue
+        # Live account holdings — we sell the FULL live quantity of each name so
+        # nothing fractional is left behind (a 6dp floor of a drifted ledger
+        # estimate strands crumbs). scope='all' liquidates every long position;
+        # 'club' liquidates only names the club bought (never personal symbols),
+        # but sells the entire live quantity OF those names so the position closes.
+        live = {p["symbol"]: p["quantity"] for p in positions.live_positions(mid)}
         if scope == "all":
-            held = {p["symbol"]: p["quantity"] for p in positions.live_positions(mid)}  # EVERY long position
+            names = list(live)
         else:
-            held = dict(positions.club_shares(mid))   # club-bought only — never personal holdings
-        if not held:
+            names = [s for s in positions.club_shares(mid) if live.get(s, 0.0) > 0]
+        if not names:
             print(f"[fresh_start] {m['display_name']}: account already all-cash")
             continue
         client = vault.ensure_client(mid)
         sold = []
-        for sym, q in held.items():
-            qfloor = math.floor(q * 1e6) / 1e6   # never request more than held
+        for sym in names:
+            q = live.get(sym, 0.0)                # the ENTIRE live position → no residue
+            qfloor = math.floor(q * 1e8) / 1e8   # broker precision (8dp), never above held
             if qfloor <= 0:
                 continue
-            qstr = f"{qfloor:.6f}"
+            qstr = f"{qfloor:.8f}"
             ref = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"freshstart:{mid}:{sym}"))
             try:
                 place = client.place_market_sell(acct, sym, qstr, ref_id=ref)

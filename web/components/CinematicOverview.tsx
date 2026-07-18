@@ -35,11 +35,17 @@ export function CinematicOverview() {
   }, []);
 
   const pnl = acc?.pnl;
-  const value = (hold.length ? hold.reduce((a, h) => a + h.value, 0) : null)
+  // The hero number = the member's REAL total account value (holdings + cash).
+  const value = (acc?.allocation?.balance?.total_value ?? null)
+    ?? (hold.length ? hold.reduce((a, h) => a + h.value, 0) : null)
     ?? (pnl && pnl.invested > 0 ? pnl.value : null)
-    ?? acc?.allocation?.resolved_usd
-    ?? acc?.allocation?.balance?.total_value ?? 0;
+    ?? acc?.allocation?.resolved_usd ?? 0;
   const pctTarget = (pnl && pnl.invested > 0 && pnl.profit_pct != null) ? pnl.profit_pct : 0;
+  // Real weekly account-value history (voting_power_history.equity) → the line
+  // plots ACTUAL values, not a canned market shape, once there are ≥2 points.
+  const equityHist = (acc?.power?.history || [])
+    .map((h) => h.equity).filter((e): e is number => e != null && e > 0);
+  const histKey = equityHist.join(",");
   // donut + holdings reflect what you actually HOLD; fall back to the consensus basket
   const basket = ((session?.picks?.length ? session.picks : session?.tally) || []);
   const items = hold.length
@@ -57,14 +63,30 @@ export function CinematicOverview() {
     const $ = (sel: string) => r.querySelector(sel) as any;
     const W = 1000, H = 600;
 
-    // ── build the value series: compress SPY daily returns to the real P&L ──
+    // ── build the value series ──
     const N = SPY.length;
-    const spyTot = SPY[N - 1] / SPY[0] - 1;
-    const k = spyTot !== 0 ? (pctTarget / 100) / spyTot : 0;
-    const fund = [1];
-    for (let i = 1; i < N; i++) fund.push(fund[i - 1] * (1 + (SPY[i] / SPY[i - 1] - 1) * (k || 0.18)));
-    const fsc = value / fund[N - 1];
-    const FUSD = fund.map((v) => v * fsc);
+    let FUSD: number[];
+    const anchors = equityHist.length ? [...equityHist, value] : [];
+    if (anchors.length >= 2) {
+      // REAL: interpolate the member's ACTUAL weekly account values to N smooth
+      // points, ending exactly at the live current value.
+      FUSD = [];
+      const segs = anchors.length - 1;
+      for (let i = 0; i < N; i++) {
+        const t = (i / (N - 1)) * segs;
+        const lo = Math.min(segs - 1, Math.floor(t)), f = t - lo;
+        FUSD.push(anchors[lo] * (1 - f) + anchors[lo + 1] * f);
+      }
+    } else {
+      // fallback (no history yet): a representative market shape scaled to the real
+      // current value + return, so at least the endpoints are exact.
+      const spyTot = SPY[N - 1] / SPY[0] - 1;
+      const k = spyTot !== 0 ? (pctTarget / 100) / spyTot : 0;
+      const fund = [1];
+      for (let i = 1; i < N; i++) fund.push(fund[i - 1] * (1 + (SPY[i] / SPY[i - 1] - 1) * (k || 0.18)));
+      const fsc = value / fund[N - 1];
+      FUSD = fund.map((v) => v * fsc);
+    }
     const DATES: string[] = [];
     const d0 = new Date(2026, 2, 1);
     for (let j = 0; j < N; j++) DATES.push(new Date(d0.getTime() + j * 1.4 * 864e5).toLocaleDateString("en-US", { month: "short", day: "numeric" }));
@@ -221,7 +243,7 @@ export function CinematicOverview() {
       window.removeEventListener("pointermove", pm); window.removeEventListener("pointerup", pu);
       stage.removeEventListener("wheel", onWheel as any);
     };
-  }, [value, pctTarget, itemsKey, itemsLabel, router]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [value, pctTarget, itemsKey, itemsLabel, histKey, router]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="cine" ref={root}>

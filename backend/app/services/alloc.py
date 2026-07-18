@@ -144,44 +144,27 @@ def member_allocation(member_id: int) -> dict:
 
 
 def club_pnl(member_id: int) -> dict:
-    """Unrealized P&L on the club's CURRENTLY-HELD shares for this member.
+    """Unrealized P&L on the member's LIVE holdings — current value vs the broker's
+    average cost basis, read straight from the account.
 
-    Shares = the sign-aware, fill-based net from positions.club_shares (buys −
-    sells, real fills preferred over the estimate). Cost basis + market value use
-    the broker's average buy price and the live quote, so a rotated-out name
-    doesn't distort the number. (finding #7 — the old version summed SELL share
-    quantities with NO sign, grossly misreporting P&L.)
+    Source = positions.holdings_with_value (the actual account), NOT the
+    reconstructed club_shares ledger: a member's MANUAL sale isn't recorded in the
+    ledger (reconcile only sees the club's own agentic orders), so after a manual
+    liquidate-then-rebuy the ledger double-counts and reports phantom positions /
+    2x invested. The account is the truth, so value + position count + cost basis
+    all come from it. (finding #7 + the manual-sale ledger-drift it exposed.)
     """
     from . import positions
-    shares = positions.club_shares(member_id)   # club-only, sign-aware, fill-based
-    if not shares:
+    holds = positions.holdings_with_value(member_id)   # live positions, valued vs avg cost
+    if not holds:
         return {"invested": 0.0, "value": 0.0, "profit": 0.0, "profit_pct": None, "positions": 0}
-    avg: dict[str, float] = {}
-    last: dict[str, float] = {}
-    try:
-        acct = vault.account_number_for(member_id)
-        client = vault.ensure_client(member_id)
-        pos = (client.get_positions(acct).get("data") or {}).get("positions") or []
-        for p in pos:
-            s = p.get("symbol")
-            if s:
-                avg[s] = _num(p.get("average_buy_price")) or 0.0
-        syms = list(shares)
-        for i in range(0, len(syms), 20):
-            res = (client.get_quotes(syms[i:i + 20]).get("data") or {}).get("results") or []
-            for e in res:
-                q = e.get("quote") or {}
-                if q.get("symbol"):
-                    last[q["symbol"]] = _num(q.get("last_trade_price")) or 0.0
-    except Exception:  # noqa: BLE001
-        pass
-    invested = sum(qty * (avg.get(sym) or last.get(sym) or 0.0) for sym, qty in shares.items())
-    value = sum(qty * (last.get(sym) or avg.get(sym) or 0.0) for sym, qty in shares.items())
-    profit = value - invested
+    value = sum(h.get("value") or 0.0 for h in holds)
+    profit = sum(h["pnl"] for h in holds if h.get("pnl") is not None)
+    invested = value - profit          # cost basis = current value − unrealized gain
     return {
         "invested": round(invested, 2),
         "value": round(value, 2),
         "profit": round(profit, 2),
         "profit_pct": round(profit / invested * 100, 2) if invested else None,
-        "positions": len(shares),
+        "positions": len(holds),
     }
