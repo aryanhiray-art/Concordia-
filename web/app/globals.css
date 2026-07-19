@@ -51,25 +51,43 @@ body {
 }
 .glass-2 { background: var(--panel2); }
 
-/* hover glint for glass cards — the exact Concordia .shine sweep */
+/* Glint for glass cards — the Concordia .shine sweep, now AMBIENT: a slow diagonal
+   light sweeps across on its own every ~7s (staggered per card), and hovering
+   triggers an immediate faster pass. */
 .shine { position: relative; overflow: hidden; }
 .shine::after {
-  content: ""; position: absolute; top: -50%; left: -40%; width: 42%; height: 200%; pointer-events: none; opacity: 0;
-  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.12), rgba(45, 212, 191, 0.06), transparent);
+  content: ""; position: absolute; top: -50%; left: -45%; width: 45%; height: 200%; pointer-events: none; opacity: 0;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.18), rgba(45, 212, 191, 0.10), transparent);
   transform: skewX(-18deg);
+  animation: glint 7s ease-in-out infinite;
 }
-.shine:hover::after { animation: sweep 1s var(--ease, cubic-bezier(.55,.05,.18,1)); }
-@keyframes sweep { 0% { left: -40%; opacity: 1; } 100% { left: 130%; opacity: 1; } }
+.shine:hover::after { animation: sweep 0.9s var(--ease, cubic-bezier(.55,.05,.18,1)); }
+@keyframes sweep { 0% { left: -45%; opacity: 1; } 100% { left: 130%; opacity: 1; } }
+/* the light is off-screen + invisible most of the cycle, then sweeps across fast */
+@keyframes glint {
+  0% { left: -45%; opacity: 0; }
+  6% { opacity: 1; }
+  20% { left: 130%; opacity: 0; }
+  100% { left: 130%; opacity: 0; }
+}
+/* stagger neighbouring cards so the sweeps don't fire in unison */
+.stagger > *:nth-child(1) .shine::after, .shine:nth-of-type(1)::after { animation-delay: 0s; }
+.stagger > *:nth-child(2) .shine::after { animation-delay: 1.4s; }
+.stagger > *:nth-child(3) .shine::after { animation-delay: 2.8s; }
+.stagger > *:nth-child(4) .shine::after { animation-delay: 4.2s; }
+.shine:nth-of-type(2)::after { animation-delay: 2.1s; }
+.shine:nth-of-type(3)::after { animation-delay: 3.5s; }
 
 /* same glint via an inset overlay — for cards that can't use overflow:hidden
    (e.g. the voting card, whose add-stock dropdown must escape the bounds) */
 .glint { position: absolute; inset: 0; z-index: 3; overflow: hidden; border-radius: inherit; pointer-events: none; }
 .glint::after {
-  content: ""; position: absolute; top: -50%; left: -40%; width: 42%; height: 200%; opacity: 0;
-  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.12), rgba(45, 212, 191, 0.06), transparent);
+  content: ""; position: absolute; top: -50%; left: -45%; width: 45%; height: 200%; opacity: 0;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.18), rgba(45, 212, 191, 0.10), transparent);
   transform: skewX(-18deg);
+  animation: glint 7s ease-in-out infinite 1s;
 }
-.glass:hover > .glint::after { animation: sweep 1s var(--ease, cubic-bezier(.55,.05,.18,1)); }
+.glass:hover > .glint::after { animation: sweep 0.9s var(--ease, cubic-bezier(.55,.05,.18,1)); }
 
 /* ── Label / inputs ─────────────────────────────────────────────────────── */
 .label {
@@ -213,6 +231,7 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .aurora::before, .aurora::after { animation: none; }
   .enter, .stagger > *, .dots > span { animation: none; }
+  .shine::after, .glint::after, .cnav::after { animation: none; opacity: 0; }
 }
 
 /* ═══ Concordia shell: floating glass nav ═══════════════════════════════ */
@@ -227,6 +246,12 @@ body {
   animation: navin 0.55s cubic-bezier(0.55,0.05,0.18,1) both;
 }
 @keyframes navin { from { opacity: 0; transform: translateX(-50%) translateY(-12px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+/* ambient glint sweep across the nav too */
+.cnav::after {
+  content: ""; position: absolute; top: -50%; left: -45%; width: 34%; height: 200%; pointer-events: none; opacity: 0;
+  background: linear-gradient(100deg, transparent, rgba(255,255,255,0.16), rgba(45,212,191,0.08), transparent);
+  transform: skewX(-18deg); animation: glint 8s ease-in-out infinite 2.4s;
+}
 .cnav-tabs { display: flex; gap: 3px; }
 .ctab { font: 500 13px/1 var(--font-inter), sans-serif; color: var(--muted); padding: 8px 11px; border-radius: 9px; transition: color .2s, background .2s; position: relative; cursor: pointer; white-space: nowrap; }
 .ctab:hover { color: var(--ink); background: rgba(255,255,255,0.04); }
