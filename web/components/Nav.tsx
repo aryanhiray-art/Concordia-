@@ -26,7 +26,7 @@ export function Nav() {
           <svg viewBox="0 0 24 24" aria-hidden><path d="M4 15l5-6 4 4 7-8" /><path d="M4 20h16" /></svg>
         </span>
         <b className="font-display text-[15px] font-semibold tracking-tight">
-          con<span className="text-teal">·</span>cordia
+          concordia
         </b>
       </Link>
 
