@@ -297,6 +297,13 @@ body {
 .cine .strip a { flex: 1; display: flex; align-items: center; justify-content: center; gap: 9px; padding: 13px 12px; border-radius: 11px; font: 600 13.5px/1 var(--font-inter); cursor: pointer; transition: background .2s; }
 .cine .strip a:hover { background: rgba(45,212,191,.08); }
 .cine .strip a svg { width: 17px; height: 17px; color: var(--teal); }
+/* hover glint on the Vote/Basket strip — same .shine sweep, hover-only */
+.cine .strip::after {
+  content: ""; position: absolute; top: -50%; left: -40%; width: 40%; height: 200%; pointer-events: none; opacity: 0;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.12), rgba(45, 212, 191, 0.06), transparent);
+  transform: skewX(-18deg);
+}
+.cine .strip:hover::after { animation: sweep 1s var(--ease, cubic-bezier(.55,.05,.18,1)); }
 .cine #stage[data-s="1"] .strip, .cine #stage[data-s="2"] .strip { opacity: 0; transform: translateX(-50%) translateY(14px); pointer-events: none; }
 .cine .perfx { position: absolute; left: var(--gutter); right: var(--gutter); bottom: 92px; z-index: 2; opacity: 0; transition: opacity .4s var(--ease) .12s; pointer-events: none; }
 .cine #stage[data-s="1"] .perfx { opacity: 1; pointer-events: auto; }
