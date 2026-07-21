@@ -660,6 +660,33 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
     summary["skipped"] = skips
     audit("system", "execute_done", session["trade_date"],
           {"mode": mode, "n_members": len(summary["members"])})
+    # Post-trade account verification (fail-safe — NEVER blocks or unwinds a run):
+    # read each live account and confirm the cycle's intent actually landed (no
+    # errored order left an un-sold position, dropped names are gone). Result rides
+    # in the summary + an audit row; a FAIL is the signal an operator/alert watches.
+    if will_place:
+        try:
+            from . import verify
+            v = verify.verify_all()
+            summary["verification"] = {"verdict": v["verdict"], "report": v["report"],
+                                       "members": [{"member_id": m["member_id"], "verdict": m["verdict"],
+                                                    "findings": m["findings"]} for m in v["members"]]}
+            audit("system", "verify_done", session["trade_date"],
+                  {"verdict": v["verdict"]})
+            # snapshot for the root-side gpt-5.5 narrator (it reads THIS file, never
+            # the concord DB — keeps the isolated user's DB/WAL owned by concord).
+            try:
+                import json as _json
+                import pathlib as _pl
+                d = _pl.Path(__file__).resolve().parents[2] / "data"
+                d.mkdir(exist_ok=True)
+                (d / "verify_last.json").write_text(_json.dumps(
+                    {"trade_date": session["trade_date"], "mode": mode,
+                     "verdict": v["verdict"], "report": v["report"], "at": int(time.time())}))
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception as e:  # noqa: BLE001
+            summary["verification"] = {"verdict": "SKIPPED", "error": f"{type(e).__name__}: {e}"}
     return summary
 
 

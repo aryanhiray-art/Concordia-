@@ -465,3 +465,73 @@ def test_opted_out_member_appears_with_skip_reason():
     assert voter_row["skip_reason"] == "not_connected"
     assert voter_row["note"] == "no connected agentic Robinhood account"
     assert {"member_id": voter, "reason": "not_connected"} in _skip_audits()
+
+
+# ─── post-trade account verification (services/verify.py) ─────────────────────
+
+from app.services import verify  # noqa: E402
+
+
+def test_verify_clean_account_passes(monkeypatch):
+    """Club holds AAPL (still in the basket), account matches, no errors → PASS."""
+    mid = _member("verify-clean@x.com")
+    executor._record(95001, mid, "AAPL", 200.0, "vref-1", "placed", place={"_concord_est_qty": 1.0})
+    _closed_session(datetime.date(2026, 12, 20), mid, ["AAPL"])  # AAPL is the current basket
+    client = FakeClient(quotes={"AAPL": 200.0}, positions=[("AAPL", "1.0")])
+    _use_client(monkeypatch, client)
+
+    res = verify.verify_member(mid)
+    assert res["verdict"] == "PASS"
+    assert any(f["code"] == "clean" for f in res["findings"])
+
+
+def test_verify_errored_order_fails(monkeypatch):
+    """An execution row the club recorded as errored surfaces as a FAIL."""
+    mid = _member("verify-err@x.com")
+    closed = _closed_session(datetime.date(2026, 12, 21), mid, ["AAPL"])
+    executor._record(closed["id"], mid, "MSFT", None, "vref-2", "error",
+                     error="sell: Order quantity cannot include fractional shares", side="sell")
+    client = FakeClient(quotes={"AAPL": 200.0}, positions=[])
+    _use_client(monkeypatch, client)
+
+    res = verify.verify_member(mid)
+    assert res["verdict"] == "FAIL"
+    assert any(f["code"] == "errored_order" and "MSFT" in f["msg"] for f in res["findings"])
+
+
+def test_verify_flat_flags_leftover(monkeypatch):
+    """expect_flat: a club name still held above dust means NOT fully sold → FAIL."""
+    mid = _member("verify-flat-bad@x.com")
+    executor._record(95003, mid, "AAPL", 200.0, "vref-3", "placed", place={"_concord_est_qty": 1.0})
+    client = FakeClient(quotes={"AAPL": 200.0}, positions=[("AAPL", "1.0")])  # $200 still held
+    _use_client(monkeypatch, client)
+
+    res = verify.verify_member(mid, expect_flat=True)
+    assert res["verdict"] == "FAIL"
+    assert any(f["code"] == "not_flat" and "AAPL" in f["msg"] for f in res["findings"])
+
+
+def test_verify_flat_ignores_dust(monkeypatch):
+    """expect_flat: a sub-$1 crumb is broker dust, not an un-sold holding → PASS."""
+    mid = _member("verify-flat-ok@x.com")
+    executor._record(95004, mid, "AAPL", 200.0, "vref-4", "placed", place={"_concord_est_qty": 1.0})
+    client = FakeClient(quotes={"AAPL": 200.0}, positions=[("AAPL", "0.001")])  # $0.20 dust
+    _use_client(monkeypatch, client)
+
+    res = verify.verify_member(mid, expect_flat=True)
+    assert res["verdict"] == "PASS"
+    assert any(f["code"] == "flat" for f in res["findings"])
+
+
+def test_verify_flags_dropped_name_not_sold(monkeypatch):
+    """A name DROPPED from the current basket but still held = a sell that didn't
+    complete → FAIL exit_incomplete."""
+    mid = _member("verify-stuck@x.com")
+    executor._record(95005, mid, "TSLA", 250.0, "vref-5", "placed", place={"_concord_est_qty": 1.0})
+    _closed_session(datetime.date(2026, 12, 22), mid, ["AAPL"])  # basket = AAPL; TSLA dropped
+    client = FakeClient(quotes={"AAPL": 200.0, "TSLA": 250.0}, positions=[("TSLA", "1.0")])
+    _use_client(monkeypatch, client)
+
+    res = verify.verify_member(mid)
+    assert res["verdict"] == "FAIL"
+    assert any(f["code"] == "exit_incomplete" and "TSLA" in f["msg"] for f in res["findings"])

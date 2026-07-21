@@ -1,0 +1,9 @@
+[Unit]
+Description=Concord verify-report — a few minutes after each execute (Mon-Fri)
+
+[Timer]
+OnCalendar=Mon-Fri 09:50 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

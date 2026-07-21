@@ -1,0 +1,11 @@
+[Unit]
+Description=Concord — gpt-5.5 narration of the latest post-cycle account verification
+After=concord-execute.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/concord/backend
+EnvironmentFile=/opt/concord/.env
+ExecStart=/opt/concord/backend/.venv/bin/python jobs/verify_narrate.py
+TimeoutStartSec=180
