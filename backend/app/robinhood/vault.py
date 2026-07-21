@@ -8,7 +8,10 @@
 """
 from __future__ import annotations
 
+import fcntl
 import json
+import os
+import tempfile
 import time
 
 from ..db import db, kv_get, kv_set, audit
@@ -88,15 +91,62 @@ def _persist_refreshed(member_id: int, bundle: dict) -> None:
         )
 
 
+def _refresh_lock(member_id: int):
+    """Advisory per-member lock file for serializing the token refresh (below)."""
+    path = os.path.join(tempfile.gettempdir(), f"concord-rhrefresh-{member_id}.lock")
+    try:
+        return open(path, "w")  # noqa: SIM115 — held only for the refresh critical section
+    except OSError:
+        return None
+
+
 def ensure_client(member_id: int) -> RobinhoodClient:
-    """Return a live client for the member, refreshing the access token if stale."""
+    """Return a live client for the member, refreshing the access token if stale.
+
+    Refresh is serialized PER MEMBER with DOUBLE-CHECKED LOCKING. Robinhood rotates
+    agentic refresh tokens, so two concurrent refreshes of the same member (there are
+    ~14 ensure_client call sites across the web app + timer jobs, and the daily
+    schedules overlap) redeem the SAME refresh token — RH's rotation-reuse detection
+    then revokes the whole token family, including the one the winner just persisted,
+    leaving a dead bundle that only a full re-OAuth fixes. That is the systemic cause
+    of members being forced to reconnect. The lock + re-load-inside-the-lock makes the
+    race-loser adopt the winner's freshly-rotated token instead of redeeming a spent
+    one. The fresh-token fast path takes NO lock.
+    """
     bundle = load_bundle(member_id)
     if not bundle:
         raise RuntimeError("member has no connected Robinhood account")
-    if not oauth.is_access_fresh(bundle):
-        bundle = oauth.refresh_bundle(bundle)
+    if oauth.is_access_fresh(bundle):
+        return RobinhoodClient(bundle["access_token"])
+
+    lf = _refresh_lock(member_id)
+    try:
+        if lf is not None:
+            fcntl.flock(lf, fcntl.LOCK_EX)      # block concurrent refreshers of THIS member
+            # double-check: the refresher we raced may have just persisted a fresh token
+            reloaded = load_bundle(member_id)
+            if reloaded:
+                bundle = reloaded
+                if oauth.is_access_fresh(bundle):
+                    return RobinhoodClient(bundle["access_token"])
+        # we hold the lock and the stored token is still stale → we are the refresher
+        try:
+            bundle = oauth.refresh_bundle(bundle)
+        except Exception:
+            # a 400 may be a rotation race won by a non-locked path — re-check the store
+            # once; if it now holds a fresh token, adopt it rather than stranding.
+            reloaded = load_bundle(member_id)
+            if reloaded and oauth.is_access_fresh(reloaded):
+                return RobinhoodClient(reloaded["access_token"])
+            raise
         _persist_refreshed(member_id, bundle)
-    return RobinhoodClient(bundle["access_token"])
+        return RobinhoodClient(bundle["access_token"])
+    finally:
+        if lf is not None:
+            try:
+                fcntl.flock(lf, fcntl.LOCK_UN)
+            finally:
+                lf.close()
 
 
 def complete_connection(member_id: int, bundle: dict) -> dict:

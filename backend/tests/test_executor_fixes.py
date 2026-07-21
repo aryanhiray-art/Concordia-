@@ -568,3 +568,70 @@ def test_verify_unpriced_holding_is_not_waved_through(monkeypatch):
     res = verify.verify_member(mid, expect_flat=True)
     assert res["verdict"] == "FAIL"
     assert any(f["code"] == "unpriced_holding" and "AAPL" in f["msg"] for f in res["findings"])
+
+
+# ─── club_shares re-architecture: feed-derived position (services/positions.py) ──
+
+from app.services import positions  # noqa: E402
+
+
+def _ord(sym, side, agent, cum):
+    return {"symbol": sym, "side": side, "placed_agent": agent, "cumulative_quantity": str(cum)}
+
+
+def test_derive_clean_and_net():
+    orders = [_ord("AAPL", "buy", "agentic", 2.0), _ord("AAPL", "buy", "agentic", 1.0),
+              _ord("AAPL", "sell", "agentic", 1.0)]
+    assert positions.club_position_from_orders(orders) == {"AAPL": 2.0}
+
+
+def test_derive_partial_fill_counts_cumulative():
+    # partially_filled: cumulative 6 of a 10-share order → counts 6
+    assert positions.club_position_from_orders([_ord("AAPL", "buy", "agentic", 6.0)])["AAPL"] == 6.0
+
+
+def test_derive_rejected_contributes_zero():
+    assert "AAPL" not in positions.club_position_from_orders([_ord("AAPL", "buy", "agentic", 0.0)])
+
+
+def test_derive_cancelled_after_partial_sell_still_subtracts():
+    orders = [_ord("X", "buy", "agentic", 10), _ord("X", "sell", "agentic", 4)]  # cancelled sell, cum 4
+    assert positions.club_position_from_orders(orders) == {"X": 6.0}
+
+
+def test_derive_personal_buy_excluded_none_and_user():
+    # asymmetric rule: BUY counts ONLY agentic
+    assert positions.club_position_from_orders([_ord("T", "buy", "user", 5)]) == {}
+    assert positions.club_position_from_orders([_ord("T", "buy", None, 5)]) == {}
+
+
+def test_derive_sell_rule_user_ignored_none_subtracted():
+    # SELL subtracts everything EXCEPT 'user'
+    assert positions.club_position_from_orders(
+        [_ord("X", "buy", "agentic", 10), _ord("X", "sell", "user", 5)]) == {"X": 10.0}
+    assert positions.club_position_from_orders(
+        [_ord("X", "buy", "agentic", 10), _ord("X", "sell", None, 4)]) == {"X": 6.0}
+
+
+def test_derived_intersects_club_traded_symbols(monkeypatch):
+    """A feed order on a symbol the club NEVER placed (a broker mis-tag) is dropped;
+    a real club-traded symbol is kept."""
+    mid = _member("derive-intersect@x.com")
+    executor._record(96001, mid, "AAPL", 200.0, "dref-1", "placed", place={"_concord_est_qty": 1.0})
+    client = FakeClient(orders=[_ord("AAPL", "buy", "agentic", 1.0),
+                                _ord("ZZZZ", "buy", "agentic", 9.0)])  # ZZZZ never club-traded
+    _use_client(monkeypatch, client)
+    positions.invalidate_feed_cache()
+    assert positions.club_shares_derived(mid) == {"AAPL": 1.0}
+
+
+def test_derived_read_failure_raises_incomplete(monkeypatch):
+    """A feed read error raises DerivationIncomplete (caller fails closed) — never
+    a silent empty that would strand sells / re-buy the basket."""
+    mid = _member("derive-fail@x.com")
+    executor._record(96002, mid, "AAPL", 200.0, "dref-2", "placed", place={"_concord_est_qty": 1.0})
+    client = FakeClient(orders_exc=RuntimeError("MCP HTTP 500"))
+    _use_client(monkeypatch, client)
+    positions.invalidate_feed_cache()
+    with pytest.raises(positions.DerivationIncomplete):
+        positions.club_shares_derived(mid)

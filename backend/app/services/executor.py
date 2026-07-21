@@ -393,7 +393,20 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
         # Rebalance target = committed stake (frees cash via sells), NOT buying power.
         budget = alloc.rebalance_budget(m["alloc_type"], m["alloc_value"], total_value, buying_power,
                                         daily_cap_usd=m.get("daily_cap_usd"))
-        held = positions.club_shares(mid)            # only what the CLUB bought
+        # What the CLUB holds for this member — the sell candidate set + upper bound.
+        # "derived" reconstructs it from the broker's agentic order feed (drift-proof,
+        # personal-safe); on an incomplete feed read we FAIL CLOSED (skip this member,
+        # retry next cycle) — never fall through to an empty `held`, which would strand
+        # club sells or re-buy the whole basket.
+        if settings.club_position_source == "derived":
+            try:
+                held = positions.club_shares_derived(mid, client=client, account_number=m["account_number"])
+            except positions.DerivationIncomplete as e:
+                _skip_member(msum, "transient_rh_error",
+                             f"club position feed incomplete — skipping this run: {e}")
+                continue
+        else:
+            held = positions.club_shares(mid)        # legacy ledger path (default; rollback)
         # No meaningful stake and nothing club-held to unwind → skip the member.
         # (A budget under $1 with live club holdings still runs, so a member who
         # zeroes their allocation gets liquidated rather than stranded.)

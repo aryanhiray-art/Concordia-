@@ -127,6 +127,14 @@ class Settings:
     # gate on the club ledger (never sell a member's personal shares).
     buy_sizing_account: bool = _bool("BUY_SIZING_ACCOUNT", True)
 
+    # Source of the per-member club POSITION used for sell/liquidation sizing.
+    # "ledger"  = the estimate-based executions sum (legacy; drifted 16-90x high).
+    # "derived" = reconstructed from the broker's own agentic order feed, anchored to
+    #             reality, can only under-count (never sells personal shares).
+    # Default "ledger" so deploying the code is a no-op; flip to "derived" to cut over
+    # (instant rollback = flip back, no code deploy).
+    club_position_source: str = os.environ.get("CLUB_POSITION_SOURCE", "ledger").strip().lower()
+
     # ── Voting-power model (the ETHGlobal Concordia 50/50 formula) ──
     # 'stake'  = voting power is committed stake only (legacy).
     # 'blend'  = VP = capital_share·CAPITAL + (accuracy_share·confidence)·ACCURACY,

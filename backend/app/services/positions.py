@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import json
 import time
+from urllib.parse import parse_qs, urlparse
 
-from ..db import db
+from ..db import audit, db
 from ..robinhood import vault
 
 
@@ -58,6 +59,168 @@ def club_shares(member_id: int) -> dict[str, float]:
         sign = -1.0 if r["side"] == "sell" else 1.0
         shares[r["symbol"]] = shares.get(r["symbol"], 0.0) + sign * q
     return {s: q for s, q in shares.items() if q > 1e-9}
+
+
+# ─── feed-DERIVED club position (re-architecture: anchor sizing to broker reality) ──
+# club_shares (above) is a cumulative sum of placement-time ESTIMATES over all
+# history, never re-anchored to the account → it drifted 16-90x high. The functions
+# below derive the club position from the broker's own AGENTIC ORDER FEED instead,
+# so it can only under-count (never sell personal shares) and never drifts. Gated by
+# settings.club_position_source ("ledger" default = unchanged; "derived" = cutover).
+
+class DerivationIncomplete(RuntimeError):
+    """The order feed could not be read to its end (read error / non-terminating
+    pagination). The caller MUST NOT size or liquidate off a partial → fail closed
+    (skip the member this cycle); never treat as an empty position."""
+
+
+_FEED_TTL_S = 120                 # collapse the multiple feed reads within one cycle
+_SAFETY_PAGE_CEILING = 500        # bounds a runaway cursor; hitting it == incomplete
+_FEED_CACHE: dict[str, tuple[float, list[dict]]] = {}
+
+
+def invalidate_feed_cache(account_number: str | None = None) -> None:
+    """Drop one (or all) cached order feeds — for tests + an explicit post-liquidation re-read."""
+    if account_number is None:
+        _FEED_CACHE.clear()
+    else:
+        _FEED_CACHE.pop(account_number, None)
+
+
+def _cursor_from_next(nxt) -> str | None:
+    if not nxt:
+        return None
+    try:
+        c = parse_qs(urlparse(str(nxt)).query).get("cursor")
+        return c[0] if c else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _normalize_orders(payload):
+    data = payload.get("data", payload) if isinstance(payload, dict) else payload
+    if isinstance(data, dict):
+        return (data.get("orders") or data.get("results") or []), data.get("next")
+    if isinstance(data, list):
+        return data, None
+    return [], None
+
+
+def _order_filled_qty(o: dict) -> float:
+    """Real filled shares for an order — 0.0 if unfilled (rejected/cancelled/queued),
+    so a dead order contributes exactly nothing and a cancelled-after-partial still
+    counts its real partial."""
+    q = _num(o.get("cumulative_quantity"))
+    if q is not None:
+        return q
+    total, seen = 0.0, False
+    for e in o.get("executions") or []:
+        eq = _num(e.get("quantity"))
+        if eq is not None:
+            total += eq
+            seen = True
+    return total if seen else 0.0
+
+
+def _fetch_full_order_feed(client, account_number: str) -> list[dict]:
+    """EVERY equity order for the account (NO placed_agent filter — we must SEE 'user'
+    orders to exclude them, and must never MISS a club sell that lost its tag), paged
+    to next==null. Raises DerivationIncomplete on any read/pagination failure. Cached."""
+    now = time.time()
+    hit = _FEED_CACHE.get(account_number)
+    if hit and now - hit[0] < _FEED_TTL_S:
+        return hit[1]
+    orders: list[dict] = []
+    cursor, seen, pages = None, set(), 0
+    while True:
+        if pages >= _SAFETY_PAGE_CEILING:
+            raise DerivationIncomplete("page ceiling hit before feed end")
+        try:
+            payload = client.get_equity_orders(account_number, cursor=cursor)
+        except Exception as e:  # noqa: BLE001 — a partial feed is untrustworthy in both directions
+            raise DerivationIncomplete(f"order read failed: {type(e).__name__}: {e}") from e
+        page, nxt = _normalize_orders(payload)
+        orders.extend(o for o in page if isinstance(o, dict))
+        cursor = _cursor_from_next(nxt)
+        if cursor is None:
+            break
+        if cursor in seen:
+            raise DerivationIncomplete("cursor did not advance")
+        seen.add(cursor)
+        pages += 1
+    _FEED_CACHE[account_number] = (now, orders)
+    return orders
+
+
+def _order_agent(o) -> str | None:
+    a = o.get("placed_agent")
+    return a if a in ("agentic", "user") else None      # unknown → None (ambiguous)
+
+
+def club_position_from_orders(orders: list[dict]) -> dict[str, float]:
+    """Net club shares per symbol from the order feed. ASYMMETRIC agent rule — every
+    ambiguity pushes the count DOWN (the money-safe direction):
+      BUY  counts ONLY placed_agent=='agentic'  (excludes 'user' AND None)
+      SELL subtracts everything EXCEPT 'user'    (includes 'agentic' AND None)
+    So we can never miss a club sell (over-count → sell personal) and never adopt a
+    personal/ambiguous buy. Not yet clamped/intersected — the caller does that."""
+    net: dict[str, float] = {}
+    for o in orders:
+        sym = str(o.get("symbol") or "").upper()
+        side = str(o.get("side") or "").lower()
+        if not sym or side not in ("buy", "sell"):
+            continue
+        qty = _order_filled_qty(o)
+        if qty <= 0:
+            continue
+        agent = _order_agent(o)
+        if side == "buy":
+            if agent != "agentic":
+                continue
+            net[sym] = net.get(sym, 0.0) + qty
+        else:
+            if agent == "user":
+                continue
+            net[sym] = net.get(sym, 0.0) - qty
+    return net
+
+
+def _club_traded_symbols(member_id: int) -> set[str]:
+    """Every symbol the club has ever PLACED — the club/personal boundary by symbol.
+    A genuine club buy is always in `executions`, so intersecting the derived keys
+    with this set never drops a real club symbol but DOES drop a feed mis-tag on a
+    name the club never traded (the last personal-safety belt)."""
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT symbol FROM executions WHERE member_id=? AND status='placed'",
+            (member_id,)).fetchall()
+    return {r["symbol"] for r in rows}
+
+
+def club_shares_derived(member_id: int, *, client=None,
+                        account_number: str | None = None) -> dict[str, float]:
+    """Feed-derived club position (>1e-9 only), keys ∩ club-ever-traded symbols.
+    Drop-in for club_shares' shape. Raises DerivationIncomplete on an incomplete/failed
+    feed read — the caller fails closed. Returns {} ONLY for a genuinely account-less
+    member (a real empty, never a read failure)."""
+    if account_number is None:
+        account_number = vault.account_number_for(member_id)
+    if not account_number:
+        return {}
+    if client is None:
+        client = vault.ensure_client(member_id)
+    orders = _fetch_full_order_feed(client, account_number)   # raises DerivationIncomplete
+    net = club_position_from_orders(orders)
+    club_syms = _club_traded_symbols(member_id)
+    out: dict[str, float] = {}
+    for s, q in net.items():
+        if s not in club_syms:                      # broker mis-tag guard (ledger-gated key set)
+            continue
+        if q > 1e-9:
+            out[s] = q
+        elif q < -1e-6:
+            audit("system", "derived_negative_net", str(member_id), {"symbol": s, "net": round(q, 8)})
+    return out
 
 
 def holdings_with_value(member_id: int) -> list[dict]:
