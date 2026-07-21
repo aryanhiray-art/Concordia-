@@ -535,3 +535,36 @@ def test_verify_flags_dropped_name_not_sold(monkeypatch):
     res = verify.verify_member(mid)
     assert res["verdict"] == "FAIL"
     assert any(f["code"] == "exit_incomplete" and "TSLA" in f["msg"] for f in res["findings"])
+
+
+def test_verify_uses_newest_basket_not_stale_executed(monkeypatch):
+    """Regression: on a sell day the just-closed session (new basket) must win over
+    the prior 'executed' session (old basket that still lists the dropped name).
+    Old code (`executed or closed`) picked the stale basket and PASSed a held drop."""
+    mid = _member("verify-stale@x.com")
+    executor._record(95006, mid, "TSLA", 250.0, "vref-6", "placed", place={"_concord_est_qty": 1.0})
+    # PRIOR cycle: executed, basket still contains TSLA
+    prior = _closed_session(datetime.date(2026, 12, 23), mid, ["TSLA", "AAPL"])
+    with db() as conn:
+        conn.execute("UPDATE vote_sessions SET status='executed' WHERE id=?", (prior["id"],))
+    # THIS cycle: newer closed session, TSLA dropped
+    _closed_session(datetime.date(2026, 12, 24), mid, ["AAPL"])
+    client = FakeClient(quotes={"AAPL": 200.0, "TSLA": 250.0}, positions=[("TSLA", "1.0")])
+    _use_client(monkeypatch, client)
+
+    res = verify.verify_member(mid)
+    assert res["verdict"] == "FAIL"   # newest basket = {AAPL}; TSLA dropped but held
+    assert any(f["code"] == "exit_incomplete" and "TSLA" in f["msg"] for f in res["findings"])
+
+
+def test_verify_unpriced_holding_is_not_waved_through(monkeypatch):
+    """Regression: a held club position with NO quote must NOT collapse to $0 and be
+    dismissed as dust — that returned a false PASS on an un-sold liquidation."""
+    mid = _member("verify-unpriced@x.com")
+    executor._record(95007, mid, "AAPL", 200.0, "vref-7", "placed", place={"_concord_est_qty": 1.0})
+    client = FakeClient(quotes={}, positions=[("AAPL", "1.0")])  # AAPL held, NO quote
+    _use_client(monkeypatch, client)
+
+    res = verify.verify_member(mid, expect_flat=True)
+    assert res["verdict"] == "FAIL"
+    assert any(f["code"] == "unpriced_holding" and "AAPL" in f["msg"] for f in res["findings"])

@@ -64,6 +64,17 @@ def _latest_session_id(member_id: int) -> int | None:
     return r["s"] if r and r["s"] is not None else None
 
 
+def _club_traded_names(member_id: int) -> set[str]:
+    """Every symbol the club has ever PLACED an order on — the club/personal
+    boundary by symbol. Broader than the net ledger, so a name whose estimate
+    ledger nets to ~0 (e.g. a partial-fill sell) is still checked when still held."""
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT symbol FROM executions WHERE member_id=? AND status='placed'",
+            (member_id,)).fetchall()
+    return {r["symbol"] for r in rows}
+
+
 def verify_member(member_id: int, *, expect_flat: bool = False) -> dict:
     """Verify ONE member's account against the club's intent.
 
@@ -99,9 +110,12 @@ def verify_member(member_id: int, *, expect_flat: bool = False) -> dict:
     client = vault.ensure_client(member_id)
     ledger = positions.club_shares(member_id)
     px = _quotes(client, sorted(set(live) | set(ledger)))
+    # `priced=False` when the quote is missing — NEVER let a missing quote collapse
+    # a real holding to $0 and wave it through as dust (that was a false-PASS).
     pos_rows = sorted(
         ({"symbol": s, "quantity": round(q, 6),
-          "value": round(q * (px.get(s) or 0.0), 2)} for s, q in live.items()),
+          "value": round(q * (px.get(s) or 0.0), 2), "priced": px.get(s) is not None}
+         for s, q in live.items()),
         key=lambda r: r["value"], reverse=True)
 
     # ── 1. errored orders the club recorded (a sell/buy that failed on our side) ─
@@ -110,35 +124,51 @@ def verify_member(member_id: int, *, expect_flat: bool = False) -> dict:
         add("fail", "errored_order",
             f"{r['side'].upper()} {r['symbol']} errored — {(r['error'] or '')[:90]}")
 
+    # Club/personal boundary by SYMBOL = every name the club has EVER traded, NOT the
+    # net-positive ledger (which can net a partial-fill name to ~0 and then skip a
+    # real still-held position). Intersected with live, so fully-sold names aren't hit.
+    club_names = _club_traded_names(member_id)
+    club_held = [p for p in pos_rows if p["symbol"] in club_names]
+    unpriced = [p for p in club_held if not p["priced"] and p["quantity"] > 1e-6]
+
     # ── 2. "everything should be sold" (manual liquidation check) ───────────────
-    club_names = set(ledger)
     if expect_flat:
-        leftover = [p for p in pos_rows
-                    if p["symbol"] in club_names and p["value"] > DUST_USD]
+        if unpriced:
+            add("fail", "unpriced_holding",
+                "cannot confirm sold — still holds (no quote): "
+                + ", ".join(f"{p['symbol']} {p['quantity']}sh" for p in unpriced))
+        leftover = [p for p in club_held if p["priced"] and p["value"] > DUST_USD]
         if leftover:
             add("fail", "not_flat",
                 "account NOT fully sold — still holds "
                 + ", ".join(f"{p['symbol']} {p['quantity']} (${p['value']})" for p in leftover))
-        else:
-            dust = [p for p in pos_rows if p["symbol"] in club_names]
+        if not unpriced and not leftover:
+            dust = [p for p in club_held if p["value"] > 0]
             add("ok", "flat",
                 "account is flat on club names"
                 + (f" (only sub-$1 dust: {', '.join(p['symbol'] for p in dust)})" if dust else ""))
     else:
         # ── 2b. names DROPPED from the current basket must be gone ──────────────
+        # Pick the basket by RECENCY across statuses: on a sell day today's session is
+        # 'closed' and the prior is 'executed'; preferring 'executed' would use the
+        # STALE prior basket that still lists the just-dropped name (a false PASS).
+        cands = [s for s in (voting.latest_session("executed"),
+                             voting.latest_session("closed")) if s]
+        sess = max(cands, key=lambda s: s.get("trade_date") or "", default=None)
         basket = set()
-        sess = voting.latest_session("executed") or voting.latest_session("closed")
         if sess:
             try:
                 basket = {p["symbol"] for p in voting.session_picks(sess)}
             except Exception:  # noqa: BLE001
                 basket = set()
-        stuck = [p for p in pos_rows
-                 if p["symbol"] in club_names and p["symbol"] not in basket and p["value"] > DUST_USD]
+        # a dropped club name still held (or unpriced) means the exit didn't complete
+        stuck = [p for p in club_held if p["symbol"] not in basket
+                 and (not p["priced"] or p["value"] > DUST_USD)]
         if stuck:
             add("fail", "exit_incomplete",
                 "dropped from basket but still held (sell did not complete): "
-                + ", ".join(f"{p['symbol']} ${p['value']}" for p in stuck))
+                + ", ".join(f"{p['symbol']} {'(no quote)' if not p['priced'] else '$' + str(p['value'])}"
+                            for p in stuck))
 
     # ── 3. club-ledger drift vs the real account (root cause of the dust mess) ──
     phantom = [s for s, q in ledger.items() if q > 1e-6 and live.get(s, 0.0) <= 1e-9]
