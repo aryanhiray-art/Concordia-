@@ -437,15 +437,25 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
         # into the rest of the new basket.
         for symbol, qty in (sorted(held.items()) if phase in ("sell", "both") else []):
             price = prices.get(symbol)
+            # Reconcile the club ledger to the LIVE account BEFORE sizing. club_shares
+            # is an ESTIMATE (dollars/price at placement, never trued-up to the real
+            # fill) that drifts far above reality across buy/sell cycles, so sizing a
+            # trim off `qty` alone computes a bogus "excess" and drains the whole real
+            # position down to dust. Cap the held quantity to what the account actually
+            # shows: never more than the club bought (qty), never more than is there
+            # (live). This also drops ledger phantoms (qty>0 but the account holds none).
+            held_qty = min(qty, live.get(symbol, 0.0))
+            if held_qty <= 0:
+                continue
             if symbol in want:
                 if price is None:
                     continue                          # can't size a trim without a price
-                excess = qty - (per_pick / price)     # shares above the equal-weight target
+                excess = held_qty - (per_pick / price)   # shares above the equal-weight target
                 if excess * price < 1.00:             # not meaningfully overweight → keep
                     continue
                 sell_qty, why = excess, "trim to target"
             else:
-                sell_qty, why = qty, "exited basket"  # full exit of a dropped name
+                sell_qty, why = held_qty, "exited basket"  # full exit of a dropped name
             if (mid, symbol, "sell") in already:
                 msum["orders"].append({"symbol": symbol, "side": "sell", "status": "placed",
                                        "note": "already sold"})
@@ -463,16 +473,17 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
                                      or (price is not None and residual * price <= 1.00)):
                     sell_qty, sweep = live_qty, True
                     why = "exited basket · dust swept"
-            # A full exit sells at broker precision (8dp): a 6dp floor of an exact
-            # reconciled fill strands a ~1e-6 crumb every time. sell_qty is already
-            # capped to what we hold (and to the club estimate unless swept), so 8dp
-            # never reaches personal shares. Trims keep 6dp — the name is retained.
-            full_exit = why.startswith("exited basket")
-            scale = 1e8 if full_exit else 1e6
-            qfloor = math.floor(sell_qty * scale) / scale
+            # Robinhood REJECTS a fractional order quantity that carries any non-zero
+            # digit beyond the 6th decimal ("Order quantity cannot include fractional
+            # shares"), so EVERY sell floors to 6dp. The old 8dp full-exit (meant to
+            # avoid leaving a ~1e-6 crumb) instead hard-rejected the ENTIRE order for
+            # any holding whose live balance had >6 decimals — stranding the whole
+            # position on every cycle (AOS/ALLE/BLDR). A 6dp floor leaves at most a
+            # ~$0.0001 crumb, which dust_cleanup / the next exit sweeps.
+            qfloor = math.floor(sell_qty * 1e6) / 1e6
             if qfloor <= 0:
                 continue
-            qstr = f"{qfloor:.8f}" if full_exit else f"{qfloor:.6f}"
+            qstr = f"{qfloor:.6f}"
             try:
                 review = client.review_market_sell(m["account_number"], symbol, qstr)
             except Exception as e:  # noqa: BLE001

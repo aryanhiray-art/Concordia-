@@ -344,22 +344,23 @@ def test_vault_reset_status_unstrands():
 # ─── A7: full-position exits sweep dust ──────────────────────────────────────
 
 def test_exit_sell_sweeps_dust_residual(monkeypatch):
-    """Full exit with live=1.0000008 vs club estimate=1.0 sells the full live
-    quantity — the 0.0000008-share crumb is club residue, not a personal holding."""
+    """Full exit with live=1.0005 vs club estimate=1.0 sweeps the crumb: it sells the
+    full live quantity (the extra 0.0005 is club residue, not a personal holding),
+    floored to Robinhood's 6dp fractional limit."""
     mid = _member("a7-dust@x.com")
     # club history: a placed buy estimated at 1.0 TSLA share (old session)
     executor._record(90001, mid, "TSLA", 250.0, "old-ref-1", "placed",
                      place={"_concord_est_qty": 1.0})
     closed = _closed_session(datetime.date(2026, 12, 7), mid, ["AAPL"])  # TSLA dropped
     client = FakeClient(quotes={"AAPL": 100.0, "TSLA": 250.0},
-                        positions=[("TSLA", "1.0000008")])
+                        positions=[("TSLA", "1.0005")])
     _use_client(monkeypatch, client)
 
     summary = executor.run(closed, force_dry_run=True)
 
     sells = client.trades_for("review_sell", f"ACC{mid}", "TSLA")
     assert len(sells) == 1
-    assert float(sells[0][3]) == pytest.approx(1.0000008, abs=1e-9)
+    assert sells[0][3] == "1.000500"          # full live, swept, 6dp (RH fractional max)
     order = next(o for o in _mrow(summary, mid)["orders"]
                  if o["symbol"] == "TSLA" and o["side"] == "sell")
     assert "dust" in order["note"]
@@ -383,10 +384,34 @@ def test_exit_sell_never_sweeps_personal_position(monkeypatch):
 
     sells = client.trades_for("review_sell", f"ACC{mid}", "TSLA")
     assert len(sells) == 1
-    assert sells[0][3] == "1.00000000"                   # est only (1.0), full-exit 8dp; personal 2.0 untouched
+    assert sells[0][3] == "1.000000"                     # est only (1.0), 6dp; personal 2.0 untouched
     order = next(o for o in _mrow(summary, mid)["orders"]
                  if o["symbol"] == "TSLA" and o["side"] == "sell")
     assert order["note"] == "exited basket"
+
+
+def test_trim_reconciles_inflated_ledger_to_live(monkeypatch):
+    """Sell sizing reads the LIVE account, not the drifted club ledger. When the
+    ledger over-estimates a still-in-basket holding (est 10 sh vs 0.02 sh really
+    held), the reconciled trim sizes off min(ledger, live) and sees the real 0.02
+    is far UNDER target — so it is NOT drained to dust. (Old ledger-sized code
+    computed excess=10-target and market-sold the entire 0.02 live position.)"""
+    mid = _member("recon-trim@x.com")
+    # ledger THINKS the club holds 10 GOOGL; the account really holds 0.02
+    executor._record(90010, mid, "GOOGL", 999.0, "old-ref-recon", "placed",
+                     place={"_concord_est_qty": 10.0})
+    closed = _closed_session(datetime.date(2026, 12, 12), mid, ["GOOGL"])  # stays in basket
+    client = FakeClient(quotes={"GOOGL": 100.0}, positions=[("GOOGL", "0.02")])
+    _use_client(monkeypatch, client)
+
+    summary = executor.run(closed, force_dry_run=True)
+
+    # reconciled sizing: min(10, 0.02)=0.02 << target → no sell at all (kept/underweight)
+    assert client.trades_for("review_sell", f"ACC{mid}", "GOOGL") == []
+    assert not client.trades_for("place_sell", f"ACC{mid}", "GOOGL")
+    sell_row = next((o for o in _mrow(summary, mid)["orders"]
+                     if o["symbol"] == "GOOGL" and o.get("side") == "sell"), None)
+    assert sell_row is None
 
 
 def test_dust_cleanup_dry_run_previews(monkeypatch):
