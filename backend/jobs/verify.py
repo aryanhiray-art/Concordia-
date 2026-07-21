@@ -8,13 +8,16 @@ and flags club-ledger drift.
   # after you manually sell everything, confirm the account is flat:
   sudo -u concord /opt/concord/backend/.venv/bin/python jobs/verify.py --flat
 
-  # normal post-cycle check + a gpt-5.5 plain-English report (run as ROOT so
-  # OpenClaw can reach the researcher_codex agent):
-  /opt/concord/backend/.venv/bin/python jobs/verify.py --narrate
+Run as the `concord` user (it opens the concord DB). The auto gpt-5.5 report runs
+separately as root, snapshot-only (jobs/verify_narrate.py) — running THIS tool as
+root would create root-owned WAL files and strand the service, so it refuses.
+`--narrate` here works only where OpenClaw creds exist; as concord it falls back
+to the deterministic report.
 
 Exit code = 0 on PASS/WARN, 2 on FAIL — so a cron/systemd wrapper can alert.
 """
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -25,6 +28,11 @@ from app.services import verify  # noqa: E402
 
 
 def main() -> int:
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        print("[verify] refusing to run as root — run as the concord user (root would "
+              "open the concord DB and create root-owned WAL files, stranding the "
+              "service). The gpt-5.5 report runs separately via verify_narrate.py.")
+        return 1
     ap = argparse.ArgumentParser()
     ap.add_argument("--flat", action="store_true",
                     help="expect a fully-liquidated account (post manual sell-everything)")

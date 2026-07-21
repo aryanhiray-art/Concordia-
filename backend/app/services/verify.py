@@ -104,7 +104,9 @@ def verify_member(member_id: int, *, expect_flat: bool = False) -> dict:
     try:
         live_list = positions.live_positions_strict(member_id)
     except Exception as e:  # noqa: BLE001
-        add("fail", "read_failed", f"could not read live positions: {type(e).__name__}: {e}")
+        # couldn't READ the account (throttle/outage) ≠ verified-bad — WARN, not FAIL,
+        # so a transient RH hiccup on the post-trade path doesn't cry wolf.
+        add("warn", "read_failed", f"could not read live positions to verify: {type(e).__name__}: {e}")
         return _finalize(member_id, name, acct, findings, [])
     live = {p["symbol"]: p["quantity"] for p in live_list}
     client = vault.ensure_client(member_id)

@@ -77,6 +77,16 @@ def _issue(resp: Response, member: dict) -> dict:
     return {"token": token, "member": load_member(member["id"])}
 
 
+def _clean_display_name(raw: str) -> str:
+    """Collapse whitespace + strip control chars from a member-supplied name and cap
+    length. A name flows into operator-facing reports and (via the verifier snapshot)
+    an LLM prompt, so an embedded newline/control char could inject instructions or
+    corrupt the report. Data hygiene, not just cosmetics."""
+    s = "".join(ch for ch in (raw or "") if ch == " " or (ch.isprintable() and ch not in "\r\n\t"))
+    s = " ".join(s.split())
+    return s[:40] or "Member"
+
+
 @router.post("/signup")
 def signup(body: SignupBody, request: Request, resp: Response):
     ip = client_ip(request)
@@ -95,7 +105,7 @@ def signup(body: SignupBody, request: Request, resp: Response):
         cur = conn.execute(
             "INSERT INTO members(email,display_name,role,invite_code_used,password_hash,created_at) "
             "VALUES(?,?,?,?,?,?)",
-            (email, body.display_name.strip(), role, "redacted", pw, int(time.time())),
+            (email, _clean_display_name(body.display_name), role, "redacted", pw, int(time.time())),
         )
         member = {"id": cur.lastrowid, "session_version": 1, "role": role}
     _default_settings(member["id"])
