@@ -79,7 +79,10 @@ export const api = {
   // Concordia model: allocate % of voting power across picks (sums to ≤100)
   castVote: (allocations: { symbol: string; weight: number }[]) =>
     req<SessionView>("/api/vote/today", { method: "POST", body: JSON.stringify({ allocations }) }),
-  results: () => req<{ session: SessionView | null; executions: ExecutionRow[] }>("/api/vote/results"),
+  results: () => req<{
+    session: SessionView | null; executions: ExecutionRow[];
+    last_decided?: { trade_date: string; picks: { symbol: string; name?: string; weight?: number }[] } | null;
+  }>("/api/vote/results"),
 
   // API keys (session login required) — for an external program / bot to vote for you
   apiKeys: () => req<{ keys: ApiKey[] }>("/api/me/api-keys"),

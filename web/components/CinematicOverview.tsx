@@ -28,10 +28,14 @@ export function CinematicOverview() {
   const root = useRef<HTMLDivElement>(null);
   const [acc, setAcc] = useState<Account | null>(null);
   const [hold, setHold] = useState<{ symbol: string; value: number; pnl: number | null }[]>([]);
+  const [lastPicks, setLastPicks] = useState<{ symbol: string; name?: string; weight?: number }[]>([]);
 
   useEffect(() => {
     api.account().then(setAcc).catch(() => {});
     api.holdings().then((r) => setHold(r.holdings || [])).catch(() => {});
+    // the most recent DECIDED basket — the donut's fallback when the account is
+    // all cash AND the active ballot hasn't collected votes yet
+    api.results().then((r) => setLastPicks(r.last_decided?.picks || [])).catch(() => {});
   }, []);
 
   const pnl = acc?.pnl;
@@ -46,12 +50,15 @@ export function CinematicOverview() {
   const equityHist = (acc?.power?.history || [])
     .map((h) => h.equity).filter((e): e is number => e != null && e > 0);
   const histKey = equityHist.join(",");
-  // donut + holdings reflect what you actually HOLD; fall back to the consensus basket
+  // donut + holdings reflect what you actually HOLD; fall back to today's forming
+  // basket, then to the LAST DECIDED basket (early morning / post-liquidation the
+  // active ballot is empty — never show a bare dash).
   const basket = ((session?.picks?.length ? session.picks : session?.tally) || []);
+  const fallback = basket.length ? basket : lastPicks;
   const items = hold.length
     ? hold.map((h) => ({ sym: h.symbol, name: h.symbol, val: h.value }))
-    : basket.slice(0, 12).map((b) => ({ sym: b.symbol, name: b.name, val: b.weight || 0 }));
-  const itemsLabel = hold.length ? "holdings" : "names";
+    : fallback.slice(0, 12).map((b) => ({ sym: b.symbol, name: b.name || b.symbol, val: b.weight || 1 }));
+  const itemsLabel = hold.length ? "holdings" : basket.length ? "names" : "last basket";
   const itemsKey = items.map((i) => `${i.sym}:${i.val}`).join(",");
   const closesAt = session?.closes_at ?? 0;
   const open = session?.status === "open";
@@ -181,11 +188,20 @@ export function CinematicOverview() {
     }
     function pop() { ringEl.classList.remove("pop"); void (ringEl as HTMLElement).offsetWidth; ringEl.classList.add("pop"); }
     function renderSectors() {
+      if (!items.length) {
+        // nothing held, no basket anywhere yet — the account is 100% settled cash
+        const cash: Slc = { key: "cash", label: "Cash", sub: "the next buy cycle deploys it",
+                            pc: 100, c: "#3d4a59", drill: false };
+        $("#dctr").textContent = "100%";
+        $("#dctrs").textContent = "cash";
+        paintArcs([cash]); paintLegend([cash], null); pop();
+        return;
+      }
       const slices: Slc[] = sectorGroups.map((g) => ({
         key: g.sector, label: g.sector, sub: `${g.items.length} name${g.items.length === 1 ? "" : "s"}`,
         pc: pctOf(g.val, GTOT), c: sectorColor(g.sector), drill: g.items.length > 0,
       }));
-      $("#dctr").textContent = items.length ? String(items.length) : "—";
+      $("#dctr").textContent = String(items.length);
       $("#dctrs").textContent = itemsLabel;
       paintArcs(slices); paintLegend(slices, null); pop();
     }
@@ -206,7 +222,7 @@ export function CinematicOverview() {
     // ── holdings ──
     const spark = (up: boolean) => `<svg class="hspark" viewBox="0 0 300 38" preserveAspectRatio="none"><polyline points="${up ? "0,30 60,20 120,24 180,11 240,15 300,3" : "0,11 60,16 120,9 180,20 240,17 300,26"}" fill="none" stroke="${up ? "#34E3A8" : "#FF6B6B"}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
     $("#holdings").innerHTML = items.length
-      ? items.map((h, i) => `<div class="holdrow" data-vote="1"><span class="htk">${h.sym}</span><div class="hn"><b>${h.name || h.sym}</b><s>${h.sym}</s></div>${spark(i % 3 !== 1)}<span class="hwt tnum">$${Math.round(h.val || 0).toLocaleString()}</span></div>`).join("")
+      ? items.map((h, i) => `<div class="holdrow" data-vote="1"><span class="htk">${h.sym}</span><div class="hn"><b>${h.name || h.sym}</b><s>${h.sym}</s></div>${spark(i % 3 !== 1)}${hold.length ? `<span class="hwt tnum">$${Math.round(h.val || 0).toLocaleString()}</span>` : ""}</div>`).join("")
       : `<div style="color:var(--subtle);font:500 13px/1.6 var(--font-inter);padding:8px 2px">No holdings yet — once the basket runs, your positions show here. <a href="/vote" style="color:var(--teal)">Cast your vote →</a></div>`;
 
     drawChart("ALL"); renderSectors();

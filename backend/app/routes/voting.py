@@ -70,7 +70,18 @@ def vote_results(member: dict = Depends(require_member)):
                 "SELECT * FROM executions WHERE session_id=? AND member_id=? ORDER BY symbol",
                 (session["id"], member["id"])
             ).fetchall()
+    # The most recent DECIDED basket (closed/executed), so the UI always has a
+    # basket to show even when the active session's ballot is still empty
+    # (e.g. early morning before the bots vote, after a full liquidation).
+    with db() as conn:
+        prev = conn.execute(
+            "SELECT * FROM vote_sessions WHERE status IN ('closed','executed') "
+            "AND picks_json IS NOT NULL ORDER BY trade_date DESC LIMIT 1"
+        ).fetchone()
+    last_decided = ({"trade_date": prev["trade_date"], "picks": svc.session_picks(dict(prev))}
+                    if prev else None)
     return {
         "session": svc.session_public(session, member["id"]),
         "executions": [dict(r) for r in rows],
+        "last_decided": last_decided,
     }
