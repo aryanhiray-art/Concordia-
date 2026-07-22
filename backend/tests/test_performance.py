@@ -164,14 +164,14 @@ def _placed(session_id: int, symbol: str, status: str = "placed") -> None:
         )
 
 
-def test_decided_cycles_selects_placed_sessions_in_date_order():
+def test_decided_cycles_selects_decided_sessions_in_date_order():
     picks_a = [{"symbol": "AAPL", "votes": 3}, {"symbol": "MSFT", "votes": 2}]
     picks_b = [{"symbol": "NVDA", "votes": 1}]
     # inserted out of date order to prove the ORDER BY
     sid_b = _session("2027-02-02", picks_b)
     sid_a = _session("2027-02-01", picks_a)
     _placed(sid_a, "AAPL")
-    _placed(sid_a, "MSFT")               # 2 placed rows, still ONE cycle (DISTINCT)
+    _placed(sid_a, "MSFT")               # 2 placed rows, still ONE cycle
     _placed(sid_b, "NVDA")
     cycles = performance.decided_cycles()
     a = next(c for c in cycles if c["trade_date"] == "2027-02-01")
@@ -182,16 +182,26 @@ def test_decided_cycles_selects_placed_sessions_in_date_order():
     assert [c["trade_date"] for c in cycles] == sorted(c["trade_date"] for c in cycles)
 
 
-def test_decided_cycles_skips_unplaced_and_pickless_sessions():
-    sid_never = _session("2027-02-03", [{"symbol": "TSLA", "votes": 1}])   # no executions
+def test_decided_cycles_counts_decisions_not_fills():
+    """A closed/executed session with locked picks IS a decision even when zero
+    orders placed (all names at target, e.g. 2026-07-01) or a place errored."""
+    _session("2027-02-03", [{"symbol": "TSLA", "votes": 1}])               # no executions
     sid_error = _session("2027-02-04", [{"symbol": "TSLA", "votes": 1}])
-    _placed(sid_error, "TSLA", status="error")                             # errored ≠ decided
+    _placed(sid_error, "TSLA", status="error")
+    dates = {c["trade_date"] for c in performance.decided_cycles()}
+    assert {"2027-02-03", "2027-02-04"} <= dates
+
+
+def test_decided_cycles_skips_open_and_pickless_sessions():
     sid_nopicks = _session("2027-02-05", [])
     _placed(sid_nopicks, "TSLA")                                           # placed but no picks
     sid_nullpicks = _session("2027-02-06", None)
     _placed(sid_nullpicks, "TSLA")
+    with db() as conn:                                                     # open = not yet decided
+        conn.execute("INSERT INTO vote_sessions(trade_date,status,top_n,picks_json) VALUES(?,?,?,?)",
+                     ("2027-02-07", "open", 3, json.dumps([{"symbol": "TSLA"}])))
     dates = {c["trade_date"] for c in performance.decided_cycles()}
-    assert {"2027-02-03", "2027-02-04", "2027-02-05", "2027-02-06"}.isdisjoint(dates)
+    assert {"2027-02-05", "2027-02-06", "2027-02-07"}.isdisjoint(dates)
 
 
 # ─── club_performance cache/backoff orchestration ───────────────────────────

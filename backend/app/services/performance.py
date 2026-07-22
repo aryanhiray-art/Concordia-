@@ -41,16 +41,19 @@ def _num(v) -> float | None:
 # ─── layer 1: which sessions actually moved money ────────────────────────────
 
 def decided_cycles() -> list[dict]:
-    """Sessions with at least one PLACED execution, oldest first.
+    """Every DECIDED session (closed/executed with locked picks), oldest first.
 
     [{"trade_date": "YYYY-MM-DD", "symbols": [...]}] — symbols from the locked
-    picks_json. Sessions with no picks are skipped (nothing to index).
+    picks_json. Decision ≠ fill: a cycle where every name was already at target
+    places zero orders but the basket WAS decided that day (e.g. 2026-07-01), so
+    we index by the close, not by placements. Open sessions (no picks yet) and
+    pickless rows are skipped.
     """
     with db() as conn:
         rows = conn.execute(
-            "SELECT vs.trade_date, vs.picks_json FROM vote_sessions vs "
-            "JOIN (SELECT DISTINCT session_id FROM executions WHERE status='placed') e "
-            "ON e.session_id = vs.id ORDER BY vs.trade_date ASC"
+            "SELECT trade_date, picks_json FROM vote_sessions "
+            "WHERE status IN ('closed','executed') AND picks_json IS NOT NULL "
+            "ORDER BY trade_date ASC"
         ).fetchall()
     out: list[dict] = []
     for r in rows:
