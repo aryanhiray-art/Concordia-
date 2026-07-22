@@ -1,6 +1,6 @@
 "use client";
 
-import type { Member, SessionView, UniverseItem, ExecutionRow, PowerView, Account, ApiKey, ResearchResult } from "./types";
+import type { Member, SessionView, UniverseItem, ExecutionRow, PowerView, Account, ApiKey, ResearchResult, PerfView } from "./types";
 
 // Empty base = same-origin (Vercel rewrites /api + /oauth to the forge backend).
 // Local dev sets NEXT_PUBLIC_CONCORD_API=http://localhost:8780.
@@ -69,6 +69,8 @@ export const api = {
     req<{ holdings: { symbol: string; quantity: number; value: number; pnl: number | null }[] }>("/api/me/holdings"),
   setAllocation: (type: "percent" | "dollar", value: number) =>
     req<Account>("/api/me/allocation", { method: "PUT", body: JSON.stringify({ type, value }) }),
+  // club decisions vs SPY, both indexed to 100 — club-level, identical for every member
+  clubPerformance: () => req<PerfView>("/api/club/performance"),
 
   // voting
   searchUniverse: (q: string, limit = 40) =>

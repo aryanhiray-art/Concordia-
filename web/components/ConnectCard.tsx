@@ -10,6 +10,9 @@ export function ConnectCard({ member, onChange }: { member: Member; onChange: ()
   const s = member.settings;
   const connected = rh && rh.status === "connected" && rh.account_number;
   const agentic = rh && Number(rh.agentic_allowed) === 1;
+  // completed the flow before but the tokens are gone — Robinhood rotated them
+  // ("error") or the member disconnected ("revoked"). Same connect flow reattaches.
+  const reauth = !!(rh && rh.account_number && !connected);
 
   const [optedIn, setOptedIn] = useState(Number(s?.opted_in) === 1);
   const [busy, setBusy] = useState(false);
@@ -35,7 +38,9 @@ export function ConnectCard({ member, onChange }: { member: Member; onChange: ()
 
   async function complete() {
     setBusy(true); setErr(null);
-    try { await api.rhComplete(pasteUrl.trim()); setPhase("idle"); setPasteUrl(""); onChange(); }
+    // members paste with stray whitespace / wrapping quotes — clean before submit
+    const url = pasteUrl.trim().replace(/^["'<]+|["'>]+$/g, "");
+    try { await api.rhComplete(url); setPhase("idle"); setPasteUrl(""); onChange(); }
     catch (e: any) { setErr(e.message || "couldn't finish connecting"); }
     finally { setBusy(false); }
   }
@@ -53,14 +58,21 @@ export function ConnectCard({ member, onChange }: { member: Member; onChange: ()
         <h2 className="label">Your account</h2>
         {connected
           ? (agentic ? <Pill tone="ok">● connected · agentic</Pill> : <Pill tone="warn">connected · not agentic</Pill>)
+          : reauth ? <Pill tone="warn">reconnect needed</Pill>
           : <Pill tone="danger">not connected</Pill>}
       </div>
 
       {!connected ? (
         <div className="mt-4">
           <p className="text-[13.5px] leading-relaxed text-muted">
-            Connect Robinhood to take part. You log in on Robinhood&apos;s own site and approve
-            agentic trading — your credentials never touch Concordia.
+            {reauth ? (
+              rh!.status === "error"
+                ? "Robinhood signed this connection out (it rotates credentials periodically). Reconnect to resume trading — takes under a minute."
+                : "This account was disconnected. Reconnect to resume trading — takes under a minute."
+            ) : (
+              <>Connect Robinhood to take part. You log in on Robinhood&apos;s own site and approve
+              agentic trading — your credentials never touch Concordia.</>
+            )}
           </p>
 
           {phase === "idle" ? (
@@ -69,7 +81,7 @@ export function ConnectCard({ member, onChange }: { member: Member; onChange: ()
                 strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                 <path d="M5 12h14M13 6l6 6-6 6" />
               </svg>
-              Connect Robinhood
+              {reauth ? "Reconnect Robinhood" : "Connect Robinhood"}
             </Button>
           ) : (
             <div className="enter mt-4 rounded-[14px] border border-teal/20 bg-teal/[0.04] p-4">
@@ -81,6 +93,7 @@ export function ConnectCard({ member, onChange }: { member: Member; onChange: ()
               </ol>
               <input
                 value={pasteUrl} onChange={(e) => { setPasteUrl(e.target.value); setErr(null); }}
+                onKeyDown={(e) => { if (e.key === "Enter" && pasteUrl.trim() && !busy) complete(); }}
                 placeholder="http://localhost:8917/callback?code=…&state=…"
                 className="input mt-3 w-full font-mono !text-[12px]" spellCheck={false} autoComplete="off" />
               <div className="mt-3 flex items-center gap-2.5">

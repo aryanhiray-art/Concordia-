@@ -17,7 +17,7 @@ import time
 from ..db import db, kv_get, kv_set, audit
 from ..security import encrypt_tokens, decrypt_tokens
 from . import oauth
-from .client import RobinhoodClient, find_agentic_account
+from .client import RHAuthError, RobinhoodClient, find_agentic_account
 
 _PENDING_TTL = 900  # 15 min to complete the Robinhood consent
 
@@ -132,12 +132,19 @@ def ensure_client(member_id: int) -> RobinhoodClient:
         # we hold the lock and the stored token is still stale → we are the refresher
         try:
             bundle = oauth.refresh_bundle(bundle)
-        except Exception:
+        except Exception as e:
             # a 400 may be a rotation race won by a non-locked path — re-check the store
             # once; if it now holds a fresh token, adopt it rather than stranding.
             reloaded = load_bundle(member_id)
             if reloaded and oauth.is_access_fresh(reloaded):
                 return RobinhoodClient(reloaded["access_token"])
+            if isinstance(e, RHAuthError):
+                # RH rejected the refresh token itself (permanent) — mark the dead
+                # connection NOW so the member UI shows needs-reauth immediately,
+                # not a healthy account until the executor's next trade cycle.
+                # Anything transient falls through unmarked: a blip never strands.
+                mark_status(member_id, "error")
+                audit("system", "rh_reauth_required", str(member_id), {"err": str(e)[:200]})
             raise
         _persist_refreshed(member_id, bundle)
         return RobinhoodClient(bundle["access_token"])

@@ -16,6 +16,17 @@ export type PowerView = {
   history: PowerPoint[];
 };
 
+// Club-level decisions-vs-SPY performance — the same series for every member.
+export type PerfPoint = { d: string; club: number; spy: number };  // both indexed, base 100
+export type PerfView = {
+  start_date: string | null;
+  computed_at: number;
+  n_sessions: number;
+  points: PerfPoint[];
+  club_pct: number | null;
+  spy_pct: number | null;
+};
+
 export type SessionView = {
   id: number;
   trade_date: string;

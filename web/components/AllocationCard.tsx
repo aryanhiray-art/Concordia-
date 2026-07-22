@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { Account } from "@/lib/types";
 import { Button, Card } from "./ui";
+import { ClubPerformance } from "./ClubPerformance";
 
 function money(n: number | null | undefined, dp = 0) {
   if (n == null) return "—";
@@ -103,8 +104,16 @@ export function AllocationCard({ onChange }: { onChange?: () => void }) {
               </div>
             </>
           ) : (
-            <div className="mt-1 text-[12.5px] text-subtle">No club trades yet — profit appears once the basket runs live.</div>
+            <div className="mt-1 text-[12.5px] text-subtle">Nothing deployed right now.</div>
           )}
+        </div>
+      </div>
+
+      {/* club decisions vs SPY — club-level series, identical for every member */}
+      <div className="mt-3 rounded-[12px] border border-white/10 bg-white/[0.02] px-4 py-3">
+        <div className="label">Club decisions vs S&amp;P 500</div>
+        <div className="mt-2.5">
+          <ClubPerformance />
         </div>
       </div>
     </Card>

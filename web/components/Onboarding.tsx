@@ -30,6 +30,7 @@ export function Onboarding() {
   const [checking, setChecking] = useState(false);
 
   const connected = member?.robinhood?.status === "connected" && !!member?.robinhood?.account_number;
+  const reauth = member?.robinhood?.status === "error";  // Robinhood rotated the tokens
   const optedIn = Number(member?.settings?.opted_in) === 1;
 
   useEffect(() => {
@@ -57,9 +58,15 @@ export function Onboarding() {
       <p className="mt-1 text-[12.5px] text-subtle">A few one-time steps before your vote can trade.</p>
 
       <div className="mt-5 space-y-4">
-        <Step n={1} done={connected} title="Connect your Robinhood (agentic) account">
-          Link Robinhood on its own secure site — your credentials never touch Concordia.{" "}
-          <Link href="/account" className="text-teal">Connect →</Link>
+        <Step n={1} done={connected} title={reauth ? "Reconnect your Robinhood account" : "Connect your Robinhood (agentic) account"}>
+          {reauth ? (
+            <>Robinhood signed this connection out (it rotates credentials periodically) — reconnect
+            to resume trading, takes under a minute.{" "}
+            <Link href="/account" className="text-teal">Reconnect →</Link></>
+          ) : (
+            <>Link Robinhood on its own secure site — your credentials never touch Concordia.{" "}
+            <Link href="/account" className="text-teal">Connect →</Link></>
+          )}
         </Step>
 
         <Step n={2} done={connected && tradeReady} title="Finish your Robinhood investing profile">

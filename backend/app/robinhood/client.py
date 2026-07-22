@@ -149,6 +149,11 @@ class RobinhoodClient:
     def get_quotes(self, symbols: list[str]) -> dict:
         return self.mcp.call_tool("get_equity_quotes", {"symbols": symbols})
 
+    def get_equity_historicals(self, symbols: list[str], start_time: str, interval: str = "day") -> dict:
+        """Daily (or intraday) bars since start_time (RFC3339 UTC, e.g.
+        "2026-07-01T00:00:00Z"). Tool caps at 10 symbols — the caller batches."""
+        return self.mcp.call_tool("get_equity_historicals", {"symbols": symbols, "start_time": start_time, "interval": interval})
+
     def get_equity_orders(self, account_number: str, cursor: str | None = None,
                           placed_agent: str | None = None) -> dict:
         """Recent equity orders for the account. Used to verify whether an
