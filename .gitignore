@@ -1,6 +1,9 @@
 # secrets & runtime state — never commit
 .env
+.env.*
+!.env.example
 .auth.env
+backend/data/
 *.db
 *.db-wal
 *.db-shm
