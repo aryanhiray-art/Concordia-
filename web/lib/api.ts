@@ -32,14 +32,21 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
 
 export const api = {
   base: BASE,
-  // auth — invite code + email + a password you create; log in with email + password
-  signup: (invite_code: string, email: string, password: string, display_name: string) =>
+  // auth — invite code + email + a password you create; log in with email + password.
+  // consent = the club-agreement checkbox (required for new signups in prod).
+  signup: (invite_code: string, email: string, password: string, display_name: string, consent?: boolean) =>
     req<{ token: string; member: Member }>("/api/auth/signup", {
-      method: "POST", body: JSON.stringify({ invite_code, email, password, display_name }),
+      method: "POST", body: JSON.stringify({ invite_code, email, password, display_name, consent }),
     }),
   login: (email: string, password: string) =>
     req<{ token: string; member: Member }>("/api/auth/login", {
       method: "POST", body: JSON.stringify({ email, password }),
+    }),
+  // Google sign-in — credential = the Google ID token from Identity Services.
+  // Existing members just log in; new members must also send invite_code + consent.
+  googleLogin: (credential: string, invite_code?: string, consent?: boolean) =>
+    req<{ token: string; member: Member }>("/api/auth/google", {
+      method: "POST", body: JSON.stringify({ credential, invite_code, consent }),
     }),
   me: () => req<{ member: Member; power: PowerView }>("/api/me"),
   changePassword: (current_password: string, new_password: string) =>

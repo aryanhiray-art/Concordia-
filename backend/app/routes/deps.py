@@ -39,7 +39,10 @@ def client_ip(request: Request) -> str:
     """Real client IP, honouring the proxy chain (nginx + Next.js rewrites)."""
     xff = request.headers.get("x-forwarded-for")
     if xff:
-        return xff.split(",")[0].strip()
+        # nginx APPENDS the real client to any client-supplied XFF header
+        # ($proxy_add_x_forwarded_for), so the trustworthy address is the LAST
+        # element — taking the first would let callers spoof rate-limit keys.
+        return xff.split(",")[-1].strip()
     return request.client.host if request.client else "?"
 
 

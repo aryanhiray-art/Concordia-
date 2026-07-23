@@ -176,6 +176,29 @@ CREATE TABLE IF NOT EXISTS api_keys (
 );
 CREATE INDEX IF NOT EXISTS ix_apikeys_member ON api_keys(member_id);
 CREATE INDEX IF NOT EXISTS ix_apikeys_prefix ON api_keys(prefix);
+
+-- Recorded acceptances of the club agreement (and any future consent docs).
+-- Append-only: one row per acceptance, kind identifies the document.
+CREATE TABLE IF NOT EXISTS consents (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    member_id INTEGER NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+    kind      TEXT NOT NULL,                -- e.g. 'club_agreement_v1'
+    version   TEXT,
+    at        INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_consents_member ON consents(member_id);
+
+-- External sign-in identities (Google). `subject` is the provider's stable
+-- user id (the ID-token `sub`), unique across the club; email is a snapshot.
+CREATE TABLE IF NOT EXISTS oauth_identities (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    member_id  INTEGER NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+    provider   TEXT NOT NULL,               -- 'google'
+    subject    TEXT UNIQUE,
+    email      TEXT,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_oauth_member ON oauth_identities(member_id);
 """
 
 

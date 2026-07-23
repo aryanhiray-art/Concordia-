@@ -1,8 +1,10 @@
 """Member signup / login / logout.
 
 Invite-gated club: signup needs the shared INVITE_CODE + email + a password the
-member creates. Login needs email + password every time. Passwords are stored as
-PBKDF2 hashes (never plaintext). Every signup/login is logged for the owner.
+member creates (or a verified Google sign-in via /google). Login needs email +
+password every time, or the Google button. Passwords are stored as PBKDF2
+hashes (never plaintext). Every signup/login is logged for the owner, and each
+signup records acceptance of the club agreement in `consents`.
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ from .. import ratelimit
 from ..config import settings
 from ..db import audit, db
 from ..security import ct_eq, hash_password, make_session, verify_password
+from ..services import google_auth
 from .deps import COOKIE_NAME, client_ip, current_member, load_member
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -46,11 +49,18 @@ class SignupBody(_EmailBody):
     email: str
     password: str
     display_name: str
+    consent: bool | None = None   # club-agreement acceptance; REQUIRED true in prod
 
 
 class LoginBody(_EmailBody):
     email: str
     password: str
+
+
+class GoogleBody(BaseModel):
+    credential: str                  # Google ID token (JWT) from the sign-in button
+    invite_code: str | None = None   # required only when the email is new to the club
+    consent: bool | None = None      # ditto — new members must accept the agreement
 
 
 def _default_settings(member_id: int) -> None:
@@ -87,6 +97,30 @@ def _clean_display_name(raw: str) -> str:
     return s[:40] or "Member"
 
 
+CONSENT_KIND = "club_agreement_v1"
+
+
+def _record_consent(member_id: int) -> None:
+    """Append the member's club-agreement acceptance (both signup paths)."""
+    with db() as conn:
+        conn.execute("INSERT INTO consents(member_id,kind,version,at) VALUES(?,?,?,?)",
+                     (member_id, CONSENT_KIND, "1", int(time.time())))
+
+
+def _link_identity(member_id: int, info: dict) -> None:
+    """Idempotently attach a verified Google identity (keyed by the stable `sub`)."""
+    with db() as conn:
+        if conn.execute("SELECT 1 FROM oauth_identities WHERE provider='google' AND subject=?",
+                        (info["sub"],)).fetchone():
+            return
+        conn.execute(
+            "INSERT INTO oauth_identities(member_id,provider,subject,email,created_at) "
+            "VALUES(?,?,?,?,?)",
+            (member_id, "google", info["sub"], info["email"], int(time.time())),
+        )
+    audit(f"member:{member_id}", "google_link", info["email"], {"sub": info["sub"]})
+
+
 @router.post("/signup")
 def signup(body: SignupBody, request: Request, resp: Response):
     ip = client_ip(request)
@@ -95,6 +129,10 @@ def signup(body: SignupBody, request: Request, resp: Response):
     if not ct_eq(body.invite_code.strip(), settings.invite_code):
         ratelimit.record(f"signup:{ip}")
         raise HTTPException(status_code=403, detail="invalid invite code")
+    # Prod requires an explicit club-agreement acceptance (dev keeps old clients
+    # working); whenever it IS given, it's recorded below either way.
+    if settings.is_prod and body.consent is not True:
+        raise HTTPException(status_code=403, detail="you must accept the club agreement")
     email = body.email
     role = "owner" if ct_eq(email, settings.owner_email) else "member"
     pw = hash_password(body.password)
@@ -109,6 +147,8 @@ def signup(body: SignupBody, request: Request, resp: Response):
         )
         member = {"id": cur.lastrowid, "session_version": 1, "role": role}
     _default_settings(member["id"])
+    if body.consent is True:
+        _record_consent(member["id"])
     _log_event(member["id"], "signup", request)
     audit(f"member:{member['id']}", "signup", email, {"role": role})
     # Count SUCCESSFUL signups against the per-IP window too (finding #24) — else
@@ -139,6 +179,83 @@ def login(body: LoginBody, request: Request, resp: Response):
     ratelimit.clear(ekey)
     _log_event(row["id"], "login", request)
     return _issue(resp, dict(row))
+
+
+@router.post("/google")
+def google(body: GoogleBody, request: Request, resp: Response):
+    """Sign in with Google. Existing member (matched by verified email) → login;
+    new email → invite-gated signup that must accept the club agreement."""
+    if not settings.google_client_id:
+        raise HTTPException(status_code=503, detail="google sign-in not configured")
+    ip = client_ip(request)
+    if ratelimit.too_many(f"google:{ip}", 20, 900):
+        raise HTTPException(status_code=429, detail="too many attempts — try again in a few minutes")
+    try:
+        info = google_auth.verify_id_token(body.credential)
+    except ValueError as e:
+        ratelimit.record(f"google:{ip}")
+        raise HTTPException(status_code=401, detail=str(e))
+    email = (info.get("email") or "").strip().lower()
+    # Belt-and-braces: the verifier already enforces both, but a member row must
+    # NEVER be minted/matched from an unverified or empty Google email.
+    if not email or info.get("email_verified") not in (True, "true"):
+        raise HTTPException(status_code=401, detail="google account email is not verified")
+
+    with db() as conn:
+        row = conn.execute(
+            "SELECT * FROM members WHERE lower(email)=? AND COALESCE(is_bot,0)=0", (email,)
+        ).fetchone()
+    if row:
+        # Existing account: Google just proved control of the email — log in
+        # (invite/consent not re-asked) and remember the identity link.
+        member = dict(row)
+        with db() as conn:
+            prior = conn.execute(
+                "SELECT 1 FROM oauth_identities WHERE member_id=? AND provider='google'",
+                (member["id"],),
+            ).fetchone()
+        if prior is None and member.get("password_hash"):
+            # FIRST Google link onto a password account: Google just proved the
+            # email's real owner is here, so whoever set that password (possibly
+            # an invite-holding squatter who pre-registered this address) loses
+            # access — password sign-in is disabled and every existing session
+            # revoked. The rightful owner continues via Google alone.
+            with db() as conn:
+                conn.execute(
+                    "UPDATE members SET password_hash=NULL, session_version=session_version+1 "
+                    "WHERE id=?", (member["id"],),
+                )
+            member["session_version"] = int(member.get("session_version", 1)) + 1
+            member["password_hash"] = None
+            audit(f"member:{member['id']}", "google_link_password_disabled", email, None)
+        _link_identity(member["id"], info)
+        _log_event(member["id"], "login", request)
+        return _issue(resp, member)
+
+    # New member: same invite gate + per-IP signup window as password signup.
+    if ratelimit.too_many(f"signup:{ip}", 10, 3600):
+        raise HTTPException(status_code=429, detail="too many signups — try again later")
+    if not body.invite_code or not ct_eq(body.invite_code.strip(), settings.invite_code):
+        ratelimit.record(f"signup:{ip}")
+        raise HTTPException(status_code=403, detail="invite code required or invalid")
+    if body.consent is not True:
+        raise HTTPException(status_code=403, detail="you must accept the club agreement")
+    role = "owner" if ct_eq(email, settings.owner_email) else "member"
+    with db() as conn:
+        cur = conn.execute(
+            "INSERT INTO members(email,display_name,role,invite_code_used,password_hash,created_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (email, _clean_display_name(info.get("name") or email.split("@")[0]),
+             role, "redacted", None, int(time.time())),
+        )
+        member = {"id": cur.lastrowid, "session_version": 1, "role": role}
+    _default_settings(member["id"])
+    _record_consent(member["id"])
+    _link_identity(member["id"], info)
+    _log_event(member["id"], "signup", request)
+    audit(f"member:{member['id']}", "signup", email, {"role": role, "via": "google"})
+    ratelimit.record(f"signup:{ip}")   # successful signups count against the window too
+    return _issue(resp, member)
 
 
 @router.post("/logout")

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { api } from "@/lib/api";
 import type { Member } from "@/lib/types";
+import { ConnectExplainer } from "./ConnectExplainer";
 import { Button, Card, Pill, Toggle } from "./ui";
 
 export function ConnectCard({ member, onChange }: { member: Member; onChange: () => void }) {
@@ -16,9 +17,14 @@ export function ConnectCard({ member, onChange }: { member: Member; onChange: ()
 
   const [optedIn, setOptedIn] = useState(Number(s?.opted_in) === 1);
   const [busy, setBusy] = useState(false);
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [phase, setPhase] = useState<"idle" | "paste">("idle");
   const [pasteUrl, setPasteUrl] = useState("");
   const [err, setErr] = useState<string | null>(null);
+  // how many times the paste-back exchange has failed this session — Robinhood
+  // approvals sometimes expire before the paste (state expiry / reused code), and
+  // simply redoing the flow works; after a failure we say so explicitly.
+  const [failedAttempts, setFailedAttempts] = useState(0);
 
   // Robinhood's agentic OAuth only redirects to localhost, so we can't catch the
   // callback server-side. Open Robinhood in a new tab; after approving, the user
@@ -40,8 +46,8 @@ export function ConnectCard({ member, onChange }: { member: Member; onChange: ()
     setBusy(true); setErr(null);
     // members paste with stray whitespace / wrapping quotes — clean before submit
     const url = pasteUrl.trim().replace(/^["'<]+|["'>]+$/g, "");
-    try { await api.rhComplete(url); setPhase("idle"); setPasteUrl(""); onChange(); }
-    catch (e: any) { setErr(e.message || "couldn't finish connecting"); }
+    try { await api.rhComplete(url); setPhase("idle"); setPasteUrl(""); setFailedAttempts(0); onChange(); }
+    catch (e: any) { setFailedAttempts((n) => n + 1); setErr(e.message || "couldn't finish connecting"); }
     finally { setBusy(false); }
   }
 
@@ -76,13 +82,16 @@ export function ConnectCard({ member, onChange }: { member: Member; onChange: ()
           </p>
 
           {phase === "idle" ? (
-            <Button variant="go" className="mt-4" onClick={connect} busy={busy}>
-              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
-                strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <path d="M5 12h14M13 6l6 6-6 6" />
-              </svg>
-              {reauth ? "Reconnect Robinhood" : "Connect Robinhood"}
-            </Button>
+            <>
+              <ConnectExplainer />
+              <Button variant="go" className="mt-4" onClick={connect} busy={busy}>
+                <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
+                  strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M5 12h14M13 6l6 6-6 6" />
+                </svg>
+                {reauth ? "Reconnect Robinhood" : "Connect Robinhood"}
+              </Button>
+            </>
           ) : (
             <div className="enter mt-4 rounded-[14px] border border-teal/20 bg-teal/[0.04] p-4">
               <div className="label !text-teal mb-2">Almost there — one paste</div>
@@ -101,11 +110,22 @@ export function ConnectCard({ member, onChange }: { member: Member; onChange: ()
                 <button onClick={() => { setPhase("idle"); setErr(null); }}
                   className="text-[12.5px] text-subtle hover:text-ink">cancel</button>
                 <button onClick={connect}
-                  className="ml-auto text-[12px] text-subtle hover:text-teal">re-open Robinhood</button>
+                  className="ml-auto text-[12px] text-subtle hover:text-teal">Re-open Robinhood</button>
               </div>
             </div>
           )}
-          {err && <div className="mt-3 text-[13px] text-red">⚠ {err}</div>}
+          {err && (
+            <div className="mt-3 text-[13px] leading-relaxed text-red">
+              ⚠ {err}
+              {failedAttempts >= 1 && (
+                <div className="mt-1.5 text-[12.5px] text-amber">
+                  This happens — Robinhood approvals sometimes expire before the paste. Click
+                  &ldquo;Re-open Robinhood&rdquo; and approve again; the second attempt almost
+                  always works.
+                </div>
+              )}
+            </div>
+          )}
         </div>
       ) : (
         <>
@@ -126,6 +146,34 @@ export function ConnectCard({ member, onChange }: { member: Member; onChange: ()
               </div>
             </div>
             <Toggle on={optedIn} onChange={toggle} />
+          </div>
+
+          {/* the exit right §7 of the club agreement promises: full revocation */}
+          <div className="mt-4 border-t border-white/10 pt-3 text-[12px] text-subtle">
+            {!confirmDisconnect ? (
+              <button onClick={() => setConfirmDisconnect(true)} className="hover:text-red">
+                Disconnect Robinhood…
+              </button>
+            ) : (
+              <span className="flex flex-wrap items-center gap-2.5">
+                <span>
+                  Revokes the club&apos;s access to your account entirely — trading for you stops and
+                  reconnecting later requires the full approval flow. Your positions are untouched.
+                </span>
+                <button
+                  onClick={async () => {
+                    setBusy(true);
+                    try { await api.rhDisconnect(); setConfirmDisconnect(false); onChange(); }
+                    catch (e: any) { setErr(e.message || "couldn't disconnect"); }
+                    finally { setBusy(false); }
+                  }}
+                  className="font-semibold text-red hover:underline disabled:opacity-60" disabled={busy}>
+                  Yes, disconnect
+                </button>
+                <button onClick={() => setConfirmDisconnect(false)} className="hover:text-ink">cancel</button>
+              </span>
+            )}
+            {err && <div className="mt-2 text-red">⚠ {err}</div>}
           </div>
         </>
       )}

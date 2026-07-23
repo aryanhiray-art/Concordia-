@@ -51,6 +51,9 @@ class Settings:
 
     invite_code: str = os.environ.get("INVITE_CODE", "concord")
     owner_email: str = os.environ.get("OWNER_EMAIL", "").strip().lower()
+    # Google sign-in (OAuth web client id). Empty = the /api/auth/google
+    # endpoint answers 503 and the web app hides the Google button.
+    google_client_id: str = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
     # Static service token: lets the forge-dashboard backend read owner/admin
     # endpoints without a member session (backend-to-backend). Empty = disabled.
     admin_api_token: str = os.environ.get("CONCORD_ADMIN_TOKEN", "").strip()
