@@ -17,6 +17,7 @@ export function AllocationCard({ onChange }: { onChange?: () => void }) {
   const [value, setValue] = useState<number>(0);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   async function load() {
     try {
@@ -29,8 +30,9 @@ export function AllocationCard({ onChange }: { onChange?: () => void }) {
   useEffect(() => { load(); }, []);
 
   async function save() {
-    setBusy(true); setSaved(false);
+    setBusy(true); setSaved(false); setErr(null);
     try { const a = await api.setAllocation(type, Number(value)); setAcc(a); setSaved(true); onChange?.(); }
+    catch (e: any) { setErr(e?.message || "couldn't save your stake — please try again."); }
     finally { setBusy(false); }
   }
 
@@ -60,21 +62,22 @@ export function AllocationCard({ onChange }: { onChange?: () => void }) {
         <div className="label mb-2.5">How much do you commit?</div>
         <div className="flex flex-wrap items-center gap-2.5">
           <div className="inline-flex overflow-hidden rounded-lg border border-white/10">
-            <button onClick={() => setType("percent")}
+            <button onClick={() => { setType("percent"); setErr(null); }}
               className={`px-3 py-1.5 text-[13px] ${type === "percent" ? "bg-teal-deep text-black font-semibold" : "text-dim"}`}>%</button>
-            <button onClick={() => setType("dollar")}
+            <button onClick={() => { setType("dollar"); setErr(null); }}
               className={`px-3 py-1.5 text-[13px] ${type === "dollar" ? "bg-teal-deep text-black font-semibold" : "text-dim"}`}>$</button>
           </div>
           <div className="flex items-center gap-1.5">
             {type === "dollar" && <span className="text-dim">$</span>}
             <input type="number" min={0} max={type === "percent" ? 100 : undefined} value={value}
-              onChange={(e) => { setValue(e.target.valueAsNumber || 0); setSaved(false); }}
+              onChange={(e) => { setValue(e.target.valueAsNumber || 0); setSaved(false); setErr(null); }}
               className="input !w-28 !py-1.5 text-right tnum" />
             {type === "percent" && <span className="text-dim">%</span>}
           </div>
           <Button variant="ok" onClick={save} busy={busy}>Commit</Button>
           {saved && <span className="text-[12px] text-green">✓ saved</span>}
         </div>
+        {err && <div className="mt-2.5 text-[12px] text-red">⚠ {err}</div>}
         <div className="mt-2.5 text-[12.5px] text-muted">
           Committing <b className="text-teal">{money(resolved, 2)}</b> — only this is traded + tracked. The rest of your account is untouched.
         </div>

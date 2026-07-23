@@ -17,6 +17,18 @@ export function setToken(t: string | null) {
   else window.localStorage.removeItem(TOKEN_KEY);
 }
 
+// HTTP-level failure: carries the status so callers can tell a bad token (401/403)
+// from a backend blip (5xx). Network failures (fetch itself throwing) stay plain
+// TypeErrors with no .status — treat those like a blip too.
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json", ...(opts.headers as any) };
   const tok = getToken();
@@ -25,7 +37,7 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   if (!res.ok) {
     let detail = res.statusText;
     try { detail = (await res.json()).detail || detail; } catch {}
-    throw new Error(detail);
+    throw new ApiError(detail, res.status);
   }
   return res.status === 204 ? (undefined as T) : res.json();
 }

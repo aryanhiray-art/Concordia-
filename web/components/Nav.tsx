@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/auth";
 const TABS = [
   { href: "/", label: "Overview" },
   { href: "/vote", label: "Vote" },
+  { href: "/history", label: "History" },
   { href: "/account", label: "Account" },
 ];
 
@@ -25,7 +26,7 @@ export function Nav() {
         <span className="mark !h-[30px] !w-[30px] !rounded-[9px]">
           <svg viewBox="0 0 24 24" aria-hidden><path d="M4 15l5-6 4 4 7-8" /><path d="M4 20h16" /></svg>
         </span>
-        <b className="font-display text-[15px] font-semibold tracking-tight">
+        <b className="cnav-word font-display text-[15px] font-semibold tracking-tight">
           concordia
         </b>
       </Link>
@@ -46,7 +47,7 @@ export function Nav() {
           </span>
         )}
         <button onClick={logout}
-          className="rounded-full border border-hair px-3 py-1.5 text-[12px] text-muted transition hover:text-ink">
+          className="cnav-out rounded-full border border-hair px-3 py-1.5 text-[12px] text-muted transition hover:text-ink">
           Log out
         </button>
       </div>

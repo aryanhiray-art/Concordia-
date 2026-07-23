@@ -27,6 +27,7 @@ export function Onboarding() {
   const { member } = useAuth();
   const [acc, setAcc] = useState<Account | null>(null);
   const [ready, setReady] = useState<Ready>(null);
+  const [loaded, setLoaded] = useState(false); // both fetches settled (ok or not)
   const [checking, setChecking] = useState(false);
 
   const connected = member?.robinhood?.status === "connected" && !!member?.robinhood?.account_number;
@@ -35,8 +36,10 @@ export function Onboarding() {
 
   useEffect(() => {
     if (!connected) return;
-    api.account().then(setAcc).catch(() => {});
-    api.tradeReadiness().then(setReady).catch(() => {});
+    Promise.allSettled([
+      api.account().then(setAcc),
+      api.tradeReadiness().then(setReady),
+    ]).then(() => setLoaded(true));
   }, [connected, member]);
 
   async function recheck() {
@@ -48,6 +51,9 @@ export function Onboarding() {
   const tradeReady = ready?.ready === true;
   const allDone = connected && tradeReady && allocated && optedIn;
   if (allDone) return null;
+  // Connected members: hold off until the fetches settle so finished members
+  // don't see the checklist flash in before allDone can be computed.
+  if (connected && !loaded) return null;
 
   return (
     <div className="glass shine enter p-5 sm:p-6">

@@ -20,6 +20,7 @@ export function AllocSliders({
   const [menuOpen, setMenuOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   // learn company names from the live tally
   useEffect(() => { session.tally.forEach((t) => { names.current[t.symbol] = t.name; }); }, [session.tally]);
@@ -53,27 +54,29 @@ export function AllocSliders({
     const maxV = 100 - sumExcept(i);
     const w = Math.max(0, Math.min(Math.round(raw), Math.round(maxV)));
     setRows((rs) => rs.map((r, k) => (k === i ? { ...r, weight: w } : r)));
-    setSaved(false);
+    setSaved(false); setErr(null);
   }
-  function remove(i: number) { setRows((rs) => rs.filter((_, k) => k !== i)); setSaved(false); }
+  function remove(i: number) { setRows((rs) => rs.filter((_, k) => k !== i)); setSaved(false); setErr(null); }
   function add(sym: string) {
     if (rows.some((r) => r.symbol === sym) || rows.length >= MAX_PICKS) return;
     setRows((rs) => [...rs, { symbol: sym, name: names.current[sym] || sym, weight: 0 }]);
-    setMenuOpen(false); setQuery(""); setResults([]); setSaved(false);
+    setMenuOpen(false); setQuery(""); setResults([]); setSaved(false); setErr(null);
   }
   function distributeEven() {
     if (!rows.length) return;
     const each = Math.floor(100 / rows.length);
     let rem = 100 - each * rows.length;
     setRows((rs) => rs.map((r) => { const extra = rem-- > 0 ? 1 : 0; return { ...r, weight: each + extra }; }));
-    setSaved(false);
+    setSaved(false); setErr(null);
   }
 
   async function submit() {
-    setSaving(true); setSaved(false);
+    setSaving(true); setSaved(false); setErr(null);
     try {
       const s = await api.castVote(rows.map((r) => ({ symbol: r.symbol, weight: r.weight })));
       onVoted(s); setSaved(true);
+    } catch (e: any) {
+      setErr(e?.message || "something went wrong on the server. Please try again.");
     } finally { setSaving(false); }
   }
 
@@ -141,6 +144,11 @@ export function AllocSliders({
               className="btn btn-go !px-5 !py-2.5 text-[13px]">{saving ? "saving…" : "Submit vote"}</button>
           </div>
         </div>
+        {err && (
+          <div className="mt-2.5 text-right text-[12px] text-red">
+            ⚠ Your vote was <b>NOT</b> saved — {err}
+          </div>
+        )}
 
         {menuOpen && (
           <div className="enter absolute left-0 top-[52px] z-10 max-h-72 w-[min(320px,90vw)] overflow-y-auto rounded-[12px] border border-white/10 bg-[#11161f] p-1.5 shadow-2xl">

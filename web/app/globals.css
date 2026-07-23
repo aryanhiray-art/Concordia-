@@ -230,6 +230,17 @@ body {
 .ctab.on { color: var(--ink); font-weight: 600; }
 .ctab.on::after { content: ""; position: absolute; left: 11px; right: 11px; bottom: -9px; height: 2px; border-radius: 2px; background: linear-gradient(90deg, var(--teal), var(--teal-deep)); box-shadow: 0 0 10px rgba(45,212,191,0.6); }
 
+/* ── Mobile nav (≤560px): logo only + tighter tabs so 4 tabs + Log out fit a
+   375px phone (nav = 347px wide, 327px inner after padding) ─────────────── */
+@media (max-width: 560px) {
+  .cnav { gap: 6px; padding: 8px 10px; }
+  .cnav .cnav-word { display: none; }              /* wordmark goes — logo only */
+  .cnav-tabs { gap: 2px; margin-left: 0; }
+  .ctab { font-size: 11.5px; padding: 7px 6px; }
+  .ctab.on::after { left: 6px; right: 6px; bottom: -7px; }
+  .cnav .cnav-out { padding: 5px 9px; font-size: 11px; }
+}
+
 /* ═══ Hero number ═══════════════════════════════════════════════════════ */
 .hero-eyebrow { font: 600 12px/1 var(--font-inter), sans-serif; letter-spacing: 0.06em; text-transform: uppercase; color: var(--subtle); }
 .hero-num { font: 800 52px/1.04 var(--font-outfit), sans-serif; letter-spacing: -0.6px; background: linear-gradient(180deg, #fff, #c8ece5); -webkit-background-clip: text; background-clip: text; color: transparent; font-variant-numeric: tabular-nums; }

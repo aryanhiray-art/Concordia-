@@ -1,9 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { AllocSliders } from "@/components/AllocSliders";
 import { MemberKeys } from "@/components/MemberKeys";
-import { Countdown, LoadingScreen } from "@/components/ui";
+import { Button, Card, Countdown, LoadingScreen } from "@/components/ui";
 
 function money(n?: number | null) {
   if (n == null) return "—";
@@ -11,9 +12,27 @@ function money(n?: number | null) {
 }
 
 export default function VotePage() {
-  const { member, power, session, refreshSession } = useAuth();
+  const { member, power, session, sessionError, refreshSession } = useAuth();
   const participating = Number(member?.settings?.opted_in) === 1;
+  const [retrying, setRetrying] = useState(false);
 
+  // Ballot fetch failed — show an error + retry instead of spinning forever.
+  if (!session && sessionError) {
+    const retry = async () => {
+      setRetrying(true);
+      try { await refreshSession(); } finally { setRetrying(false); }
+    };
+    return (
+      <div className="pt-10">
+        <Card className="enter mx-auto max-w-[460px]">
+          <span className="label">Today&apos;s ballot</span>
+          <p className="mt-3 text-[13px] text-red">⚠ Couldn&apos;t load the ballot — {sessionError}</p>
+          <p className="mt-1.5 text-[12px] text-subtle">You&apos;re still signed in — this is a connection problem, not a logout.</p>
+          <Button variant="glass" busy={retrying} onClick={retry} className="mt-4">Retry</Button>
+        </Card>
+      </div>
+    );
+  }
   if (!session) return <div className="pt-10"><LoadingScreen label="loading the ballot" /></div>;
 
   const open = session.status === "open";

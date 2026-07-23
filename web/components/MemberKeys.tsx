@@ -33,6 +33,7 @@ export function MemberKeys() {
   const [name, setName] = useState("my bot");
   const [creating, setCreating] = useState(false);
   const [fresh, setFresh] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try { setKeys((await api.apiKeys()).keys); } catch { /* ignore */ }
@@ -40,8 +41,9 @@ export function MemberKeys() {
   useEffect(() => { load(); }, [load]);
 
   async function create() {
-    setCreating(true);
+    setCreating(true); setErr(null);
     try { setFresh((await api.createApiKey(name)).key); await load(); }
+    catch (e: any) { setErr(e?.message || "couldn't create the key — please try again."); }
     finally { setCreating(false); }
   }
   async function revoke(id: number) {
@@ -63,10 +65,11 @@ export function MemberKeys() {
       <div className="mt-4 flex flex-wrap items-end gap-2.5">
         <div>
           <div className="label mb-1.5 !text-[10px]">Label</div>
-          <input className="input !w-48" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} />
+          <input className="input !w-48" value={name} onChange={(e) => { setName(e.target.value); setErr(null); }} maxLength={60} />
         </div>
         <button className="btn btn-go" disabled={creating} onClick={create}>{creating ? "Creating…" : "Generate key"}</button>
       </div>
+      {err && <div className="mt-2 text-[12px] text-red">⚠ {err}</div>}
 
       {fresh && (
         <div className="mt-4">

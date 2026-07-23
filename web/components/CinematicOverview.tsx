@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -29,10 +30,17 @@ export function CinematicOverview() {
   const [acc, setAcc] = useState<Account | null>(null);
   const [hold, setHold] = useState<{ symbol: string; value: number; pnl: number | null }[]>([]);
   const [lastPicks, setLastPicks] = useState<{ symbol: string; name?: string; weight?: number }[]>([]);
+  const [loaded, setLoaded] = useState(false); // account + holdings settled
+  const [failed, setFailed] = useState(false); // …and BOTH failed → can't know the real value
 
   useEffect(() => {
-    api.account().then(setAcc).catch(() => {});
-    api.holdings().then((r) => setHold(r.holdings || [])).catch(() => {});
+    Promise.allSettled([
+      api.account().then(setAcc),
+      api.holdings().then((r) => setHold(r.holdings || [])),
+    ]).then((rs) => {
+      setFailed(rs.every((r) => r.status === "rejected"));
+      setLoaded(true);
+    });
     // the most recent DECIDED basket — the donut's fallback when the account is
     // all cash AND the active ballot hasn't collected votes yet
     api.results().then((r) => setLastPicks(r.last_decided?.picks || [])).catch(() => {});
@@ -56,10 +64,10 @@ export function CinematicOverview() {
   const basket = ((session?.picks?.length ? session.picks : session?.tally) || []);
   const fallback = basket.length ? basket : lastPicks;
   const items = hold.length
-    ? hold.map((h) => ({ sym: h.symbol, name: h.symbol, val: h.value }))
-    : fallback.slice(0, 12).map((b) => ({ sym: b.symbol, name: b.name || b.symbol, val: b.weight || 1 }));
+    ? hold.map((h) => ({ sym: h.symbol, name: h.symbol, val: h.value, pnl: h.pnl }))
+    : fallback.slice(0, 12).map((b) => ({ sym: b.symbol, name: b.name || b.symbol, val: b.weight || 1, pnl: null as number | null }));
   const itemsLabel = hold.length ? "holdings" : basket.length ? "names" : "last basket";
-  const itemsKey = items.map((i) => `${i.sym}:${i.val}`).join(",");
+  const itemsKey = items.map((i) => `${i.sym}:${i.val}:${i.pnl ?? ""}`).join(",");
   const closesAt = session?.closes_at ?? 0;
   const open = session?.status === "open";
 
@@ -220,9 +228,13 @@ export function CinematicOverview() {
     }
 
     // ── holdings ──
-    const spark = (up: boolean) => `<svg class="hspark" viewBox="0 0 300 38" preserveAspectRatio="none"><polyline points="${up ? "0,30 60,20 120,24 180,11 240,15 300,3" : "0,11 60,16 120,9 180,20 240,17 300,26"}" fill="none" stroke="${up ? "#34E3A8" : "#FF6B6B"}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    // Real per-position P&L (from /api/me/holdings) fills the middle of the row;
+    // basket-fallback rows (not positions, no P&L) get a plain spacer instead.
+    const pnlCell = (p: number | null) => p == null
+      ? `<span class="tnum" style="flex:1;text-align:right;font:600 14px/1 var(--font-outfit);color:var(--muted)">—</span>`
+      : `<span class="tnum" style="flex:1;text-align:right;font:600 14px/1 var(--font-outfit);color:${p >= 0 ? "var(--green)" : "var(--red)"}">${p >= 0 ? "+" : "-"}$${Math.abs(p).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>`;
     $("#holdings").innerHTML = items.length
-      ? items.map((h, i) => `<div class="holdrow" data-vote="1"><span class="htk">${h.sym}</span><div class="hn"><b>${h.name || h.sym}</b><s>${h.sym}</s></div>${spark(i % 3 !== 1)}${hold.length ? `<span class="hwt tnum">$${Math.round(h.val || 0).toLocaleString()}</span>` : ""}</div>`).join("")
+      ? items.map((h) => `<div class="holdrow" data-vote="1"><span class="htk">${h.sym}</span><div class="hn"><b>${h.name || h.sym}</b><s>${h.sym}</s></div>${hold.length ? pnlCell(h.pnl) : `<span style="flex:1"></span>`}${hold.length ? `<span class="hwt tnum">$${Math.round(h.val || 0).toLocaleString()}</span>` : ""}</div>`).join("")
       : `<div style="color:var(--subtle);font:500 13px/1.6 var(--font-inter);padding:8px 2px">No holdings yet — once the basket runs, your positions show here. <a href="/vote" style="color:var(--teal)">Cast your vote →</a></div>`;
 
     drawChart("ALL"); renderSectors();
@@ -259,7 +271,39 @@ export function CinematicOverview() {
       window.removeEventListener("pointermove", pm); window.removeEventListener("pointerup", pu);
       stage.removeEventListener("wheel", onWheel as any);
     };
-  }, [value, pctTarget, itemsKey, itemsLabel, histKey, router]); // eslint-disable-line react-hooks/exhaustive-deps
+    // `loaded` matters: the stage only mounts after it flips, and that render can
+    // have identical value/items deps — without it the effect would never
+    // initialize the freshly-mounted stage.
+  }, [loaded, value, pctTarget, itemsKey, itemsLabel, histKey, router]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Wait for the account + holdings fetches before choosing what to show — a
+  // funded member should never flash the zero-state (or a $0 hero) while loading.
+  if (!loaded) return null;
+
+  if (value <= 0) {
+    if (failed) {
+      return (
+        <div className="glass shine enter mt-4 p-6 sm:p-7">
+          <div className="text-[13px] text-red">⚠ Couldn&apos;t load your account right now — refresh to try again.</div>
+        </div>
+      );
+    }
+    // Connected but nothing invested yet: a quiet zero-state instead of a dead
+    // $0 cinematic stage (the effect above already bails when value <= 0).
+    return (
+      <div className="glass shine enter mt-4 p-6 sm:p-7">
+        <div className="flex items-center gap-2.5">
+          <span className="dot bg-teal pulse" />
+          <h2 className="font-display text-[16px] font-bold">You&apos;re connected</h2>
+        </div>
+        <p className="mt-2 max-w-[58ch] text-[13px] leading-relaxed text-muted">
+          Your account is connected — commit an amount in{" "}
+          <Link href="/account" className="text-teal">Account</Link> and flip Participate on;
+          your first basket buys on the next buy day.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="cine" ref={root}>
