@@ -1,0 +1,31 @@
+[Unit]
+Description=Concord — SSH tunnel to the forge box's Ollama (bot LLM inference stays remote)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=concord
+Group=concord
+# Forwards localhost:11434 → forge box's local Ollama, so OLLAMA_URL stays the
+# default and bot_vote/bot_reweight run here against the LIVE DB while the LLM
+# lives on the old box. The remote account is a dedicated tunnel-only user whose
+# authorized_keys entry is: restrict,port-forwarding,permitopen="127.0.0.1:11434"
+# (no shell, no other targets). Key: /opt/concord/.ssh/ollama_tunnel (0600).
+ExecStart=/usr/bin/ssh -N \
+  -o BatchMode=yes -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+  -o StrictHostKeyChecking=accept-new \
+  -i /opt/concord/.ssh/ollama_tunnel \
+  -L 127.0.0.1:11434:127.0.0.1:11434 \
+  ollama-tunnel@5.78.193.177
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/concord/.ssh
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -73,10 +73,16 @@ timers (verify-report deliberately disabled).
 
 ## Phase C — cutover (same day, before 18:00 ET)
 
-10. Enable exactly the old box's enabled set MINUS: fresh-start + reset-account
-    (masked), **bot-vote + bot-reweight (deliberately retired — Ollama stays
-    behind, and bots exit executable consensus per the GTM plan)**:
-    `systemctl enable --now concord-api concord-web concord-{open-vote,close-vote,execute,backup,weekly-power,research-vote}.timer`
+10. Enable exactly the old box's enabled set MINUS fresh-start + reset-account
+    (masked). **Bots stay (owner decision 2026-07-23): bot-vote/bot-reweight run
+    HERE (they need the live DB) with LLM inference tunneled to the old box's
+    Ollama** — set up `concord-ollama-tunnel.service` first (dedicated
+    `ollama-tunnel` user on the forge box, authorized_keys entry
+    `restrict,port-forwarding,permitopen="127.0.0.1:11434" ssh-ed25519 …`, key at
+    /opt/concord/.ssh/ollama_tunnel), verify `curl 127.0.0.1:11434/api/tags`
+    through it, then:
+    `systemctl enable --now concord-api concord-web concord-ollama-tunnel concord-{open-vote,close-vote,execute,backup,weekly-power,research-vote,bot-vote,bot-reweight}.timer`
+    (Bots exit executable consensus later per the GTM plan, as membership grows.)
     Check `systemctl list-timers 'concord-*'` next-fire times look ET-sane. If
     timers aren't live before 18:00 ET, run `jobs/open_vote.py` manually.
 11. Flip `EXECUTION_MODE=live`, restart concord-api, owner re-arms via the
