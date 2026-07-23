@@ -1,0 +1,23 @@
+[Unit]
+Description=Concord member app (Next.js :3002)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=concord-web
+Group=concord-web
+WorkingDirectory=/opt/concord-web
+Environment=NODE_ENV=production
+Environment=FORGE_BACKEND=http://127.0.0.1:8780
+ExecStart=/opt/concord-web/node_modules/.bin/next start -p 3002
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/concord-web
+
+[Install]
+WantedBy=multi-user.target
