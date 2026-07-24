@@ -7,15 +7,21 @@ export function Logo({ size = 40 }: { size?: number }) {
   // outer mint, middle deeper mint, inner dark-sage core.
   return (
     <svg width={size} height={size} viewBox="0 0 100 100" aria-hidden>
-      <circle cx="50" cy="50" r="40" fill="none" stroke="#A8E4CE" strokeWidth="11"
-        strokeLinecap="round" pathLength={360} strokeDasharray="285 75"
-        transform="rotate(37.5 50 50)" />
-      <circle cx="50" cy="50" r="26.5" fill="none" stroke="#7FD1B6" strokeWidth="10.5"
-        strokeLinecap="round" pathLength={360} strokeDasharray="270 90"
-        transform="rotate(45 50 50)" />
-      <circle cx="50" cy="50" r="13" fill="none" stroke="#4C8570" strokeWidth="10"
-        strokeLinecap="round" pathLength={360} strokeDasharray="250 110"
-        transform="rotate(55 50 50)" />
+      <g className="lg-outer">
+        <circle cx="50" cy="50" r="40" fill="none" stroke="#A8E4CE" strokeWidth="11"
+          strokeLinecap="round" pathLength={360} strokeDasharray="285 75"
+          transform="rotate(37.5 50 50)" />
+      </g>
+      <g className="lg-mid">
+        <circle cx="50" cy="50" r="26.5" fill="none" stroke="#7FD1B6" strokeWidth="10.5"
+          strokeLinecap="round" pathLength={360} strokeDasharray="270 90"
+          transform="rotate(45 50 50)" />
+      </g>
+      <g className="lg-core">
+        <circle cx="50" cy="50" r="13" fill="none" stroke="#4C8570" strokeWidth="10"
+          strokeLinecap="round" pathLength={360} strokeDasharray="250 110"
+          transform="rotate(55 50 50)" />
+      </g>
     </svg>
   );
 }
@@ -92,8 +98,7 @@ export function LoadingScreen({ label = "loading" }: { label?: string }) {
   return (
     <div className="grid min-h-screen place-items-center">
       <div className="flex flex-col items-center gap-4">
-        <span className="pulse"><Logo size={48} /></span>
-        <Dots />
+        <span className="loadmark"><Logo size={56} /></span>
         <span className="text-[12px] text-subtle">{label}…</span>
       </div>
     </div>

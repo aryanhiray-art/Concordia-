@@ -371,3 +371,20 @@ html, body { overscroll-behavior-x: none; }
 .cine .legback:hover { color: var(--ink); background: rgba(45,212,191,.1); border-color: rgba(45,212,191,.3); }
 .cine .legback svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 .cine .donutring .ctr span { max-width: 168px; text-align: center; white-space: normal; line-height: 1.25; }
+
+/* ── loading animation: the concordia mark comes alive ──────────────────────
+   Outer + middle arcs counter-orbit at different speeds; the core breathes.
+   Rotation lives on the wrapping <g> so it composes with each ring's own
+   gap-positioning rotate. Static under prefers-reduced-motion. */
+.loadmark .lg-outer, .loadmark .lg-mid, .loadmark .lg-core {
+  transform-box: view-box; transform-origin: 50% 50%;
+}
+.loadmark .lg-outer { animation: lm-spin 2.6s cubic-bezier(.6,.15,.4,.85) infinite; }
+.loadmark .lg-mid   { animation: lm-spin-rev 1.9s cubic-bezier(.6,.15,.4,.85) infinite; }
+.loadmark .lg-core  { animation: lm-breathe 1.6s ease-in-out infinite; }
+@keyframes lm-spin     { to { transform: rotate(360deg); } }
+@keyframes lm-spin-rev { to { transform: rotate(-360deg); } }
+@keyframes lm-breathe  { 50% { opacity: .35; transform: scale(.88); } }
+@media (prefers-reduced-motion: reduce) {
+  .loadmark .lg-outer, .loadmark .lg-mid, .loadmark .lg-core { animation: none; }
+}
