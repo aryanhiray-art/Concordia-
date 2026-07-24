@@ -35,8 +35,21 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   if (tok) headers["Authorization"] = `Bearer ${tok}`;
   const res = await fetch(`${BASE}${path}`, { ...opts, headers, cache: "no-store" });
   if (!res.ok) {
+    // FastAPI errors: `detail` is a string for app errors, but a LIST of
+    // {loc, msg, …} objects for 422 validation errors — flatten either into a
+    // human sentence (never "[object Object]").
     let detail = res.statusText;
-    try { detail = (await res.json()).detail || detail; } catch {}
+    try {
+      const d = (await res.json()).detail;
+      if (typeof d === "string" && d) detail = d;
+      else if (Array.isArray(d)) {
+        detail = d.map((x: any) => {
+          const field = Array.isArray(x?.loc) ? String(x.loc[x.loc.length - 1]) : "";
+          const msg = typeof x?.msg === "string" ? x.msg.replace(/^Value error, /, "") : "invalid value";
+          return field && field !== "body" ? `${field}: ${msg}` : msg;
+        }).join(" · ");
+      } else if (d && typeof d === "object") detail = (d as any).msg || JSON.stringify(d);
+    } catch {}
     throw new ApiError(detail, res.status);
   }
   return res.status === 204 ? (undefined as T) : res.json();
