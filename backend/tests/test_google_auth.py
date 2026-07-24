@@ -104,7 +104,7 @@ def test_new_member_with_invite_and_consent_creates_everything(monkeypatch):
     assert row["display_name"] == "Ada Lovelace"          # sanitized Google name
     mid = row["id"]
     cons = _consents(mid)
-    assert len(cons) == 1 and cons[0]["kind"] == "club_agreement_v1"
+    assert len(cons) == 1 and cons[0]["kind"] == auth_routes.CONSENT_KIND
     idents = _identities(mid)
     assert len(idents) == 1
     assert idents[0]["provider"] == "google" and idents[0]["subject"] == "sub-new-1"
@@ -204,7 +204,7 @@ def test_prod_password_signup_requires_consent(prod_env):
     assert r2.status_code == 200
     mid = _member_row("pw-prod-ok@gclub.test")["id"]
     cons = _consents(mid)
-    assert len(cons) == 1 and cons[0]["kind"] == "club_agreement_v1"
+    assert len(cons) == 1 and cons[0]["kind"] == auth_routes.CONSENT_KIND
 
 
 def test_dev_password_signup_still_works_without_consent():
@@ -217,7 +217,7 @@ def test_dev_password_signup_still_works_without_consent():
                      json=_signup_payload("pw-dev-con@gclub.test", consent=True))
     assert r2.status_code == 200
     cons = _consents(_member_row("pw-dev-con@gclub.test")["id"])
-    assert len(cons) == 1 and cons[0]["kind"] == "club_agreement_v1"
+    assert len(cons) == 1 and cons[0]["kind"] == auth_routes.CONSENT_KIND
 
 
 # ─── real verifier checks (network stubbed at the requests layer) ─────────────
@@ -290,3 +290,55 @@ def test_demo_mode_forces_is_live_false_and_returns_demo_client(monkeypatch):
     finally:
         object.__setattr__(settings, "demo_mode", False)
         object.__setattr__(settings, "execution_mode", "dry_run")
+
+
+def test_delete_account_scrubs_identity_and_stops_trading():
+    import time as _t
+    from fastapi.testclient import TestClient
+    from app.main import app
+    client = TestClient(app)
+    email = f"del-{int(_t.time()*1000)}@example.com"
+    r = client.post("/api/auth/signup", json={
+        "invite_code": settings.invite_code, "email": email,
+        "password": "delete-me-123", "display_name": "Doomed", "consent": True})
+    assert r.status_code == 200
+    tok = r.json()["token"]
+    mid = r.json()["member"]["id"]
+    with db() as conn:
+        conn.execute("INSERT OR REPLACE INTO rh_accounts(member_id,account_number,agentic_allowed,status,connected_at) "
+                     "VALUES(?, 'X123', 1, 'connected', 0)", (mid,))
+    r = client.request("DELETE", "/api/me", headers={"Authorization": f"Bearer {tok}"},
+                       json={"confirm": "DELETE"})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    with db() as conn:
+        m = conn.execute("SELECT email, display_name, password_hash FROM members WHERE id=?", (mid,)).fetchone()
+        assert m["email"] == f"deleted-{mid}@deleted.invalid"
+        assert m["display_name"] == "Deleted member" and m["password_hash"] is None
+        assert conn.execute("SELECT COUNT(*) FROM rh_accounts WHERE member_id=?", (mid,)).fetchone()[0] == 0
+        s = conn.execute("SELECT opted_in FROM member_settings WHERE member_id=?", (mid,)).fetchone()
+        assert s["opted_in"] == 0
+        # consent proof retained
+        assert conn.execute("SELECT COUNT(*) FROM consents WHERE member_id=?", (mid,)).fetchone()[0] >= 1
+    # old session is dead (session_version bumped)
+    r = client.get("/api/me", headers={"Authorization": f"Bearer {tok}"})
+    assert r.status_code == 401
+
+
+def test_delete_account_requires_phrase_and_blocks_owner(monkeypatch):
+    import time as _t
+    from fastapi.testclient import TestClient
+    from app.main import app
+    client = TestClient(app)
+    email = f"del2-{int(_t.time()*1000)}@example.com"
+    tok = client.post("/api/auth/signup", json={
+        "invite_code": settings.invite_code, "email": email,
+        "password": "delete-me-123", "display_name": "Careful", "consent": True}).json()["token"]
+    assert client.request("DELETE", "/api/me", headers={"Authorization": f"Bearer {tok}"},
+                          json={"confirm": "nope"}).status_code == 400
+    mid = client.get("/api/me", headers={"Authorization": f"Bearer {tok}"}).json()["member"]["id"]
+    with db() as conn:
+        conn.execute("UPDATE members SET role='owner' WHERE id=?", (mid,))
+    assert client.request("DELETE", "/api/me", headers={"Authorization": f"Bearer {tok}"},
+                          json={"confirm": "DELETE"}).status_code == 403
+    with db() as conn:
+        conn.execute("UPDATE members SET role='member' WHERE id=?", (mid,))

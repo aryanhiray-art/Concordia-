@@ -140,3 +140,48 @@ def participate(body: ParticipateBody, member: dict = Depends(require_member)):
         )
     audit(f"member:{member['id']}", "participate", None, {"on": body.on})
     return {"member": load_member(member["id"])}
+
+
+class DeleteAccountBody(BaseModel):
+    confirm: str
+
+
+@router.delete("/me")
+def delete_account(body: DeleteAccountBody, member: dict = Depends(require_session_member)):
+    """Self-service account deletion (terms §7): trading stops instantly, the
+    Robinhood connection and every credential are destroyed, and personal
+    identifiers are erased. The club's BOOKS survive anonymized — votes, trade
+    and power history rows keep their member_id but that id now points at a
+    scrubbed row (no name, no email, no way to log in). Consent records are
+    retained as legal proof the agreement was accepted. Positions are untouched:
+    they live in the member's own brokerage account, which the club never owned.
+    Session-only auth (an API key must not be able to destroy the account) and
+    a typed confirmation phrase. The owner can't self-delete — the club would
+    be headless; transfer ownership first."""
+    if (body.confirm or "").strip().upper() != "DELETE":
+        raise HTTPException(status_code=400, detail='type DELETE to confirm')
+    if member.get("role") == "owner":
+        raise HTTPException(status_code=403,
+                            detail="the owner account can't delete itself — transfer ownership first")
+    mid = member["id"]
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            # kill switch first: no future cycle may touch this member
+            conn.execute("UPDATE member_settings SET opted_in=0, alloc_value=0, updated_at=strftime('%s','now') "
+                         "WHERE member_id=?", (mid,))
+            # revoke broker access + every way to authenticate
+            conn.execute("DELETE FROM rh_accounts WHERE member_id=?", (mid,))
+            conn.execute("DELETE FROM api_keys WHERE member_id=?", (mid,))
+            conn.execute("DELETE FROM oauth_identities WHERE member_id=?", (mid,))
+            conn.execute("DELETE FROM login_events WHERE member_id=?", (mid,))
+            # erase identity; bump session_version so every live session dies now
+            conn.execute("UPDATE members SET email=?, display_name='Deleted member', "
+                         "password_hash=NULL, session_version=session_version+1 WHERE id=?",
+                         (f"deleted-{mid}@deleted.invalid", mid))
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+    audit("system", "account_deleted", str(mid), None)
+    return {"ok": True}

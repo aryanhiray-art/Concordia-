@@ -49,7 +49,7 @@ export function TermsDoc() {
     <Doc
       eyebrow="Concordia · club agreement"
       title="Club Participation Agreement"
-      footer="Version club_agreement_v1 — July 2026. This is the club's member agreement; it is not legal advice."
+      footer="Version club_agreement_v2 — July 2026. This is the club's member agreement; it is not legal advice."
     >
       <P>
         Concordia is a private, invite-only trading club. Members vote once a day on what the club
@@ -149,18 +149,37 @@ export function TermsDoc() {
         app and the club stops placing new orders in your account immediately. Your existing
         positions stay exactly where they are — they are yours to keep or sell, on your own.
         Disconnecting Robinhood in the app revokes the club&apos;s access to your account entirely.
-        To leave the club altogether, tell the club operator, who will remove your membership and
-        delete your data on request.
+        To leave the club altogether, use <b className="text-ink">Delete account</b> in the app: all
+        trading for you stops instantly, the club&apos;s Robinhood access and every credential are
+        destroyed, and your personal details are erased. Your positions are not touched — they were
+        always in your own account. The club&apos;s anonymized books (votes and trade records with
+        your identity removed) and the record of your consent to this agreement are retained; see
+        the <A href="/privacy">privacy note</A>.
       </P>
 
-      <H>8 · Your data</H>
+      <H id="robinhood-access">8 · Exactly what the club can do in your Robinhood</H>
+      <P>
+        Connecting uses Robinhood&apos;s own Agentic Trading authorization, scoped to a dedicated
+        &ldquo;agentic&rdquo; brokerage account. Concordia <b className="text-ink">can</b>: read
+        that account&apos;s balance, positions and order status; fetch market quotes; and submit
+        market orders for stocks/ETFs <b className="text-ink">in that account only</b>, each tagged
+        as agentic and subject to Robinhood&apos;s own checks. Concordia{" "}
+        <b className="text-ink">cannot</b>: withdraw or transfer money or securities, see or change
+        your Robinhood login, touch any other Robinhood account of yours (individual, retirement,
+        spending, crypto), open options or crypto positions, or act outside the agentic account.
+        Your credentials never pass through Concordia — authorization happens on Robinhood&apos;s
+        site, and the resulting tokens are stored encrypted. You can revoke this access at any time
+        from Concordia (Disconnect / Delete account) or from Robinhood itself.
+      </P>
+
+      <H>9 · Your data</H>
       <P>
         The club stores only what it needs to run: who you are, how you log in, encrypted broker
         tokens, your votes, and the trades placed for you. The full inventory — what, where, who can
         see it, and how to have it deleted — is in the <A href="/privacy">privacy note</A>.
       </P>
 
-      <H>9 · Changes to this agreement</H>
+      <H>10 · Changes to this agreement</H>
       <P>
         This agreement may be updated. Members will be given notice before a new version takes
         effect, and the version you accepted — and when — is recorded with your membership.
@@ -229,10 +248,14 @@ export function PrivacyDoc() {
 
       <H>Deletion</H>
       <P>
-        Ask the club operator and your data will be deleted: account, credentials, tokens, and
-        personal details. Trades already executed live on in your own brokerage account&apos;s
-        records, which the club doesn&apos;t control. See also the{" "}
-        <A href="/terms">Club Participation Agreement</A>.
+        Delete your account yourself, any time, from the Account page. Deletion is immediate:
+        trading for you stops, the encrypted Robinhood tokens and account link are destroyed, your
+        sign-in methods (password, Google) are removed, and your name and email are erased. What is
+        retained: the club&apos;s anonymized books (votes, orders and voting-power history with your
+        identity removed — kept because they are the shared record of what the club did) and the
+        record that you accepted the agreement (kept as proof of consent). Trades already executed
+        also live on in your own brokerage account&apos;s records, which the club doesn&apos;t
+        control. See also the <A href="/terms">Club Participation Agreement</A>.
       </P>
     </Doc>
   );

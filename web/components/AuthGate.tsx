@@ -19,10 +19,8 @@ function ConsentRow({ checked, onChange }: { checked: boolean; onChange: (v: boo
       <span className="text-[12.5px] leading-relaxed text-muted">
         I&apos;ve read and agree to the{" "}
         <a href="/terms" target="_blank" rel="noopener noreferrer"
-          className="font-semibold text-teal hover:underline">Club Participation Agreement</a>{" "}
-        and understand the{" "}
-        <a href="/terms#risks" target="_blank" rel="noopener noreferrer"
-          className="font-semibold text-teal hover:underline">risks</a>.
+          className="font-semibold text-teal hover:underline">Club Participation Agreement</a>,
+        including its risk disclosure.
       </span>
     </label>
   );

@@ -61,6 +61,8 @@ export const api = {
       method: "POST", body: JSON.stringify({ credential, invite_code, consent }),
     }),
   me: () => req<{ member: Member; power: PowerView }>("/api/me"),
+  deleteAccount: (confirm: string) =>
+    req<{ ok: boolean }>("/api/me", { method: "DELETE", body: JSON.stringify({ confirm }) }),
   changePassword: (current_password: string, new_password: string) =>
     req<{ ok: boolean }>("/api/me/password", {
       method: "PUT", body: JSON.stringify({ current_password, new_password }),

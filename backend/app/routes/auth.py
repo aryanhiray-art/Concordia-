@@ -97,7 +97,7 @@ def _clean_display_name(raw: str) -> str:
     return s[:40] or "Member"
 
 
-CONSENT_KIND = "club_agreement_v1"
+CONSENT_KIND = "club_agreement_v2"   # v2 2026-07-24: self-service deletion + explicit RH access scope
 
 
 def _record_consent(member_id: int) -> None:
