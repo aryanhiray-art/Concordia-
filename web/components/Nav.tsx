@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth";
+import { Logo } from "./ui";
 
 const TABS = [
   { href: "/", label: "Overview" },
@@ -23,10 +24,8 @@ export function Nav() {
   return (
     <nav className="cnav">
       <Link href="/" className="flex items-center gap-2.5">
-        <span className="mark !h-[30px] !w-[30px] !rounded-[9px]">
-          <svg viewBox="0 0 24 24" aria-hidden><path d="M4 15l5-6 4 4 7-8" /><path d="M4 20h16" /></svg>
-        </span>
-        <b className="cnav-word font-display text-[15px] font-semibold tracking-tight">
+        <Logo size={30} />
+        <b className="cnav-word font-display text-[15px] font-bold tracking-tight text-[#8FD9C0]">
           concordia
         </b>
       </Link>

@@ -3,18 +3,20 @@
 import { useEffect, useState } from "react";
 
 export function Logo({ size = 40 }: { size?: number }) {
+  // The concordia mark: three concentric "C" arcs, gaps facing right —
+  // outer mint, middle deeper mint, inner dark-sage core.
   return (
-    <span className="mark" style={{ width: size, height: size }}>
-      <svg viewBox="0 0 24 24" aria-hidden>
-        <line x1="12" y1="12" x2="12" y2="4.5" />
-        <line x1="12" y1="12" x2="18.5" y2="8.25" />
-        <line x1="12" y1="12" x2="18.5" y2="15.75" />
-        <line x1="12" y1="12" x2="12" y2="19.5" />
-        <line x1="12" y1="12" x2="5.5" y2="15.75" />
-        <line x1="12" y1="12" x2="5.5" y2="8.25" />
-        <circle cx="12" cy="12" r="2" fill="currentColor" stroke="none" />
-      </svg>
-    </span>
+    <svg width={size} height={size} viewBox="0 0 100 100" aria-hidden>
+      <circle cx="50" cy="50" r="40" fill="none" stroke="#A8E4CE" strokeWidth="11"
+        strokeLinecap="round" pathLength={360} strokeDasharray="285 75"
+        transform="rotate(37.5 50 50)" />
+      <circle cx="50" cy="50" r="26.5" fill="none" stroke="#7FD1B6" strokeWidth="10.5"
+        strokeLinecap="round" pathLength={360} strokeDasharray="270 90"
+        transform="rotate(45 50 50)" />
+      <circle cx="50" cy="50" r="13" fill="none" stroke="#4C8570" strokeWidth="10"
+        strokeLinecap="round" pathLength={360} strokeDasharray="250 110"
+        transform="rotate(55 50 50)" />
+    </svg>
   );
 }
 

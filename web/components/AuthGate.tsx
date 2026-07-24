@@ -104,8 +104,8 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
   return (
     <div className="mx-auto mt-[12vh] w-[min(440px,100%)] px-5">
       <div className="mb-7 flex flex-col items-center text-center">
-        <Logo size={52} />
-        <div className="mt-4 font-display text-[26px] font-bold tracking-tight">
+        <Logo size={56} />
+        <div className="mt-4 font-display text-[26px] font-bold tracking-tight text-[#8FD9C0]">
           concordia
         </div>
         <p className="mt-1.5 text-[13.5px] text-muted">
