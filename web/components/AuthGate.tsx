@@ -222,9 +222,8 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
       )}
 
       <p className="mt-4 text-center text-[11.5px] leading-relaxed text-subtle">
-        Invite-only. You connect Robinhood through Robinhood&apos;s own secure login —
-        we never see your password.
-        {" "}
+        Invite-only
+        {" · "}
         <a href="/terms" target="_blank" rel="noopener noreferrer" className="text-muted hover:text-teal hover:underline">Terms</a>
         {" · "}
         <a href="/privacy" target="_blank" rel="noopener noreferrer" className="text-muted hover:text-teal hover:underline">Privacy</a>
