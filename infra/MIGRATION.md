@@ -54,6 +54,9 @@ timers (verify-report deliberately disabled).
    - `.env`: SAME `CONCORD_FERNET_KEY`, `SESSION_SECRET`, `CONCORD_ADMIN_TOKEN`,
      `INVITE_CODE`; NEW `API_PUBLIC_URL`/`WEB_ORIGIN` (the new domain);
      **`EXECUTION_MODE=dry_run`** (flip to live only at Step 11).
+   - ALSO append the staged Google line from /root/cutover-env-additions.txt on the
+     new box (`GOOGLE_CLIENT_ID=…`) — the web build already carries the matching
+     NEXT_PUBLIC_GOOGLE_CLIENT_ID (baked 2026-07-23; OAuth app published to production).
 8. Restore hygiene: DB → `/opt/concord/backend/concord.db`, chown concord,
    chmod 600, no stray `-wal/-shm`. **Immediately disarm the copied DB** (the
    `armed=true` kv row traveled with it):
