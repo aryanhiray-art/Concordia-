@@ -113,6 +113,10 @@ def ensure_client(member_id: int) -> RobinhoodClient:
     race-loser adopt the winner's freshly-rotated token instead of redeeming a spent
     one. The fresh-token fast path takes NO lock.
     """
+    from ..config import settings
+    if settings.demo_mode:
+        from .demo import DemoClient
+        return DemoClient(member_id)
     bundle = load_bundle(member_id)
     if not bundle:
         raise RuntimeError("member has no connected Robinhood account")

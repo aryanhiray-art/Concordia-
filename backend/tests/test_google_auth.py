@@ -269,3 +269,24 @@ def test_verify_id_token_rejects_non_200(monkeypatch):
     _tokeninfo(monkeypatch, {"error": "invalid_token"}, status=400)
     with pytest.raises(ValueError):
         google_auth.verify_id_token("tok")
+
+
+# ─── DEMO_MODE smoke (piggybacks on this file's temp-DB env setup) ───────────
+
+def test_demo_mode_forces_is_live_false_and_returns_demo_client(monkeypatch):
+    from app.config import settings
+    from app.robinhood import vault
+    from app.robinhood.demo import DemoClient
+    object.__setattr__(settings, "demo_mode", True)
+    object.__setattr__(settings, "execution_mode", "live")
+    try:
+        assert settings.is_live is False          # demo can NEVER trade
+        c = vault.ensure_client(999999)           # no rh_accounts row needed
+        assert isinstance(c, DemoClient)
+        port = c.get_portfolio(c.DEMO_ACCOUNT)["data"]
+        assert port["buying_power"]["buying_power"] == 100.0
+        q = c.get_quotes(["AAPL"])["data"]["results"][0]["quote"]
+        assert q["symbol"] == "AAPL" and q["last_trade_price"] > 0
+    finally:
+        object.__setattr__(settings, "demo_mode", False)
+        object.__setattr__(settings, "execution_mode", "dry_run")

@@ -163,9 +163,15 @@ class Settings:
         # Robinhood ever permits a different/registered redirect.
         return self.rh_redirect_uri_env or "http://localhost:8917/callback"
 
+    # DEMO_MODE: the whole app runs against a fake Robinhood (robinhood/demo.py)
+    # — connect always succeeds, balances/quotes are canned, no external calls.
+    # For localhost sandboxes only; is_live is forced False so a demo instance
+    # can never place a real order no matter what else is misconfigured.
+    demo_mode: bool = _bool("DEMO_MODE", False)
+
     @property
     def is_live(self) -> bool:
-        return self.execution_mode == "live"
+        return self.execution_mode == "live" and not self.demo_mode
 
     @property
     def is_prod(self) -> bool:

@@ -25,10 +25,36 @@ router = APIRouter(tags=["robinhood"])
 
 @router.get("/api/oauth/robinhood/start")
 def start(member: dict = Depends(require_member)):
+    if settings.demo_mode:
+        # DEMO: the "Robinhood" tab is our own stage prop; the paste-back flow
+        # stays identical so the member experiences the real choreography.
+        audit(f"member:{member['id']}", "rh_oauth_start", None, {"demo": True})
+        return {"authorize_url": f"{settings.api_public_url}/demo/robinhood"}
     info = oauth.start_authorization()
     vault.set_pending_state(info["state"], member["id"], info["verifier"], info["client_id"])
     audit(f"member:{member['id']}", "rh_oauth_start", None, None)
     return {"authorize_url": info["authorize_url"]}
+
+
+@router.get("/demo/robinhood")
+def demo_robinhood():
+    """DEMO_MODE only: the pretend Robinhood approval page."""
+    from fastapi.responses import HTMLResponse
+    if not settings.demo_mode:
+        raise HTTPException(status_code=404)
+    return HTMLResponse("""<!doctype html><html><head><meta charset="utf-8">
+<title>Robinhood (demo)</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#000;
+color:#fff;font-family:-apple-system,system-ui,sans-serif}.c{max-width:420px;padding:40px;text-align:center}
+h1{color:#00C805;font-size:22px}p{color:#9aa;line-height:1.6;font-size:14px}
+code{background:#111;border:1px solid #222;padding:8px 12px;border-radius:8px;display:block;
+margin-top:14px;color:#0f8;font-size:12px;word-break:break-all}</style></head><body><div class="c">
+<h1>Robinhood — demo approval</h1>
+<p>Pretend you just logged in and tapped <b style="color:#fff">Approve</b>.<br><br>
+In the real flow you would now land on a &ldquo;can&rsquo;t connect&rdquo; localhost page.
+Copy THIS page&rsquo;s URL from the address bar (or the one below) and paste it back into Concordia.</p>
+<code>http://localhost:8917/callback?code=demo&amp;state=demo</code>
+</div></body></html>""")
 
 
 class CompleteBody(BaseModel):
@@ -59,6 +85,21 @@ def _finish(member_id: int, code: str, state: str) -> dict:
 @router.post("/api/oauth/robinhood/complete")
 def complete(body: CompleteBody, member: dict = Depends(require_member)):
     """Member pastes the URL Robinhood redirected them to; we extract code+state."""
+    if settings.demo_mode:
+        # DEMO: any non-empty paste "connects" a fake agentic account.
+        if not (body.redirect_url or "").strip():
+            raise HTTPException(status_code=400, detail="paste the URL from the demo Robinhood page")
+        import time as _time
+        from ..robinhood.demo import DemoClient
+        vault.save_connection(member["id"], {
+            "access_token": "demo", "refresh_token": "demo", "client_id": "demo",
+            "obtained_at": int(_time.time()), "expires_in": 10 * 365 * 86400,
+        }, DemoClient.DEMO_ACCOUNT, True)
+        try:
+            power.snapshot_member(member["id"])
+        except Exception:  # noqa: BLE001
+            pass
+        return {"ok": True, "account_number": DemoClient.DEMO_ACCOUNT, "agentic_allowed": True}
     raw = (body.redirect_url or "").strip()
     if not raw:
         raise HTTPException(status_code=400, detail="paste the URL Robinhood sent you after approving")
