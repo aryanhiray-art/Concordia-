@@ -193,7 +193,7 @@ export function PrivacyDoc() {
     <Doc
       eyebrow="Concordia · privacy"
       title="Privacy — what we store and why"
-      footer="July 2026 — this note describes the club's actual data handling and may be updated with notice to members."
+      footer="Version privacy_v1 — July 2026. This note describes the club's actual data handling. It is not legal advice."
     >
       <P>
         Concordia stores the minimum it needs to run a voting club that executes in your own
@@ -256,6 +256,15 @@ export function PrivacyDoc() {
         record that you accepted the agreement (kept as proof of consent). Trades already executed
         also live on in your own brokerage account&apos;s records, which the club doesn&apos;t
         control. See also the <A href="/terms">Club Participation Agreement</A>.
+      </P>
+
+      <H>Changes to this policy</H>
+      <P>
+        This privacy note can change — for example if the club adds features, providers, or legal
+        obligations. When it does, members get notice before the new version applies, the version
+        number above changes, and the version you accepted — and when — stays recorded with your
+        membership. Continued participation after notice means acceptance; if you disagree with a
+        change, you can stop participating or delete your account at any time.
       </P>
     </Doc>
   );

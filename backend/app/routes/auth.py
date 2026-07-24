@@ -98,13 +98,17 @@ def _clean_display_name(raw: str) -> str:
 
 
 CONSENT_KIND = "club_agreement_v2"   # v2 2026-07-24: self-service deletion + explicit RH access scope
+PRIVACY_KIND = "privacy_v1"          # the signup checkbox covers the privacy note too
 
 
 def _record_consent(member_id: int) -> None:
-    """Append the member's club-agreement acceptance (both signup paths)."""
+    """Append the member's acceptances (both signup paths). The single signup
+    checkbox covers BOTH documents, so both are recorded with timestamps."""
+    now = int(time.time())
     with db() as conn:
-        conn.execute("INSERT INTO consents(member_id,kind,version,at) VALUES(?,?,?,?)",
-                     (member_id, CONSENT_KIND, "1", int(time.time())))
+        for kind in (CONSENT_KIND, PRIVACY_KIND):
+            conn.execute("INSERT INTO consents(member_id,kind,version,at) VALUES(?,?,?,?)",
+                         (member_id, kind, "1", now))
 
 
 def _link_identity(member_id: int, info: dict) -> None:

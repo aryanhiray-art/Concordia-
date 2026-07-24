@@ -20,7 +20,10 @@ function ConsentRow({ checked, onChange }: { checked: boolean; onChange: (v: boo
         I&apos;ve read and agree to the{" "}
         <a href="/terms" target="_blank" rel="noopener noreferrer"
           className="font-semibold text-teal hover:underline">Club Participation Agreement</a>,
-        including its risk disclosure.
+        including its risk disclosure, and the{" "}
+        <a href="/privacy" target="_blank" rel="noopener noreferrer"
+          className="font-semibold text-teal hover:underline">Privacy Policy</a>{" "}
+        (both may be updated with notice).
       </span>
     </label>
   );

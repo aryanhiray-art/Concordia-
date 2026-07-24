@@ -104,7 +104,7 @@ def test_new_member_with_invite_and_consent_creates_everything(monkeypatch):
     assert row["display_name"] == "Ada Lovelace"          # sanitized Google name
     mid = row["id"]
     cons = _consents(mid)
-    assert len(cons) == 1 and cons[0]["kind"] == auth_routes.CONSENT_KIND
+    assert {c["kind"] for c in cons} == {auth_routes.CONSENT_KIND, auth_routes.PRIVACY_KIND}
     idents = _identities(mid)
     assert len(idents) == 1
     assert idents[0]["provider"] == "google" and idents[0]["subject"] == "sub-new-1"
@@ -204,7 +204,7 @@ def test_prod_password_signup_requires_consent(prod_env):
     assert r2.status_code == 200
     mid = _member_row("pw-prod-ok@gclub.test")["id"]
     cons = _consents(mid)
-    assert len(cons) == 1 and cons[0]["kind"] == auth_routes.CONSENT_KIND
+    assert {c["kind"] for c in cons} == {auth_routes.CONSENT_KIND, auth_routes.PRIVACY_KIND}
 
 
 def test_dev_password_signup_still_works_without_consent():
@@ -217,7 +217,7 @@ def test_dev_password_signup_still_works_without_consent():
                      json=_signup_payload("pw-dev-con@gclub.test", consent=True))
     assert r2.status_code == 200
     cons = _consents(_member_row("pw-dev-con@gclub.test")["id"])
-    assert len(cons) == 1 and cons[0]["kind"] == auth_routes.CONSENT_KIND
+    assert {c["kind"] for c in cons} == {auth_routes.CONSENT_KIND, auth_routes.PRIVACY_KIND}
 
 
 # ─── real verifier checks (network stubbed at the requests layer) ─────────────
