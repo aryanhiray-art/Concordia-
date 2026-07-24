@@ -151,27 +151,28 @@ export function ConnectCard({ member, onChange }: { member: Member; onChange: ()
           {/* the exit right §7 of the club agreement promises: full revocation */}
           <div className="mt-4 border-t border-white/10 pt-3 text-[12px] text-subtle">
             {!confirmDisconnect ? (
-              <button onClick={() => setConfirmDisconnect(true)} className="hover:text-red">
-                Disconnect Robinhood…
-              </button>
+              <Button variant="danger" onClick={() => setConfirmDisconnect(true)}>
+                Disconnect Robinhood
+              </Button>
             ) : (
-              <span className="flex flex-wrap items-center gap-2.5">
-                <span>
+              <div className="space-y-2.5">
+                <p className="leading-relaxed">
                   Revokes the club&apos;s access to your account entirely — trading for you stops and
                   reconnecting later requires the full approval flow. Your positions are untouched.
-                </span>
-                <button
-                  onClick={async () => {
-                    setBusy(true);
-                    try { await api.rhDisconnect(); setConfirmDisconnect(false); onChange(); }
-                    catch (e: any) { setErr(e.message || "couldn't disconnect"); }
-                    finally { setBusy(false); }
-                  }}
-                  className="font-semibold text-red hover:underline disabled:opacity-60" disabled={busy}>
-                  Yes, disconnect
-                </button>
-                <button onClick={() => setConfirmDisconnect(false)} className="hover:text-ink">cancel</button>
-              </span>
+                </p>
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <Button variant="danger" className="h-10" busy={busy}
+                    onClick={async () => {
+                      setBusy(true);
+                      try { await api.rhDisconnect(); setConfirmDisconnect(false); onChange(); }
+                      catch (e: any) { setErr(e.message || "couldn't disconnect"); }
+                      finally { setBusy(false); }
+                    }}>
+                    Yes, disconnect
+                  </Button>
+                  <button onClick={() => setConfirmDisconnect(false)} className="hover:text-ink">cancel</button>
+                </div>
+              </div>
             )}
             {err && <div className="mt-2 text-red">⚠ {err}</div>}
           </div>

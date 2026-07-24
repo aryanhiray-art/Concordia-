@@ -33,9 +33,7 @@ export function DeleteAccount() {
             Deleting your account stops all trading for you instantly, destroys the club&apos;s
             Robinhood access and your logins, and erases your personal details.
           </p>
-          <button onClick={() => setOpen(true)} className="text-[13px] font-semibold text-red hover:underline">
-            Delete account…
-          </button>
+          <Button variant="danger" onClick={() => setOpen(true)}>Delete account</Button>
         </div>
       ) : (
         <div className="mt-3 space-y-3">
@@ -50,20 +48,23 @@ export function DeleteAccount() {
               </span>
             )}
           </p>
-          <div className="flex flex-wrap items-center gap-2.5">
-            <input
-              value={confirm}
-              onChange={(e) => { setConfirm(e.target.value); setErr(null); }}
-              placeholder='type DELETE'
-              className="input !w-36 !py-1.5 font-mono !text-[12px]"
-              spellCheck={false} autoComplete="off"
-            />
-            <Button variant="ok" onClick={doDelete} busy={busy}
-              disabled={isOwner || confirm.trim().toUpperCase() !== "DELETE"}>
-              Permanently delete
-            </Button>
-            <button onClick={() => { setOpen(false); setConfirm(""); setErr(null); }}
-              className="text-[12.5px] text-subtle hover:text-ink">cancel</button>
+          <div>
+            <div className="label mb-2">Type DELETE to confirm</div>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <input
+                value={confirm}
+                onChange={(e) => { setConfirm(e.target.value); setErr(null); }}
+                placeholder="DELETE"
+                className="input h-10 !w-36 !rounded-[12px] !py-0 font-mono !text-[12px]"
+                spellCheck={false} autoComplete="off"
+              />
+              <Button variant="danger" className="h-10" onClick={doDelete} busy={busy}
+                disabled={isOwner || confirm.trim().toUpperCase() !== "DELETE"}>
+                Permanently delete
+              </Button>
+              <button onClick={() => { setOpen(false); setConfirm(""); setErr(null); }}
+                className="text-[12.5px] text-subtle hover:text-ink">cancel</button>
+            </div>
           </div>
           {err && <div className="text-[13px] text-red">⚠ {err}</div>}
         </div>

@@ -1,106 +1,51 @@
 "use client";
 
+// The slim resume banner for members who skipped the /welcome wizard with
+// setup unfinished (the wizard itself replaced the old full checklist card).
+// Shown on the Overview; self-hides once every step is done.
+
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import type { Account } from "@/lib/types";
-
-type Ready = { connected: boolean; ready: boolean; reason: string } | null;
-
-function Step({ n, done, title, children }: { n: number; done: boolean; title: string; children?: React.ReactNode }) {
-  return (
-    <div className="flex gap-3.5">
-      <div className={`mt-0.5 grid h-7 w-7 flex-none place-items-center rounded-full text-[12px] font-bold ${
-        done ? "bg-green/15 text-green" : "border border-hair text-subtle"}`}>
-        {done ? "✓" : n}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className={`font-display text-[14.5px] font-semibold ${done ? "text-muted line-through" : "text-ink"}`}>{title}</div>
-        {!done && children && <div className="mt-1.5 text-[12.5px] leading-relaxed text-muted">{children}</div>}
-      </div>
-    </div>
-  );
-}
 
 export function Onboarding() {
   const { member } = useAuth();
-  const [acc, setAcc] = useState<Account | null>(null);
-  const [ready, setReady] = useState<Ready>(null);
-  const [loaded, setLoaded] = useState(false); // both fetches settled (ok or not)
-  const [checking, setChecking] = useState(false);
-
   const connected = member?.robinhood?.status === "connected" && !!member?.robinhood?.account_number;
-  const reauth = member?.robinhood?.status === "error";  // Robinhood rotated the tokens
   const optedIn = Number(member?.settings?.opted_in) === 1;
+  const [state, setState] = useState<{ loaded: boolean; ready: boolean; allocated: boolean }>(
+    { loaded: false, ready: false, allocated: false },
+  );
 
   useEffect(() => {
-    if (!connected) return;
-    Promise.allSettled([
-      api.account().then(setAcc),
-      api.tradeReadiness().then(setReady),
-    ]).then(() => setLoaded(true));
+    if (!connected) { setState({ loaded: true, ready: false, allocated: false }); return; }
+    let alive = true;
+    Promise.allSettled([api.tradeReadiness(), api.account()]).then(([r, a]) => {
+      if (!alive) return;
+      setState({
+        loaded: true,
+        ready: r.status === "fulfilled" && r.value.ready === true,
+        allocated: a.status === "fulfilled" && (a.value.allocation?.resolved_usd ?? 0) > 0,
+      });
+    });
+    return () => { alive = false; };
   }, [connected, member]);
 
-  async function recheck() {
-    setChecking(true);
-    try { setReady(await api.tradeReadiness(true)); } finally { setChecking(false); }
-  }
-
-  const allocated = (acc?.allocation?.resolved_usd ?? 0) > 0;
-  const tradeReady = ready?.ready === true;
-  const allDone = connected && tradeReady && allocated && optedIn;
-  if (allDone) return null;
-  // Connected members: hold off until the fetches settle so finished members
-  // don't see the checklist flash in before allDone can be computed.
-  if (connected && !loaded) return null;
+  if (!state.loaded) return null; // no flash while we find out
+  // Step 1 (the rules) counts as done — anyone seeing this banner has been
+  // through, or deliberately skipped, the wizard.
+  const done = 1 + (connected ? 1 : 0) + (state.ready ? 1 : 0) + (state.allocated ? 1 : 0) + (optedIn ? 1 : 0);
+  if (done >= 5) return null; // fully set up — nothing to resume
 
   return (
-    <div className="glass shine enter p-5 sm:p-6">
-      <div className="flex items-center gap-2.5">
-        <span className="dot bg-teal pulse" />
-        <h2 className="font-display text-[16px] font-bold">Finish setting up</h2>
-      </div>
-      <p className="mt-1 text-[12.5px] text-subtle">A few one-time steps before your vote can trade.</p>
-
-      <div className="mt-5 space-y-4">
-        <Step n={1} done={connected} title={reauth ? "Reconnect your Robinhood account" : "Connect your Robinhood (agentic) account"}>
-          {reauth ? (
-            <>Robinhood signed this connection out (it rotates credentials periodically) — reconnect
-            to resume trading, takes under a minute.{" "}
-            <Link href="/account" className="text-teal">Reconnect →</Link></>
-          ) : (
-            <>Link Robinhood on its own secure site — your credentials never touch Concordia.{" "}
-            <Link href="/account" className="text-teal">Connect →</Link></>
-          )}
-        </Step>
-
-        <Step n={2} done={connected && tradeReady} title="Finish your Robinhood investing profile">
-          {!connected ? (
-            "Available after you connect."
-          ) : ready?.reason === "needs_questionnaire" ? (
-            <>
-              Robinhood needs you to answer a few <b className="text-ink">investing-goals questions</b> before it
-              lets the club place buys. Open the Robinhood app → try a $1 buy (or Settings → Investing profile) →
-              answer them. Then{" "}
-              <button onClick={recheck} disabled={checking} className="text-teal underline disabled:opacity-60">
-                {checking ? "checking…" : "re-check"}</button>.
-            </>
-          ) : ready?.connected ? (
-            <button onClick={recheck} disabled={checking} className="text-teal underline disabled:opacity-60">
-              {checking ? "checking…" : "check status"}</button>
-          ) : "Checking…"}
-        </Step>
-
-        <Step n={3} done={allocated} title="Set how much you commit">
-          Choose a % or $ amount of your account for the club — that becomes your stake and voting power.{" "}
-          <Link href="/account" className="text-teal">Set it →</Link>
-        </Step>
-
-        <Step n={4} done={optedIn} title="Turn on participation">
-          Flip the switch in <Link href="/account" className="text-teal">Account</Link> to start voting and trading.
-        </Step>
-      </div>
-    </div>
+    <Link
+      href="/welcome"
+      className="glass shine enter flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3.5 transition hover:border-teal/30"
+    >
+      <span className="dot pulse flex-none bg-teal" />
+      <span className="font-display text-[14px] font-semibold">Finish setting up</span>
+      <span className="text-[12.5px] text-muted">{done} of 5 steps done</span>
+      <span className="ml-auto whitespace-nowrap text-[13px] font-semibold text-teal">Resume →</span>
+    </Link>
   );
 }

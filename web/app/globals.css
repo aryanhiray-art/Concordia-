@@ -131,8 +131,9 @@ body {
 .btn-glass:hover:not(:disabled) { border-color: rgba(255, 255, 255, 0.24); transform: translateY(-1px); }
 .btn-ok { color: var(--green); background: rgba(52, 227, 168, 0.1); border-color: rgba(52, 227, 168, 0.32); }
 .btn-ok:hover:not(:disabled) { background: rgba(52, 227, 168, 0.18); }
-.btn-danger { color: var(--red); background: rgba(255, 107, 107, 0.1); border-color: rgba(255, 107, 107, 0.32); }
-.btn-danger:hover:not(:disabled) { background: rgba(255, 107, 107, 0.18); }
+.btn-danger { color: var(--red); background: transparent; border-color: rgba(255, 107, 107, 0.32); }
+.btn-danger:hover:not(:disabled) { background: rgba(255, 107, 107, 0.12); }
+.btn-danger .spin { border-color: rgba(255, 107, 107, 0.3); border-top-color: var(--red); }
 .btn-ghost { color: var(--muted); background: transparent; }
 .btn-ghost:hover:not(:disabled) { color: var(--ink); }
 
