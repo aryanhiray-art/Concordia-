@@ -76,11 +76,11 @@ function BrandPane() {
     <div className="relative hidden min-w-0 lg:flex lg:flex-col lg:justify-center">
       <div className="authglow" aria-hidden />
       <div className="relative">
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-[18px]">
           <span className="lg-draw flex-none" aria-hidden>
-            <Logo size={64} />
+            <Logo size={76} />
           </span>
-          <div className="font-display text-[46px] font-bold leading-none tracking-tight text-[#8FD9C0]">
+          <div className="font-display text-[52px] font-bold leading-none tracking-tight text-[#8FD9C0]">
             concordia
           </div>
         </div>
