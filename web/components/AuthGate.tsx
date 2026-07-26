@@ -88,7 +88,7 @@ function BrandPane() {
             an implied performance promise. Wordmark + slogan are deliberately
             the two largest text elements on the page; the mechanics live in
             the How-it-works panel below. */}
-        <p className="mt-7 max-w-[32rem] text-[26px] font-light leading-[1.35] text-ink xl:text-[28px]">
+        <p className="mt-7 text-[26px] font-light leading-[1.35] text-ink xl:text-[28px]">
           Taking on Wall Street,
           <br />
           <span className="text-teal">one vote at a time</span>.
@@ -96,7 +96,7 @@ function BrandPane() {
         {/* The owner's favorite glass finish wraps the story itself — a real
             material anchor for the pane with no fake product data (live vote
             counts are members-only; ballots go public only after they close). */}
-        <div className="enter mt-9 max-w-[30rem]" style={{ animationDelay: "0.15s" }}>
+        <div className="enter mt-9" style={{ animationDelay: "0.15s" }}>
           <div className="glass glass-glow shine p-6 xl:p-7">
             <p className="label">How it works</p>
             <div className="stagger mt-5 space-y-6">
@@ -264,9 +264,15 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
     // Below lg: exactly the original stacked column (logo → wordmark → tagline → card).
     // lg+: a centered two-pane composition — brand pane · fading hairline · auth pane.
     <div className="lg:flex lg:min-h-screen lg:px-12 lg:py-12 lg:[align-items:safe_center] lg:[justify-content:safe_center]">
-      <div className="lg:grid lg:w-full lg:max-w-[1200px] lg:grid-cols-[minmax(0,1fr)_1px_400px] lg:items-center lg:gap-x-12 xl:grid-cols-[minmax(0,1fr)_1px_440px] xl:gap-x-16">
+      {/* Fixed left track (not 1fr): a stretching column left the divider
+          hugging the auth card — measured 215px of void on one side vs 65px on
+          the other. Fixed tracks + justify-center put the hairline dead centre
+          in an even gutter, so the two panels read as a designed pair. */}
+      <div className="lg:grid lg:w-full lg:max-w-[1200px] lg:grid-cols-[440px_1px_400px] lg:items-center lg:justify-center lg:gap-x-12 xl:grid-cols-[520px_1px_440px] xl:gap-x-16">
         <BrandPane />
-        <div className="hidden h-[min(560px,64vh)] w-px self-center bg-gradient-to-b from-transparent via-white/15 to-transparent lg:block" aria-hidden />
+        {/* now that it sits on the true centre axis it earns being visible —
+            /15 over near-black did not register on screen at all */}
+        <div className="hidden h-[min(560px,64vh)] w-px self-center bg-gradient-to-b from-transparent via-white/25 to-transparent lg:block" aria-hidden />
 
         <div className="mx-auto mt-[12vh] w-[min(440px,100%)] px-5 lg:mx-0 lg:mt-0 lg:w-full lg:px-0">
       <div className="mb-7 flex flex-col items-center text-center lg:hidden">

@@ -8,8 +8,8 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "sw
 const outfit = Outfit({ subsets: ["latin"], weight: ["500", "600", "700", "800"], variable: "--font-outfit", display: "swap" });
 
 export const metadata: Metadata = {
-  title: "Concordia — a trading club that votes",
-  description: "Members vote once a day; the consensus basket executes on each member's own Robinhood.",
+  title: "Concordia — taking on Wall Street, one vote at a time",
+  description: "An invite-only investing club: members vote, the top picks become one shared basket, and every trade executes in your own brokerage account.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
