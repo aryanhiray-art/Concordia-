@@ -16,6 +16,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${inter.variable} ${outfit.variable}`}>
       <body className="min-h-screen font-sans text-ink antialiased">
+        <div className="bgfx" aria-hidden />
         <div className="aurora" aria-hidden />
         <AuthProvider>
           <AppShell>{children}</AppShell>

@@ -24,11 +24,29 @@ body {
   min-height: 100vh;
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
+  /* Solid base only — the glow gradient lives on .bgfx (a fixed layer) so no
+     scroll position or rubber-band overscroll can ever reveal a seam. */
+  background: var(--bg);
+}
+
+/* ── Seam-proof page background ─────────────────────────────────────────────
+   The old html/body radial-gradient + background-attachment:fixed broke on
+   overscroll (Safari repaints the canvas past the document edge with the flat
+   base). This fixed layer is oversized by 35vh top+bottom so the glow keeps
+   painting through any bounce; gradient centers are re-expressed in viewport
+   units to land exactly where the old 10%/-10% and 108%/-4% stops did. */
+.bgfx {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: -35vh;
+  bottom: -35vh;
+  z-index: -2;
+  pointer-events: none;
   background:
-    radial-gradient(760px 540px at 10% -10%, rgba(45, 212, 191, 0.16), transparent 60%),
-    radial-gradient(820px 600px at 108% -4%, rgba(56, 134, 221, 0.12), transparent 60%),
+    radial-gradient(760px 540px at 10vw 25vh, rgba(45, 212, 191, 0.16), transparent 60%),
+    radial-gradient(820px 600px at 108vw 31vh, rgba(56, 134, 221, 0.12), transparent 60%),
     var(--bg);
-  background-attachment: fixed;
 }
 
 .tnum { font-variant-numeric: tabular-nums; }
@@ -180,6 +198,34 @@ body {
 }
 @keyframes drift1 { 0%, 100% { transform: translate(0, 0) scale(1); } 50% { transform: translate(7vw, 5vw) scale(1.14); } }
 @keyframes drift2 { 0%, 100% { transform: translate(0, 0) scale(1); } 50% { transform: translate(-6vw, 4vw) scale(1.1); } }
+
+/* ── Logged-out brand pane: slow ambient teal glow (lg+ only) ───────────── */
+/* Heavy blur is gated to desktop; below lg the element doesn't render at all. */
+.authglow { display: none; }
+@media (min-width: 1024px) {
+  .authglow {
+    display: block;
+    position: absolute;
+    left: -16%;
+    top: 50%;
+    width: 34rem;
+    height: 34rem;
+    margin-top: -17rem;
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 0;
+    background: radial-gradient(circle, rgba(45, 212, 191, 0.15), rgba(56, 134, 221, 0.05) 55%, transparent 72%);
+    filter: blur(64px);
+    animation: authdrift 22s ease-in-out infinite;
+  }
+}
+@keyframes authdrift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(3.5rem, -2.5rem) scale(1.12); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .authglow { animation: none; }
+}
 
 /* ── Entrance (glass cards rise + fade in) ──────────────────────────────── */
 @keyframes enterUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }

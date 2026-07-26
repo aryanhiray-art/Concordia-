@@ -52,6 +52,63 @@ function OrDivider() {
   );
 }
 
+// One row of the desktop brand pane's story — the wizard's .ci icon language.
+function TruthRow({ icon, title, body }: { icon: React.ReactNode; title: string; body: React.ReactNode }) {
+  return (
+    <div className="flex items-start gap-4">
+      <span className="ci flex-none" aria-hidden>
+        <svg viewBox="0 0 24 24">{icon}</svg>
+      </span>
+      <div className="min-w-0">
+        <div className="font-display text-[15px] font-semibold text-ink">{title}</div>
+        <p className="mt-1 text-[13px] leading-relaxed text-muted">{body}</p>
+      </div>
+    </div>
+  );
+}
+
+// Desktop-only (lg+) left pane: the mark, the wordmark, and the club's three
+// truths. Below lg the stacked mobile header carries this instead.
+function BrandPane() {
+  return (
+    <div className="relative hidden min-w-0 lg:flex lg:flex-col lg:justify-center">
+      <div className="authglow" aria-hidden />
+      <div className="relative">
+        <div className="flex items-center gap-5">
+          <Logo size={80} />
+          <div className="font-display text-[46px] font-bold leading-none tracking-tight text-[#8FD9C0]">
+            concordia
+          </div>
+        </div>
+        <p className="mt-5 max-w-[30rem] text-[15.5px] leading-relaxed text-muted">
+          A trading club that votes. <b className="font-semibold text-teal">One ballot a day</b>,
+          executed on your own Robinhood.
+        </p>
+        <div className="stagger mt-11 max-w-[30rem] space-y-7">
+          <TruthRow
+            icon={<><rect x="4" y="4" width="16" height="16" rx="3" /><path d="M8.5 12.5l2.4 2.4 4.6-5" /></>}
+            title="One ballot a day"
+            body={<>Everyone votes once a day — the top names become the club basket.</>}
+          />
+          <TruthRow
+            icon={<><path d="M12 3l7 3v5c0 4.6-3 7.6-7 9-4-1.4-7-4.4-7-9V6z" /><path d="M12 9v5M9.8 11.2h4.4" /></>}
+            title="Your account, your money"
+            body={<>Trades happen in <b className="text-ink">your</b> Robinhood — the club never holds your funds.</>}
+          />
+          <TruthRow
+            icon={<><rect x="4.5" y="8" width="3.8" height="11" rx="1.2" /><rect x="10.1" y="8" width="3.8" height="11" rx="1.2" /><rect x="15.7" y="8" width="3.8" height="11" rx="1.2" /><path d="M4.5 4.5h15.2" /></>}
+            title="Equal-weight, automatic"
+            body={<>The decided basket is bought for every member, sized to what they committed.</>}
+          />
+        </div>
+        <p className="mt-12 text-[11.5px] font-semibold uppercase tracking-[0.16em] text-subtle">
+          Invite-only
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
   const pathname = usePathname();
   const [mode, setMode] = useState<"signup" | "login">("signup");
@@ -199,8 +256,15 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
   }
 
   return (
-    <div className="mx-auto mt-[12vh] w-[min(440px,100%)] px-5">
-      <div className="mb-7 flex flex-col items-center text-center">
+    // Below lg: exactly the original stacked column (logo → wordmark → tagline → card).
+    // lg+: a centered two-pane composition — brand pane · fading hairline · auth pane.
+    <div className="lg:flex lg:min-h-screen lg:items-center lg:justify-center lg:px-12 lg:py-12">
+      <div className="lg:grid lg:w-full lg:max-w-[1200px] lg:grid-cols-[minmax(0,1fr)_1px_400px] lg:items-center lg:gap-x-12 xl:grid-cols-[minmax(0,1fr)_1px_440px] xl:gap-x-16">
+        <BrandPane />
+        <div className="hidden h-[min(560px,64vh)] w-px self-center bg-gradient-to-b from-transparent via-white/10 to-transparent lg:block" aria-hidden />
+
+        <div className="mx-auto mt-[12vh] w-[min(440px,100%)] px-5 lg:mx-0 lg:mt-0 lg:w-full lg:px-0">
+      <div className="mb-7 flex flex-col items-center text-center lg:hidden">
         <Logo size={56} />
         <div className="mt-4 font-display text-[26px] font-bold tracking-tight text-[#8FD9C0]">
           concordia
@@ -224,7 +288,7 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
             </div>
             <div>
               <label className="label mb-2">Club invite code</label>
-              <input className="input" placeholder="forge-concord-…" value={invite}
+              <input className="input" placeholder="concordia-…" value={invite}
                 onChange={(e) => setInvite(e.target.value)} spellCheck={false} autoComplete="off" />
             </div>
             <ConsentRow checked={consent} onChange={setConsent} />
@@ -361,7 +425,7 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
               {mode === "signup" && (
                 <div>
                   <label className="label mb-2">Club invite code</label>
-                  <input className="input" placeholder="forge-concord-…" value={invite}
+                  <input className="input" placeholder="concordia-…" value={invite}
                     onChange={(e) => setInvite(e.target.value)} spellCheck={false} autoComplete="off" />
                 </div>
               )}
@@ -429,6 +493,8 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
           </p>
         </>
       )}
+        </div>
+      </div>
     </div>
   );
 }

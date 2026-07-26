@@ -51,12 +51,14 @@ timers (verify-report deliberately disabled).
 7. Copy to the new box (ONE ssh ControlMaster socket — fail2ban bans rapid SSH):
    - DB: `sudo -u concord sqlite3 /opt/concord/backend/concord.db ".backup /tmp/concord-migrate.db"`,
      sha256 both ends.
-   - `.env`: SAME `CONCORD_FERNET_KEY`, `SESSION_SECRET`, `CONCORD_ADMIN_TOKEN`,
-     `INVITE_CODE`; NEW `API_PUBLIC_URL`/`WEB_ORIGIN` (the new domain);
-     **`EXECUTION_MODE=dry_run`** (flip to live only at Step 11).
-   - ALSO append the staged Google line from /root/cutover-env-additions.txt on the
-     new box (`GOOGLE_CLIENT_ID=…`) — the web build already carries the matching
-     NEXT_PUBLIC_GOOGLE_CLIENT_ID (baked 2026-07-23; OAuth app published to production).
+   - `.env`: MERGE, don't blind-copy. From the OLD box keep `CONCORD_FERNET_KEY`,
+     `SESSION_SECRET`, `CONCORD_ADMIN_TOKEN` (they must match the migrated DB's
+     encrypted tokens + sessions). From the NEW box's existing /opt/concord/.env
+     KEEP: `INVITE_CODE` (rebranded 2026-07-25 to a `concordia-…` code — the old
+     `forge-concord-…` code is retired; existing members never re-enter it),
+     `GOOGLE_CLIENT_ID`, `RESEND_API_KEY`, `MAIL_FROM` (email verification +
+     password reset live on the new box only), `API_PUBLIC_URL`/`WEB_ORIGIN`
+     (the new domain); **`EXECUTION_MODE=dry_run`** (flip to live only at Step 11).
 8. Restore hygiene: DB → `/opt/concord/backend/concord.db`, chown concord,
    chmod 600, no stray `-wal/-shm`. **Immediately disarm the copied DB** (the
    `armed=true` kv row traveled with it):
