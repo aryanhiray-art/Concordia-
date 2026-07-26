@@ -69,6 +69,41 @@ function HowRow({ n, title, body }: { n: number; title: string; body: string }) 
   );
 }
 
+// Illustrative product glimpse for the desktop brand pane: a stylized "today's
+// ballot" card with hardcoded fake data. Purely decorative (aria-hidden) — it
+// reads as a product screenshot, never as a form.
+function BallotMock() {
+  const rows = [
+    { t: "NVDA", v: 12, w: 92 },
+    { t: "AAPL", v: 9, w: 68 },
+    { t: "COST", v: 7, w: 50 },
+  ];
+  return (
+    <div className="ballot-mock glass px-[18px] py-4" aria-hidden>
+      <div className="flex items-center justify-between">
+        <span className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-subtle">
+          Today&apos;s ballot
+        </span>
+        <span className="flex items-center gap-1.5 text-[10.5px] font-semibold text-teal">
+          <span className="bm-live" />
+          live
+        </span>
+      </div>
+      <div className="mt-3.5 space-y-[11px]">
+        {rows.map((r, i) => (
+          <div key={r.t} className="flex items-center gap-3">
+            <span className="w-[46px] font-display text-[13px] font-semibold leading-none text-ink">{r.t}</span>
+            <span className="bm-bar flex-1">
+              <i style={{ "--w": `${r.w}%`, animationDelay: `${0.55 + i * 0.14}s` } as React.CSSProperties} />
+            </span>
+            <span className="w-[18px] text-right text-[12px] font-semibold text-muted tnum">{r.v}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // Desktop-only (lg+) left pane: the mark, the wordmark, and the three-step
 // story. Below lg the stacked mobile header carries the tagline instead.
 function BrandPane() {
@@ -76,19 +111,21 @@ function BrandPane() {
     <div className="relative hidden min-w-0 lg:flex lg:flex-col lg:justify-center">
       <div className="authglow" aria-hidden />
       <div className="relative">
-        <div className="flex items-center gap-5">
-          <Logo size={80} />
-          <div className="font-display text-[46px] font-bold leading-none tracking-tight text-[#8FD9C0]">
+        <div className="flex items-center gap-4">
+          <span className="lg-draw flex-none" aria-hidden>
+            <Logo size={64} />
+          </span>
+          <div className="font-display text-[38px] font-bold leading-none tracking-tight text-[#8FD9C0]">
             concordia
           </div>
         </div>
-        <p className="mt-5 max-w-[30rem] text-[15.5px] leading-relaxed text-muted">
+        <p className="mt-6 max-w-[32rem] text-[21px] font-light leading-[1.45] text-ink xl:text-[23px]">
           One shared basket, decided by vote and{" "}
           <span className="text-teal">rebalanced weekly</span> — in your own Robinhood.
         </p>
-        <div className="mt-11 max-w-[30rem]">
+        <div className="mt-9 max-w-[30rem]">
           <p className="label">How it works</p>
-          <div className="stagger mt-6 space-y-8">
+          <div className="stagger mt-6 space-y-7">
             <HowRow n={1} title="Vote on the basket"
               body="Every member votes for their stocks — the top picks become the club's basket." />
             <HowRow n={2} title="You set the stake"
@@ -96,6 +133,14 @@ function BrandPane() {
             <HowRow n={3} title="Your account stays yours"
               body="Every trade executes in your own Robinhood — the club never holds or touches your money." />
           </div>
+        </div>
+        {/* xl+ only: 1024-1279 viewports are too short for it (measured 18px
+            overflow at 1024x768) — the flourish appears when there's room.
+            Left edge aligns with the how-it-works TEXT column (numeral 2.6rem
+            + gap 1.25rem) so it reads composed with the grid, not appended. */}
+        <div className="enter mt-6 hidden w-[300px] xl:ml-[3.85rem] xl:block"
+          style={{ animationDelay: "0.3s" }}>
+          <BallotMock />
         </div>
       </div>
     </div>
@@ -258,11 +303,13 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
 
         <div className="mx-auto mt-[12vh] w-[min(440px,100%)] px-5 lg:mx-0 lg:mt-0 lg:w-full lg:px-0">
       <div className="mb-7 flex flex-col items-center text-center lg:hidden">
-        <Logo size={56} />
+        <span className="lg-draw" aria-hidden>
+          <Logo size={56} />
+        </span>
         <div className="mt-4 font-display text-[26px] font-bold tracking-tight text-[#8FD9C0]">
           concordia
         </div>
-        <p className="mt-1.5 text-[13.5px] text-muted">
+        <p className="mt-1.5 text-[15px] leading-relaxed text-muted">
           One shared basket, decided by vote and{" "}
           <span className="text-teal">rebalanced weekly</span> — in your own Robinhood.
         </p>
@@ -491,7 +538,7 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
           invite, so it stays there too) — a returning member logging in
           doesn't need to be told the door policy. */}
       {(mode === "signup" || gCred) && (
-        <p className="mt-5 text-center text-[11px] font-semibold uppercase tracking-[0.16em] text-subtle">
+        <p className="mt-4 text-center text-[11.5px] text-subtle">
           Invite-only
         </p>
       )}

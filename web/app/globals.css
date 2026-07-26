@@ -24,10 +24,14 @@ body {
   min-height: 100vh;
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
-  /* Solid base only — the glow gradient lives on .bgfx (a fixed layer) so no
-     scroll position or rubber-band overscroll can ever reveal a seam. */
-  background: var(--bg);
 }
+/* Solid base on the CANVAS (html) only — body must stay transparent, or its
+   background paints over every negative-z fixed layer and silently kills the
+   .bgfx aurora + grain (CSS painting order; proven empirically). Overscroll
+   stays seam-proof: the canvas is the gradient's darkest tone and .bgfx
+   overshoots the viewport by 35vh both ways. */
+html { background: var(--bg); }
+body { background: transparent; }
 
 /* ── Seam-proof page background ─────────────────────────────────────────────
    The old html/body radial-gradient + background-attachment:fixed broke on
@@ -47,6 +51,18 @@ body {
     radial-gradient(760px 540px at 10vw 25vh, rgba(45, 212, 191, 0.16), transparent 60%),
     radial-gradient(820px 600px at 108vw 31vh, rgba(56, 134, 221, 0.12), transparent 60%),
     var(--bg);
+}
+/* fine film-grain: desaturated feTurbulence tile (stitched, 180px — no visible
+   repeat) blended at whisper opacity. Behind everything at z -2, so the glass
+   cards' backdrop-blur wipes it clean off their surfaces. */
+.bgfx::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 180px 180px;
+  opacity: 0.03;
+  mix-blend-mode: overlay;
 }
 
 .tnum { font-variant-numeric: tabular-nums; }
@@ -242,13 +258,13 @@ body {
     position: absolute;
     left: -16%;
     top: 50%;
-    width: 34rem;
-    height: 34rem;
-    margin-top: -17rem;
+    width: 38rem;
+    height: 38rem;
+    margin-top: -19rem;
     border-radius: 50%;
     pointer-events: none;
     z-index: 0;
-    background: radial-gradient(circle, rgba(45, 212, 191, 0.15), rgba(56, 134, 221, 0.05) 55%, transparent 72%);
+    background: radial-gradient(circle, rgba(45, 212, 191, 0.22), rgba(56, 134, 221, 0.08) 55%, transparent 72%);
     filter: blur(64px);
     animation: authdrift 22s ease-in-out infinite;
   }
@@ -259,6 +275,64 @@ body {
 }
 @media (prefers-reduced-motion: reduce) {
   .authglow { animation: none; }
+}
+
+/* ── Landing ballot mock (BrandPane, lg+ only) ──────────────────────────────
+   A small illustrative "today's ballot" card, tilted like a pinned product
+   screenshot. Rotation lives here (not on the .enter wrapper — enterUp's final
+   keyframe is transform:none and would flatten it). */
+.ballot-mock {
+  transform: rotate(-1.8deg);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 24px 56px -24px rgba(0, 0, 0, 0.8),
+    0 0 48px -12px rgba(45, 212, 191, 0.3);
+}
+.bm-bar {
+  display: block;
+  height: 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+.bm-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  width: var(--w, 0%);
+  background: linear-gradient(90deg, var(--teal), var(--teal-deep));
+  animation: bm-fill 0.7s cubic-bezier(0, 0, 0.2, 1) both; /* per-bar delay set inline */
+}
+@keyframes bm-fill { from { width: 0; } }
+.bm-live {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--teal);
+  box-shadow: 0 0 8px rgba(45, 212, 191, 0.8);
+  animation: pulse-soft 2s ease-in-out infinite;
+}
+
+/* ── Landing logo draw-on (opt-in via .lg-draw wrapper; the loadmark and nav
+   logos are untouched). Each arc's dasharray animates from empty to its own
+   attribute value (keyframe has no `to`, so each ring lands on its own arc
+   length), outer → mid → core. Runs once. ─────────────────────────────────── */
+.lg-draw { display: inline-flex; }
+.lg-draw .lg-outer circle,
+.lg-draw .lg-mid circle,
+.lg-draw .lg-core circle {
+  animation: lg-drawon 0.65s cubic-bezier(0.33, 0, 0.2, 1) both;
+}
+.lg-draw .lg-mid circle { animation-delay: 0.12s; }
+.lg-draw .lg-core circle { animation-delay: 0.24s; }
+@keyframes lg-drawon { from { stroke-dasharray: 0 360; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .bm-bar > i,
+  .bm-live,
+  .lg-draw .lg-outer circle,
+  .lg-draw .lg-mid circle,
+  .lg-draw .lg-core circle { animation: none; }
 }
 
 /* ── Entrance (glass cards rise + fade in) ──────────────────────────────── */
