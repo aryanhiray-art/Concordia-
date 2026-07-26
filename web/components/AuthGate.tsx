@@ -258,10 +258,10 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
   return (
     // Below lg: exactly the original stacked column (logo → wordmark → tagline → card).
     // lg+: a centered two-pane composition — brand pane · fading hairline · auth pane.
-    <div className="lg:flex lg:min-h-screen lg:items-center lg:justify-center lg:px-12 lg:py-12">
+    <div className="lg:flex lg:min-h-screen lg:px-12 lg:py-12 lg:[align-items:safe_center] lg:[justify-content:safe_center]">
       <div className="lg:grid lg:w-full lg:max-w-[1200px] lg:grid-cols-[minmax(0,1fr)_1px_400px] lg:items-center lg:gap-x-12 xl:grid-cols-[minmax(0,1fr)_1px_440px] xl:gap-x-16">
         <BrandPane />
-        <div className="hidden h-[min(560px,64vh)] w-px self-center bg-gradient-to-b from-transparent via-white/10 to-transparent lg:block" aria-hidden />
+        <div className="hidden h-[min(560px,64vh)] w-px self-center bg-gradient-to-b from-transparent via-white/15 to-transparent lg:block" aria-hidden />
 
         <div className="mx-auto mt-[12vh] w-[min(440px,100%)] px-5 lg:mx-0 lg:mt-0 lg:w-full lg:px-0">
       <div className="mb-7 flex flex-col items-center text-center lg:hidden">

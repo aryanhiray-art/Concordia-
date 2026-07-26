@@ -57,14 +57,24 @@ export function GoogleButton({ onCredential }: { onCredential: (credential: stri
           client_id: CLIENT_ID,
           callback: (res) => { if (res?.credential) cb.current(res.credential); },
         });
-        gsi.renderButton(host.current, {
-          theme: "filled_black",
-          size: "large",
-          shape: "pill",
-          text: "continue_with",
-          logo_alignment: "left",
-          width: Math.min(400, Math.max(220, host.current.offsetWidth || 400)),
-        });
+        // Width must never exceed the phone's screen: the old `offsetWidth || 400`
+        // fallback fired when the host measured 0 mid-hydration, rendering a 400px
+        // iframe that clipped the G logo off a 375px viewport.
+        const render = () => {
+          if (gone || !host.current) return;
+          const vwCap = Math.min(400, (document.documentElement.clientWidth || 400) - 72);
+          const w = host.current.offsetWidth || vwCap;
+          gsi.renderButton(host.current!, {
+            theme: "filled_black",
+            size: "large",
+            shape: "pill",
+            text: "continue_with",
+            logo_alignment: "left",
+            width: Math.min(vwCap, Math.max(220, w)),
+          });
+        };
+        if (host.current.offsetWidth) render();
+        else requestAnimationFrame(render);   // measure after layout settles
       } catch {
         setFailed(true);
       }
