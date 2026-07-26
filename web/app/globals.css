@@ -216,6 +216,23 @@ body {
 .hiw svg { width: 24px; height: 24px; }
 .hiw svg g { fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
+/* Landing rows lead with a single large gradient numeral instead of chip+number
+   (two anchors per row competed for the eye). Fixed width keeps titles aligned. */
+.hiw-num {
+  min-width: 2.6rem;
+  font-family: var(--font-display), var(--font-sans), sans-serif;
+  font-size: 30px;
+  font-weight: 300;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  background: linear-gradient(135deg, #6ef0dc, #17b8a2);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  opacity: 0.85;
+}
+
 /* ── Logged-out brand pane: slow ambient teal glow (lg+ only) ───────────── */
 /* Heavy blur is gated to desktop; below lg the element doesn't render at all. */
 .authglow { display: none; }

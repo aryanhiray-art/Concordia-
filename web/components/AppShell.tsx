@@ -48,7 +48,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         {children}
       </main>
       <p className="pb-8 text-center text-[11px] text-subtle">
-        Concordia · a trading club that votes · one ballot a day, executed on your own Robinhood
+        Concordia · a trading club that votes · one shared basket, rebalanced in your own Robinhood
       </p>
     </>
   );

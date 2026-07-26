@@ -13,8 +13,8 @@ const RULES: { icon: React.ReactNode; uid: string; title: string; body: React.Re
   {
     icon: HOW_ICONS.vote,
     uid: "rule1",
-    title: "Vote daily",
-    body: <>Everyone votes for their stocks each day — the top picks become the club&apos;s basket.</>,
+    title: "Vote on the basket",
+    body: <>Every member votes for their stocks — the top picks become the club&apos;s basket.</>,
   },
   {
     icon: HOW_ICONS.stake,

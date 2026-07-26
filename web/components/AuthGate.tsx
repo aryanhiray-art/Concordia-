@@ -6,7 +6,6 @@ import { api, setToken } from "@/lib/api";
 import type { Member } from "@/lib/types";
 import { Button, Card, Logo, Wordmark } from "./ui";
 import { GoogleButton, googleEnabled } from "./GoogleButton";
-import { HOW_ICONS, HowChip } from "./howicons";
 import { PrivacyDoc, TermsDoc } from "./legal";
 
 // The required club-agreement checkbox — shared by password signup and the Google finish step.
@@ -54,18 +53,16 @@ function OrDivider() {
   );
 }
 
-// One step of the desktop brand pane's "How it works" story — 44px chip with a
-// gradient-stroked icon, step number + title on one baseline, plain-prose body.
-// body is a string on purpose: no inline bolds/accents ever creep back in.
-function HowRow({ n, icon, title, body }: { n: number; icon: React.ReactNode; title: string; body: string }) {
+// One step of the desktop brand pane's "How it works" story. One visual anchor
+// only — a large light gradient numeral (the earlier chip+number pairing gave
+// every row two competing leads). body is a string on purpose: no inline
+// bolds/accents ever creep back in.
+function HowRow({ n, title, body }: { n: number; title: string; body: string }) {
   return (
-    <div className="flex items-start gap-4">
-      <HowChip icon={icon} uid={`land${n}`} />
-      <div className="min-w-0 pt-[3px]">
-        <div className="flex items-baseline gap-2.5">
-          <span className="font-display text-[11.5px] font-semibold text-subtle tnum">{`0${n}`}</span>
-          <h3 className="font-display text-[15px] font-semibold leading-tight text-ink">{title}</h3>
-        </div>
+    <div className="flex items-start gap-5">
+      <span className="hiw-num" aria-hidden>{`0${n}`}</span>
+      <div className="min-w-0 pt-[5px]">
+        <h3 className="font-display text-[15px] font-semibold leading-tight text-ink">{title}</h3>
         <p className="mt-1.5 text-[13px] leading-relaxed text-muted">{body}</p>
       </div>
     </div>
@@ -86,23 +83,20 @@ function BrandPane() {
           </div>
         </div>
         <p className="mt-5 max-w-[30rem] text-[15.5px] leading-relaxed text-muted">
-          A trading club that votes. <span className="text-teal">One ballot a day</span>,
-          executed on your own Robinhood.
+          One shared basket, decided by vote and{" "}
+          <span className="text-teal">rebalanced weekly</span> — in your own Robinhood.
         </p>
         <div className="mt-11 max-w-[30rem]">
           <p className="label">How it works</p>
           <div className="stagger mt-6 space-y-8">
-            <HowRow n={1} title="Vote daily" icon={HOW_ICONS.vote}
-              body="Everyone votes for their stocks each day — the top picks become the club's basket." />
-            <HowRow n={2} title="You set the stake" icon={HOW_ICONS.stake}
+            <HowRow n={1} title="Vote on the basket"
+              body="Every member votes for their stocks — the top picks become the club's basket." />
+            <HowRow n={2} title="You set the stake"
               body="You choose how much of your account plays, and only that slice ever trades." />
-            <HowRow n={3} title="Your account stays yours" icon={HOW_ICONS.yours}
+            <HowRow n={3} title="Your account stays yours"
               body="Every trade executes in your own Robinhood — the club never holds or touches your money." />
           </div>
         </div>
-        <p className="mt-12 text-[11.5px] font-semibold uppercase tracking-[0.16em] text-subtle">
-          Invite-only
-        </p>
       </div>
     </div>
   );
@@ -269,8 +263,8 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
           concordia
         </div>
         <p className="mt-1.5 text-[13.5px] text-muted">
-          A trading club that votes. <span className="text-teal">One ballot a day</span>,
-          executed on your own Robinhood.
+          One shared basket, decided by vote and{" "}
+          <span className="text-teal">rebalanced weekly</span> — in your own Robinhood.
         </p>
       </div>
 
@@ -492,6 +486,10 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
           </p>
         </>
       )}
+
+      <p className="mt-5 text-center text-[11px] font-semibold uppercase tracking-[0.16em] text-subtle">
+        Invite-only
+      </p>
         </div>
       </div>
     </div>
