@@ -277,41 +277,14 @@ body { background: transparent; }
   .authglow { animation: none; }
 }
 
-/* ── Landing ballot mock (BrandPane, lg+ only) ──────────────────────────────
-   A small illustrative "today's ballot" card, tilted like a pinned product
-   screenshot. Rotation lives here (not on the .enter wrapper — enterUp's final
-   keyframe is transform:none and would flatten it). */
-.ballot-mock {
-  /* straight and grid-true — the tilt + corner offset fought the strict
-     left-aligned column above it (owner call: asymmetry read as sloppy) */
+/* ── The landing's hero glass finish (owner favorite) — deep drop shadow plus
+   a soft teal halo. Additive over .glass; pair with .shine for the hover
+   glint. Used by the auth card and the How-it-works panel on the landing. */
+.glass-glow {
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.14),
     0 24px 56px -24px rgba(0, 0, 0, 0.8),
     0 0 40px -14px rgba(45, 212, 191, 0.22);
-}
-.bm-bar {
-  display: block;
-  height: 6px;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.07);
-  overflow: hidden;
-}
-.bm-bar > i {
-  display: block;
-  height: 100%;
-  border-radius: 4px;
-  width: var(--w, 0%);
-  background: linear-gradient(90deg, var(--teal), var(--teal-deep));
-  animation: bm-fill 0.7s cubic-bezier(0, 0, 0.2, 1) both; /* per-bar delay set inline */
-}
-@keyframes bm-fill { from { width: 0; } }
-.bm-live {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--teal);
-  box-shadow: 0 0 8px rgba(45, 212, 191, 0.8);
-  animation: pulse-soft 2s ease-in-out infinite;
 }
 
 /* ── Landing logo draw-on (opt-in via .lg-draw wrapper; the loadmark and nav
@@ -329,8 +302,6 @@ body { background: transparent; }
 @keyframes lg-drawon { from { stroke-dasharray: 0 360; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .bm-bar > i,
-  .bm-live,
   .lg-draw .lg-outer circle,
   .lg-draw .lg-mid circle,
   .lg-draw .lg-core circle { animation: none; }

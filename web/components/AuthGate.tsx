@@ -69,41 +69,6 @@ function HowRow({ n, title, body }: { n: number; title: string; body: string }) 
   );
 }
 
-// Illustrative product glimpse for the desktop brand pane: a stylized "today's
-// ballot" card with hardcoded fake data. Purely decorative (aria-hidden) — it
-// reads as a product screenshot, never as a form.
-function BallotMock() {
-  const rows = [
-    { t: "NVDA", v: 12, w: 92 },
-    { t: "AAPL", v: 9, w: 68 },
-    { t: "COST", v: 7, w: 50 },
-  ];
-  return (
-    <div className="ballot-mock glass px-[18px] py-4" aria-hidden>
-      <div className="flex items-center justify-between">
-        <span className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-subtle">
-          Today&apos;s ballot
-        </span>
-        <span className="flex items-center gap-1.5 text-[10.5px] font-semibold text-teal">
-          <span className="bm-live" />
-          live
-        </span>
-      </div>
-      <div className="mt-3.5 space-y-[11px]">
-        {rows.map((r, i) => (
-          <div key={r.t} className="flex items-center gap-3">
-            <span className="w-[46px] font-display text-[13px] font-semibold leading-none text-ink">{r.t}</span>
-            <span className="bm-bar flex-1">
-              <i style={{ "--w": `${r.w}%`, animationDelay: `${0.55 + i * 0.14}s` } as React.CSSProperties} />
-            </span>
-            <span className="w-[18px] text-right text-[12px] font-semibold text-muted tnum">{r.v}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 // Desktop-only (lg+) left pane: the mark, the wordmark, and the three-step
 // story. Below lg the stacked mobile header carries the tagline instead.
 function BrandPane() {
@@ -120,27 +85,24 @@ function BrandPane() {
           </div>
         </div>
         <p className="mt-6 max-w-[32rem] text-[21px] font-light leading-[1.45] text-ink xl:text-[23px]">
-          One shared basket, decided by vote and{" "}
-          <span className="text-teal">rebalanced weekly</span> — in your own Robinhood.
+          One basket, <span className="text-teal">decided together</span> — rebalanced
+          weekly in an account only you control.
         </p>
-        <div className="mt-9 max-w-[30rem]">
-          <p className="label">How it works</p>
-          <div className="stagger mt-6 space-y-7">
-            <HowRow n={1} title="Vote on the basket"
-              body="Every member votes for their stocks — the top picks become the club's basket." />
-            <HowRow n={2} title="You set the stake"
-              body="You choose how much of your account plays, and only that slice ever trades." />
-            <HowRow n={3} title="Your account stays yours"
-              body="Every trade executes in your own Robinhood — the club never holds or touches your money." />
+        {/* The owner's favorite glass finish wraps the story itself — a real
+            material anchor for the pane with no fake product data (live vote
+            counts are members-only; ballots go public only after they close). */}
+        <div className="enter mt-9 max-w-[30rem]" style={{ animationDelay: "0.15s" }}>
+          <div className="glass glass-glow shine p-6 xl:p-7">
+            <p className="label">How it works</p>
+            <div className="stagger mt-5 space-y-6">
+              <HowRow n={1} title="Vote on the basket"
+                body="Every member votes for their stocks — the top picks become the club's basket." />
+              <HowRow n={2} title="You set the stake"
+                body="You choose how much of your account plays, and only that slice ever trades." />
+              <HowRow n={3} title="Your account stays yours"
+                body="Every trade executes in your own brokerage account — the club never holds or touches your money." />
+            </div>
           </div>
-        </div>
-        {/* xl+ only: 1024-1279 viewports are too short for it (measured 18px
-            overflow at 1024x768). Full block width, no tilt, no offset — the
-            pane reads as ONE aligned column (lockup / tagline / rows / card),
-            with the card as the grounded anchor rather than an ornament. */}
-        <div className="enter mt-8 hidden max-w-[30rem] xl:block"
-          style={{ animationDelay: "0.3s" }}>
-          <BallotMock />
         </div>
       </div>
     </div>
@@ -310,12 +272,12 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
           concordia
         </div>
         <p className="mt-1.5 text-[15px] leading-relaxed text-muted">
-          One shared basket, decided by vote and{" "}
-          <span className="text-teal">rebalanced weekly</span> — in your own Robinhood.
+          One basket, <span className="text-teal">decided together</span> — rebalanced
+          weekly in an account only you control.
         </p>
       </div>
 
-      <Card>
+      <Card className="glass-glow">
         {gCred ? (
           /* ── Google finish step: verified with Google, new member → invite + consent ── */
           <div className="space-y-3.5">
