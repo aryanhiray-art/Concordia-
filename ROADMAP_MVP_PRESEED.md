@@ -12,7 +12,7 @@ Concordia's **core is credible** — months of real-money execution, fail-closed
 
 Three decisions this document takes a position on:
 
-1. **Apply to YC by July 27, 8PM PT** (confirmed deadline; decision by Aug 28). A live product with real money traded beats most applications. Costs one day. Do it.
+1. **Target YC Winter 2027** (decision made 2026-07-26: skipping the Fall batch). Expected deadline late Oct–mid Nov 2026 (W2025's was Nov 12; exact date unannounced — watch ycombinator.com/apply), batch Jan–Mar 2027. The upside of waiting: the application gets written on top of 8+ weeks of real traction data from Phase 3 instead of a scramble — a materially stronger app. The discipline it demands: Phases 1–3 must actually produce those numbers by mid-October.
 2. **Treat RIA registration as the plan, not the risk.** Every funded comparable that drives trades in members' own accounts registered (Dub, Autopilot). "We're free" does not protect — the SEC construes compensation broadly. Interim posture: small, invite-only, free, framed as a private club, blessed by one securities-counsel consult. Pitch line: *"Autopilot's path is our path; registration is a planned use of funds."*
 3. **Derisk the Robinhood dependency before pitching.** RH's agentic API (public since May 2026) is explicitly single-user — no stated allowance for a third party orchestrating many members' accounts. Every serious investor will find this. The answer is a formalized broker interface (the seam already exists — DemoClient proves it) plus a working Alpaca spike, whose entire $435M-funded strategy is agent-first, orchestrator-friendly execution.
 
@@ -50,16 +50,21 @@ Not "more features." The MVP is done when all seven are true:
 
 ---
 
-## 3. Track 0 — YC Fall 2026 application ⏰ **DUE JULY 27, 8:00 PM PT**
+## 3. Track 0 — YC Winter 2027 application (target: submission-ready by mid-October)
 
-Confirmed from YC's own apply page. Decision by Aug 28; batch runs Oct–Dec in SF. Standard deal unchanged: **$500k** ($125k for 7% + $375k uncapped MFN SAFE), non-negotiable, funds on acceptance.
+*Decision 2026-07-26: Fall 2026 (was due Jul 27) is intentionally skipped. Winter 2027 expected deadline late Oct–mid Nov 2026 (unannounced — check ycombinator.com/apply monthly; W2025's deadline was Nov 12), batch Jan–Mar 2027 in SF. Standard deal unchanged: **$500k** ($125k for 7% + $375k uncapped MFN SAFE), non-negotiable, funds on acceptance.*
 
-- [ ] **Jul 26:** Draft written answers. The wedge framing (see §11): *"Investment clubs died because of paperwork. We rebuilt them on top of agentic brokerage APIs — one ballot a day, executed in every member's own account. Non-custodial, capital-efficient, and the first product native to the agent-API rails Robinhood and Alpaca just shipped."*
-- [ ] **Jul 26:** Record the 1-minute founder video (phone is fine; energy > production)
-- [ ] **Jul 27:** Screenshots/numbers: members, cycles executed, decisions-vs-SPY chart, the wizard. Submit before 8PM PT.
-- [ ] Honesty notes for the app: solo founder (Aryan's role — decide before writing it down), pre-incorporation (fine at application time), regulatory plan (one sentence, confident, not defensive)
+The Winter timeline turns the application from a scramble into a harvest — it gets written **on top of Phase 3's traction data**. That also makes Phase 3's targets (§6, 3.5) the de-facto YC gate.
 
-*YC 2026 context: fintech is a growth category for them; 2026 RFS themes lean "AI into real-world systems (finance…)" — the agentic-execution angle is on-thesis. Position precisely: the AI is in the rails and the research bots (non-binding), not "AI picks your stocks" — see the Delphia/Global Predictions AI-washing enforcement in §12.*
+- [ ] **Now:** if currently enrolled as a student, read YC's **Early Decision for Students** program (ycombinator.com/early-decision — apply early, decision early) and check eligibility/deadlines; it may beat the general track
+- [ ] **Sep 1:** set a calendar check on ycombinator.com/apply for the official W27 deadline announcement
+- [ ] **By Oct 1:** decide and paper Aryan's status (co-founder vs collaborator) — the app asks, and changing the answer later is costly
+- [ ] **By Oct 10:** draft written answers from the weekly KPI snapshot doc (§6, 3.4). Wedge framing (see §11): *"Investment clubs died because of paperwork. We rebuilt them on top of agentic brokerage APIs — one ballot a day, executed in every member's own account. Non-custodial, capital-efficient, and the first product native to the agent-API rails Robinhood and Alpaca just shipped."*
+- [ ] **By Oct 10:** 1-minute founder video (phone is fine; energy > production); demo footage from the public demo instance (2.4)
+- [ ] **Submit within 48h of the deadline announcement, not at the wire**
+- [ ] Honesty notes: incorporation status by then (Phase 4 should be done — a plus vs the Fall scramble), regulatory plan (one sentence, confident, not defensive)
+
+*YC 2026 context: fintech is a growth category; RFS themes lean "AI into real-world systems (finance…)" — the agentic-execution angle is on-thesis. Position precisely: the AI is in the rails and the research bots (non-binding), not "AI picks your stocks" — see the Delphia/Global Predictions AI-washing enforcement in §12.*
 
 ---
 
@@ -109,7 +114,7 @@ Confirmed from YC's own apply page. Decision by Aug 28; batch runs Oct–Dec in 
 | 3.2 | Member wave 2: grow the club 4 → **15–30 real members** through friends-of-friends using referral codes; concierge-onboard every one; log every drop-off point | ongoing | Single club scales to ~25–30 comfortably; multi-club stays deferred (§13) |
 | 3.3 | Build-in-public content loop: weekly "cycle recap" (decisions vs SPY, best/worst call, turnout) as tweet/short post; links to waitlist | 2h/week | The only free distribution that compounds |
 | 3.4 | Weekly KPI snapshot ritual (from 2.8): members, activation %, 7-day ballot participation, committed capital, retention cohort — screenshotted every Friday into a running doc | 30min/week | This doc becomes the traction slide |
-| 3.5 | **Targets to hit before pitching** (evidence, not vanity): 25+ members · 60%+ average daily ballot participation over 4 weeks · $25–50k aggregate committed · flat-or-up 8-week member retention · waitlist 100+ | — | Consumer pre-seeds are underwritten on engagement/retention, not revenue |
+| 3.5 | **Targets to hit before pitching** (evidence, not vanity): 25+ members · 60%+ average daily ballot participation over 4 weeks · $25–50k aggregate committed · flat-or-up 8-week member retention · waitlist 100+ | — | Consumer pre-seeds are underwritten on engagement/retention, not revenue. **These numbers are now also the YC W27 application (§3)** — hitting them by mid-October is the single date that matters most in this plan |
 
 ---
 
@@ -149,8 +154,8 @@ Confirmed from YC's own apply page. Decision by Aug 28; batch runs Oct–Dec in 
 | 6.1 | **Deck** (10–12 slides): Problem (investment clubs died of paperwork; investing is social everywhere except where the trade happens) · Insight (agent APIs make non-custodial collective execution possible for the first time) · Product (demo) · Traction (Phase-3 snapshot series) · Why-now (RH May-2026 agentic launch, Alpaca's agent pivot) · Market (Dub $45M raised, Autopilot ~$1B AUM & 90k+ paying subs on ~$8M raised — comps as market proof, differentiation: we're the only free, non-custodial, *collective* one) · Regulatory plan (one confident slide) · Roadmap (multi-club, multi-broker, monetization: club-tier subscriptions → RIA-gated premium) · Team · Ask & use of funds (registration counsel, first hire, growth) |
 | 6.2 | **2-minute demo video** on the demo instance: signup → wizard → ballot → next-day execution receipt → performance chart. This carries every cold email |
 | 6.3 | **One-pager PDF** + **data room** (KPI snapshots, architecture note, security posture summary — the audits are an asset, legal docs, cap table) |
-| 6.4 | **Target list, sequenced.** Tier 1 (fintech pre-seed natives, warm-up first): Better Tomorrow Ventures ($500k–4M checks, explicitly idea/prototype-friendly, fresh $140M Fund III) · Nyca · Fin Capital · Anthemis. Tier 2 (proved the thesis by funding comps): Tusk (led Dub's seed) · Notable Capital & Neo (co-led Dub's A) · Craft/Nomad/Path (Autopilot). Tier 3: angels — fintech operators, RH/Public alumni, the Dara-Khosrowshahi-profile operator angels who did Dub's seed. Run 15–20 parallel conversations over 3–4 weeks; YC decision (Aug 28) is a forcing function either way |
-| 6.5 | If YC yes: take it, batch is Oct–Dec, raise the rest at Demo Day W/ leverage. If YC no: proceed with the list on the same timeline anyway |
+| 6.4 | **Target list, sequenced.** Tier 1 (fintech pre-seed natives, warm-up first): Better Tomorrow Ventures ($500k–4M checks, explicitly idea/prototype-friendly, fresh $140M Fund III) · Nyca · Fin Capital · Anthemis. Tier 2 (proved the thesis by funding comps): Tusk (led Dub's seed) · Notable Capital & Neo (co-led Dub's A) · Craft/Nomad/Path (Autopilot). Tier 3: angels — fintech operators, RH/Public alumni, the Dara-Khosrowshahi-profile operator angels who did Dub's seed |
+| 6.5 | **Sequencing around YC W27:** materials done by mid-Sep · angel conversations (Tier 3, small checks) can start late Sep — small angel SAFEs before YC are normal and don't complicate the standard deal · submit the YC app when the window opens (~Oct/Nov) · run Tier 1/2 institutional conversations Oct–Nov in parallel — do NOT gate them on YC; an acceptance (~Dec) only adds leverage, and if institutional interest converts first, that's a fine outcome too · if YC yes: batch Jan–Mar 2027, raise the remainder into Demo Day momentum |
 
 ---
 
