@@ -215,19 +215,19 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
       </Card>
 
       {mode === "login" && !gCred && (
-        <p className="mt-3 text-center text-[12px] text-subtle">
-          Forgot your password? Ask the club owner to reset it — they&apos;ll give you a
-          temporary one you can change after logging in.
-        </p>
+        <>
+          <p className="mt-3 text-center text-[12px] text-subtle">
+            Forgot your password? Ask the club owner to reset it — they&apos;ll give you a
+            temporary one you can change after logging in.
+          </p>
+          {/* signup reaches these via the consent checkbox; login needs its own path */}
+          <p className="mt-4 text-center text-[11.5px] text-subtle">
+            <a href="/terms" target="_blank" rel="noopener noreferrer" className="text-muted hover:text-teal hover:underline">Terms</a>
+            {" · "}
+            <a href="/privacy" target="_blank" rel="noopener noreferrer" className="text-muted hover:text-teal hover:underline">Privacy</a>
+          </p>
+        </>
       )}
-
-      <p className="mt-4 text-center text-[11.5px] leading-relaxed text-subtle">
-        Invite-only
-        {" · "}
-        <a href="/terms" target="_blank" rel="noopener noreferrer" className="text-muted hover:text-teal hover:underline">Terms</a>
-        {" · "}
-        <a href="/privacy" target="_blank" rel="noopener noreferrer" className="text-muted hover:text-teal hover:underline">Privacy</a>
-      </p>
     </div>
   );
 }
