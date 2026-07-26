@@ -6,6 +6,7 @@ import { api, setToken } from "@/lib/api";
 import type { Member } from "@/lib/types";
 import { Button, Card, Logo, Wordmark } from "./ui";
 import { GoogleButton, googleEnabled } from "./GoogleButton";
+import { HOW_ICONS, HowChip } from "./howicons";
 import { PrivacyDoc, TermsDoc } from "./legal";
 
 // The required club-agreement checkbox — shared by password signup and the Google finish step.
@@ -19,10 +20,10 @@ function ConsentRow({ checked, onChange }: { checked: boolean; onChange: (v: boo
       <span className="text-[12.5px] leading-relaxed text-muted">
         I&apos;ve read and agree to the{" "}
         <a href="/terms" target="_blank" rel="noopener noreferrer"
-          className="font-semibold text-teal hover:underline">Club Participation Agreement</a>,
+          className="font-medium text-teal hover:underline">Club Participation Agreement</a>,
         including its risk disclosure, and the{" "}
         <a href="/privacy" target="_blank" rel="noopener noreferrer"
-          className="font-semibold text-teal hover:underline">Privacy Policy</a>{" "}
+          className="font-medium text-teal hover:underline">Privacy Policy</a>{" "}
         (both may be updated with notice).
       </span>
     </label>
@@ -30,8 +31,9 @@ function ConsentRow({ checked, onChange }: { checked: boolean; onChange: (v: boo
 }
 
 // 6-digit emailed code — one input, digits only, styled for OTP entry.
-// Shared by the signup verification step and the password-reset step.
-function CodeInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+// Shared by the signup verification step, the password-reset step, and the
+// legacy-member ConfirmEmail interstitial (hence the export).
+export function CodeInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
     <input
       className="input text-center text-[17px] font-semibold tracking-[0.45em]"
@@ -52,23 +54,26 @@ function OrDivider() {
   );
 }
 
-// One row of the desktop brand pane's story — the wizard's .ci icon language.
-function TruthRow({ icon, title, body }: { icon: React.ReactNode; title: string; body: React.ReactNode }) {
+// One step of the desktop brand pane's "How it works" story — 44px chip with a
+// gradient-stroked icon, step number + title on one baseline, plain-prose body.
+// body is a string on purpose: no inline bolds/accents ever creep back in.
+function HowRow({ n, icon, title, body }: { n: number; icon: React.ReactNode; title: string; body: string }) {
   return (
     <div className="flex items-start gap-4">
-      <span className="ci flex-none" aria-hidden>
-        <svg viewBox="0 0 24 24">{icon}</svg>
-      </span>
-      <div className="min-w-0">
-        <div className="font-display text-[15px] font-semibold text-ink">{title}</div>
-        <p className="mt-1 text-[13px] leading-relaxed text-muted">{body}</p>
+      <HowChip icon={icon} uid={`land${n}`} />
+      <div className="min-w-0 pt-[3px]">
+        <div className="flex items-baseline gap-2.5">
+          <span className="font-display text-[11.5px] font-semibold text-subtle tnum">{`0${n}`}</span>
+          <h3 className="font-display text-[15px] font-semibold leading-tight text-ink">{title}</h3>
+        </div>
+        <p className="mt-1.5 text-[13px] leading-relaxed text-muted">{body}</p>
       </div>
     </div>
   );
 }
 
-// Desktop-only (lg+) left pane: the mark, the wordmark, and the club's three
-// truths. Below lg the stacked mobile header carries this instead.
+// Desktop-only (lg+) left pane: the mark, the wordmark, and the three-step
+// story. Below lg the stacked mobile header carries the tagline instead.
 function BrandPane() {
   return (
     <div className="relative hidden min-w-0 lg:flex lg:flex-col lg:justify-center">
@@ -81,25 +86,19 @@ function BrandPane() {
           </div>
         </div>
         <p className="mt-5 max-w-[30rem] text-[15.5px] leading-relaxed text-muted">
-          A trading club that votes. <b className="font-semibold text-teal">One ballot a day</b>,
+          A trading club that votes. <span className="text-teal">One ballot a day</span>,
           executed on your own Robinhood.
         </p>
-        <div className="stagger mt-11 max-w-[30rem] space-y-7">
-          <TruthRow
-            icon={<><rect x="4" y="4" width="16" height="16" rx="3" /><path d="M8.5 12.5l2.4 2.4 4.6-5" /></>}
-            title="One ballot a day"
-            body={<>Everyone votes once a day — the top names become the club basket.</>}
-          />
-          <TruthRow
-            icon={<><path d="M12 3l7 3v5c0 4.6-3 7.6-7 9-4-1.4-7-4.4-7-9V6z" /><path d="M12 9v5M9.8 11.2h4.4" /></>}
-            title="Your account, your money"
-            body={<>Trades happen in <b className="text-ink">your</b> Robinhood — the club never holds your funds.</>}
-          />
-          <TruthRow
-            icon={<><rect x="4.5" y="8" width="3.8" height="11" rx="1.2" /><rect x="10.1" y="8" width="3.8" height="11" rx="1.2" /><rect x="15.7" y="8" width="3.8" height="11" rx="1.2" /><path d="M4.5 4.5h15.2" /></>}
-            title="Equal-weight, automatic"
-            body={<>The decided basket is bought for every member, sized to what they committed.</>}
-          />
+        <div className="mt-11 max-w-[30rem]">
+          <p className="label">How it works</p>
+          <div className="stagger mt-6 space-y-8">
+            <HowRow n={1} title="Vote daily" icon={HOW_ICONS.vote}
+              body="Everyone votes for their stocks each day — the top picks become the club's basket." />
+            <HowRow n={2} title="You set the stake" icon={HOW_ICONS.stake}
+              body="You choose how much of your account plays, and only that slice ever trades." />
+            <HowRow n={3} title="Your account stays yours" icon={HOW_ICONS.yours}
+              body="Every trade executes in your own Robinhood — the club never holds or touches your money." />
+          </div>
         </div>
         <p className="mt-12 text-[11.5px] font-semibold uppercase tracking-[0.16em] text-subtle">
           Invite-only
@@ -270,7 +269,7 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
           concordia
         </div>
         <p className="mt-1.5 text-[13.5px] text-muted">
-          A trading club that votes. <b className="font-semibold text-teal">One ballot a day</b>,
+          A trading club that votes. <span className="text-teal">One ballot a day</span>,
           executed on your own Robinhood.
         </p>
       </div>
@@ -287,8 +286,8 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
               </p>
             </div>
             <div>
-              <label className="label mb-2">Club invite code</label>
-              <input className="input" placeholder="concordia-…" value={invite}
+              <label className="label mb-2">Invite code</label>
+              <input className="input" placeholder="Code" value={invite}
                 onChange={(e) => setInvite(e.target.value)} spellCheck={false} autoComplete="off" />
             </div>
             <ConsentRow checked={consent} onChange={setConsent} />
@@ -311,7 +310,7 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
               <div className="font-display text-[16px] font-bold">Check your email</div>
               <p className="mt-1 text-[13px] leading-relaxed text-muted">
                 We emailed a 6-digit code to{" "}
-                <b className="font-semibold text-teal">{email.trim()}</b> — enter it to finish.
+                <span className="text-teal">{email.trim()}</span> — enter it to finish.
               </p>
             </div>
             <div>
@@ -373,7 +372,7 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
                 <div>
                   <div className="font-display text-[16px] font-bold">Check your email</div>
                   <p className="mt-1 text-[13px] leading-relaxed text-muted">
-                    If <b className="font-semibold text-teal">{forgotEmail.trim()}</b> has an
+                    If <span className="text-teal">{forgotEmail.trim()}</span> has an
                     account, we emailed it a 6-digit code.
                   </p>
                 </div>
@@ -424,8 +423,8 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
             <form className="space-y-3.5" onSubmit={(e) => { e.preventDefault(); submit(); }}>
               {mode === "signup" && (
                 <div>
-                  <label className="label mb-2">Club invite code</label>
-                  <input className="input" placeholder="concordia-…" value={invite}
+                  <label className="label mb-2">Invite code</label>
+                  <input className="input" placeholder="Code" value={invite}
                     onChange={(e) => setInvite(e.target.value)} spellCheck={false} autoComplete="off" />
                 </div>
               )}

@@ -96,6 +96,15 @@ export const api = {
     req<{ ok: boolean }>("/api/me/password", {
       method: "PUT", body: JSON.stringify({ current_password, new_password }),
     }),
+  // legacy-member email confirmation (the ConfirmEmail interstitial) —
+  // start emails a 6-digit code (429 when rate-limited, 4xx/5xx detail when the
+  // send fails); verify flips email_verified server-side and returns the fresh member.
+  verifyEmailStart: () =>
+    req<{ sent: boolean; already_verified?: boolean }>("/api/me/verify-email/start", { method: "POST" }),
+  verifyEmail: (code: string) =>
+    req<{ ok: boolean; member: Member }>("/api/me/verify-email", {
+      method: "POST", body: JSON.stringify({ code }),
+    }),
 
   // robinhood — start, then paste back the redirect URL Robinhood sends you
   rhStart: () => req<{ authorize_url: string }>("/api/oauth/robinhood/start"),

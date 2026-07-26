@@ -1,16 +1,25 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { AuthGate } from "@/components/AuthGate";
+import { ConfirmEmail } from "@/components/ConfirmEmail";
 import { Nav } from "@/components/Nav";
 import { LoadingScreen } from "@/components/ui";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { ready, member, refreshMember, offline } = useAuth();
+  const pathname = usePathname();
 
   if (!ready) return <LoadingScreen label="starting concordia" />;
   if (!member) return <AuthGate onAuthed={() => refreshMember()} />;
+
+  // Legacy members must confirm their email before ANYTHING else (wizard
+  // included) — the legal pages stay reachable so the doc links keep working.
+  if (member.needs_email_verification && pathname !== "/terms" && pathname !== "/privacy") {
+    return <ConfirmEmail />;
+  }
 
   // Robinhood rotated the tokens out from under us — trading is paused until reconnect.
   const needsReauth = member?.robinhood?.status === "error";

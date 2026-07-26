@@ -3,16 +3,18 @@ from __future__ import annotations
 
 import time
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from fastapi import HTTPException
 from pydantic import Field
 
+from .. import ratelimit
+from ..config import settings
 from ..db import audit, db
 from ..security import hash_password, verify_password
-from ..services import alloc, apikeys, positions, power
-from .deps import load_member, require_member, require_session_member
+from ..services import alloc, apikeys, email_codes, positions, power
+from .deps import client_ip, load_member, require_member, require_session_member
 
 router = APIRouter(prefix="/api", tags=["member"])
 
@@ -129,6 +131,62 @@ def change_password(body: PasswordBody, member: dict = Depends(require_member)):
         )
     audit(f"member:{member['id']}", "change_password", None, None)
     return {"ok": True}
+
+
+class VerifyEmailBody(BaseModel):
+    code: str
+
+
+def _require_interactive(member: dict) -> None:
+    """Session-only (like set-password): verification mints trust for the whole
+    account, so a leaked API key must not be able to drive it."""
+    if member.get("_auth") != "session":
+        raise HTTPException(status_code=403, detail="log in to verify your email")
+
+
+@router.post("/me/verify-email/start")
+def verify_email_start(request: Request, member: dict = Depends(require_member)):
+    """Email a verification code to the logged-in member's own address.
+
+    For GRANDFATHERED accounts (created before email verification existed) that
+    the UI gates post-login via needs_email_verification. Already-verified and
+    email-disabled cases are cheap no-ops so the client can call unconditionally."""
+    _require_interactive(member)
+    if member.get("email_verified"):
+        return {"sent": False, "already_verified": True}
+    if not settings.email_enabled:
+        return {"sent": False}
+    ip = client_ip(request)
+    email = member["email"]
+    # Same two send windows as signup/start: per-address AND per-IP.
+    if ratelimit.too_many(f"mailcode:{email}", 3, 600) or \
+       ratelimit.too_many(f"mailip:{ip}", 12, 3600):
+        raise HTTPException(status_code=429, detail="too many codes sent — try again in a few minutes")
+    from .auth import _send_code_email
+    if not _send_code_email(email, "verify"):
+        raise HTTPException(status_code=502, detail="couldn't send the code — try again in a minute")
+    ratelimit.record(f"mailcode:{email}")
+    ratelimit.record(f"mailip:{ip}")
+    return {"sent": True}
+
+
+@router.post("/me/verify-email")
+def verify_email(body: VerifyEmailBody, request: Request, member: dict = Depends(require_member)):
+    """Finish verification with the emailed code → stamp email_verified_at."""
+    _require_interactive(member)
+    ip = client_ip(request)
+    if ratelimit.too_many(f"verifyip:{ip}", 20, 900):
+        raise HTTPException(status_code=429, detail="too many attempts — try again in a few minutes")
+    if not email_codes.verify(member["email"], "verify", body.code):
+        ratelimit.record(f"verifyip:{ip}")
+        raise HTTPException(status_code=403,
+                            detail="that code didn't match or expired — use the newest email")
+    with db() as conn:
+        # COALESCE: never move an existing stamp (e.g. Google verified mid-flow)
+        conn.execute("UPDATE members SET email_verified_at=COALESCE(email_verified_at,?) WHERE id=?",
+                     (int(time.time()), member["id"]))
+    audit(f"member:{member['id']}", "email_verified", member["email"], None)
+    return {"ok": True, "member": load_member(member["id"])}
 
 
 @router.get("/me/api-keys")

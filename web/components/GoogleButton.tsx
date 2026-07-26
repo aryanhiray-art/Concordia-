@@ -43,6 +43,7 @@ export function GoogleButton({ onCredential }: { onCredential: (credential: stri
   const host = useRef<HTMLDivElement>(null);
   const cb = useRef(onCredential);
   cb.current = onCredential;
+  const cleanupResize = useRef<(() => void) | null>(null);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
@@ -75,11 +76,18 @@ export function GoogleButton({ onCredential }: { onCredential: (credential: stri
         };
         if (host.current.offsetWidth) render();
         else requestAnimationFrame(render);   // measure after layout settles
+        // Re-render on viewport resize (device rotation, window drag) — the GIS
+        // iframe keeps its initial width otherwise and can clip off a narrower
+        // screen. renderButton replaces the iframe in place.
+        let t: ReturnType<typeof setTimeout>;
+        const onResize = () => { clearTimeout(t); t = setTimeout(render, 250); };
+        window.addEventListener("resize", onResize);
+        cleanupResize.current = () => { clearTimeout(t); window.removeEventListener("resize", onResize); };
       } catch {
         setFailed(true);
       }
     });
-    return () => { gone = true; };
+    return () => { gone = true; cleanupResize.current?.(); };
   }, []);
 
   if (!googleEnabled || failed) return null;

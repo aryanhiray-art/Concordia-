@@ -61,6 +61,14 @@ def load_member(member_id: int) -> dict | None:
     # UI for Google-only accounts) — computed from the raw row before the secret
     # scrub below removes the hash itself.
     out["has_password"] = bool(m["password_hash"])
+    # Post-login email confirmation for GRANDFATHERED members (rows created
+    # before the verification feature — email_verified_at NULL). The gate only
+    # exists while email can actually be sent (email_enabled), and never for
+    # bots (no inbox to prove). Computed from the raw row, like has_password.
+    out["email_verified"] = bool(m["email_verified_at"])
+    out["needs_email_verification"] = bool(
+        settings.email_enabled and not m["email_verified_at"] and not (m["is_bot"] or 0)
+    )
     # Never serialize secret columns into API payloads (the members row reaches
     # the owner dashboard + every load_member caller).
     for _secret in ("password_hash", "password", "totp_secret", "session_token"):

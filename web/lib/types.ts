@@ -59,6 +59,11 @@ export type Member = {
   display_name: string;
   role: "owner" | "member";
   has_password?: boolean;
+  /** Ever confirmed a code emailed to this address (signup flow or the interstitial). */
+  email_verified?: boolean;
+  /** True only when email sending is configured AND this member never verified
+      (false for bots) — AppShell blocks the whole app behind ConfirmEmail on it. */
+  needs_email_verification?: boolean;
   settings: MemberSettings;
   robinhood: RobinhoodStatus;
 };
