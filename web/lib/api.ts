@@ -59,9 +59,25 @@ export const api = {
   base: BASE,
   // auth — invite code + email + a password you create; log in with email + password.
   // consent = the club-agreement checkbox (required for new signups in prod).
-  signup: (invite_code: string, email: string, password: string, display_name: string, consent?: boolean) =>
+  // signupStart: pre-flight that validates the invite and (if email verification is on)
+  // sends a 6-digit code — signup then needs that code in email_code.
+  signupStart: (invite_code: string, email: string) =>
+    req<{ code_required: boolean }>("/api/auth/signup/start", {
+      method: "POST", body: JSON.stringify({ invite_code, email }),
+    }),
+  signup: (invite_code: string, email: string, password: string, display_name: string, consent?: boolean, email_code?: string) =>
     req<{ token: string; member: Member }>("/api/auth/signup", {
-      method: "POST", body: JSON.stringify({ invite_code, email, password, display_name, consent }),
+      method: "POST", body: JSON.stringify({ invite_code, email, password, display_name, consent, email_code }),
+    }),
+  // self-serve password reset — forgot always 200s (no account enumeration);
+  // email_enabled=false means the club can't send mail → fall back to ask-the-owner.
+  forgot: (email: string) =>
+    req<{ ok: boolean; email_enabled: boolean }>("/api/auth/forgot", {
+      method: "POST", body: JSON.stringify({ email }),
+    }),
+  resetPassword: (email: string, code: string, new_password: string) =>
+    req<{ ok: boolean }>("/api/auth/reset", {
+      method: "POST", body: JSON.stringify({ email, code, new_password }),
     }),
   login: (email: string, password: string) =>
     req<{ token: string; member: Member }>("/api/auth/login", {

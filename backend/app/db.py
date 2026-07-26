@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS members (
     bot_strategy    TEXT,                             -- human-readable style label
     bot_slug        TEXT,                             -- stable id for the strategy
     bot_model       TEXT,                             -- ollama model name
-    bot_temperature REAL                              -- sampling temperature
+    bot_temperature REAL,                             -- sampling temperature
+    email_verified_at INTEGER                         -- inbox control proven (code / Google); NULL = never
 );
 
 CREATE TABLE IF NOT EXISTS member_settings (
@@ -188,6 +189,20 @@ CREATE TABLE IF NOT EXISTS consents (
 );
 CREATE INDEX IF NOT EXISTS ix_consents_member ON consents(member_id);
 
+-- Short-lived email verification codes (signup / password reset). Only the
+-- sha256 of the 6-digit code is stored; one active row per (email, purpose) —
+-- issuing a new code replaces the old. attempts caps brute force at 5.
+CREATE TABLE IF NOT EXISTS email_codes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    email      TEXT NOT NULL,
+    purpose    TEXT NOT NULL,                -- 'signup' | 'reset'
+    code_hash  TEXT NOT NULL,                -- sha256 hex of the 6-digit code
+    expires_at INTEGER NOT NULL,             -- epoch; 15 min after issue
+    attempts   INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_emailcodes_email ON email_codes(email, purpose);
+
 -- External sign-in identities (Google). `subject` is the provider's stable
 -- user id (the ID-token `sub`), unique across the club; email is a snapshot.
 CREATE TABLE IF NOT EXISTS oauth_identities (
@@ -256,6 +271,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
                      ("bot_temperature", "bot_temperature REAL")):
         if col not in m:
             conn.execute(f"ALTER TABLE members ADD COLUMN {ddl}")
+    if "email_verified_at" not in m:
+        conn.execute("ALTER TABLE members ADD COLUMN email_verified_at INTEGER")
     if "weight" not in cols("votes"):
         conn.execute("ALTER TABLE votes ADD COLUMN weight REAL NOT NULL DEFAULT 100")
     s = cols("member_settings")

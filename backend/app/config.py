@@ -163,6 +163,19 @@ class Settings:
         # Robinhood ever permits a different/registered redirect.
         return self.rh_redirect_uri_env or "http://localhost:8917/callback"
 
+    # Transactional email (Resend HTTP API). Empty key = email features are
+    # INERT: signup/start answers code_required=false, signup skips the code
+    # check, forgot still answers 200 but sends nothing — exact pre-email
+    # behaviour, so deploying the code without a key changes nothing.
+    resend_api_key: str = os.environ.get("RESEND_API_KEY", "").strip()
+    mail_from: str = os.environ.get("MAIL_FROM", "Concordia <no-reply@voteconcordia.com>")
+
+    @property
+    def email_enabled(self) -> bool:
+        # demo_mode counts as enabled: the mailer prints to stdout instead of
+        # calling Resend, so the sandbox can walk the full code flow offline.
+        return bool(self.resend_api_key) or self.demo_mode
+
     # DEMO_MODE: the whole app runs against a fake Robinhood (robinhood/demo.py)
     # — connect always succeeds, balances/quotes are canned, no external calls.
     # For localhost sandboxes only; is_live is forced False so a demo instance

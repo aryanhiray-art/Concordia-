@@ -8,16 +8,17 @@ signup records acceptance of the club agreement in `consents`.
 """
 from __future__ import annotations
 
+import threading
 import time
 
 from fastapi import APIRouter, HTTPException, Request, Response
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from .. import ratelimit
 from ..config import settings
 from ..db import audit, db
 from ..security import ct_eq, hash_password, make_session, verify_password
-from ..services import google_auth
+from ..services import email_codes, google_auth, mailer
 from .deps import COOKIE_NAME, client_ip, current_member, load_member
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -50,11 +51,27 @@ class SignupBody(_EmailBody):
     password: str
     display_name: str
     consent: bool | None = None   # club-agreement acceptance; REQUIRED true in prod
+    email_code: str | None = None  # 6-digit code from /signup/start (required only when email_enabled)
+
+
+class SignupStartBody(_EmailBody):
+    invite_code: str
+    email: str
 
 
 class LoginBody(_EmailBody):
     email: str
     password: str
+
+
+class ForgotBody(_EmailBody):
+    email: str
+
+
+class ResetBody(_EmailBody):
+    email: str
+    code: str
+    new_password: str = Field(min_length=8)   # same floor as PasswordBody
 
 
 class GoogleBody(BaseModel):
@@ -125,6 +142,57 @@ def _link_identity(member_id: int, info: dict) -> None:
     audit(f"member:{member_id}", "google_link", info["email"], {"sub": info["sub"]})
 
 
+def _send_code_email(email: str, purpose: str) -> bool:
+    """Mail a fresh (email, purpose) code. False = mail failed.
+
+    The code is persisted only AFTER the send succeeds — a mail hiccup must not
+    destroy the previous still-valid code the member may be about to type."""
+    code = email_codes.mint()
+    text = (f"Your Concordia code is: {code}\n\n"
+            "It expires in 15 minutes.\n"
+            "If you didn't request this, you can ignore this email.")
+    html = ("<p>Your Concordia code is:</p>"
+            f"<p style=\"font-size:24px;font-weight:700;letter-spacing:4px\">{code}</p>"
+            "<p>It expires in 15 minutes.</p>"
+            "<p>If you didn't request this, you can ignore this email.</p>")
+    if not mailer.send(email, "Your Concordia code", html, text):
+        return False
+    email_codes.store(email, purpose, code)
+    return True
+
+
+@router.post("/signup/start")
+def signup_start(body: SignupStartBody, request: Request):
+    """Step 1 of signup when email verification is on: invite gate → email a code.
+
+    Deliberately says NOTHING about whether the address already has an account
+    (the code is sent regardless) — the existing-account collision surfaces only
+    at final /signup, exactly as today. With email disabled this is a no-op
+    handshake (code_required=false) so the web flow works in both modes.
+    """
+    ip = client_ip(request)
+    if ratelimit.too_many(f"signup:{ip}", 10, 3600):
+        raise HTTPException(status_code=429, detail="too many signups — try again later")
+    if not ct_eq(body.invite_code.strip(), settings.invite_code):
+        ratelimit.record(f"signup:{ip}")
+        raise HTTPException(status_code=403, detail="invalid invite code")
+    if not settings.email_enabled:
+        return {"code_required": False}
+    # Two send windows: per-address (3 / 10 min) AND per-IP (12 / hour) — the
+    # per-address cap alone would let one invite-holding IP spray codes at
+    # unlimited DISTINCT inboxes (each address under its own fresh window),
+    # making the club a spam cannon. The per-IP window closes that.
+    if ratelimit.too_many(f"mailcode:{body.email}", 3, 600) or \
+       ratelimit.too_many(f"mailip:{ip}", 12, 3600):
+        raise HTTPException(status_code=429, detail="too many codes sent — try again in a few minutes")
+    if not _send_code_email(body.email, "signup"):
+        raise HTTPException(status_code=502,
+                            detail="couldn't send the verification code — try again in a minute")
+    ratelimit.record(f"mailcode:{body.email}")
+    ratelimit.record(f"mailip:{ip}")
+    return {"code_required": True}
+
+
 @router.post("/signup")
 def signup(body: SignupBody, request: Request, resp: Response):
     ip = client_ip(request)
@@ -138,6 +206,21 @@ def signup(body: SignupBody, request: Request, resp: Response):
     if settings.is_prod and body.consent is not True:
         raise HTTPException(status_code=403, detail="you must accept the club agreement")
     email = body.email
+    # Email verification (only when configured — otherwise byte-for-byte the old
+    # flow). Checked after invite+consent so a burnt code never precedes those 403s.
+    if settings.email_enabled:
+        # Duplicate-account check BEFORE consuming the code: verify() deletes on
+        # hit, so without this a valid code would be burnt just to learn 409
+        # "account exists". Existence isn't a secret past the invite gate (the
+        # in-transaction check below already 409s), only the ordering changes.
+        with db() as conn:
+            if conn.execute("SELECT 1 FROM members WHERE email=?", (email,)).fetchone():
+                raise HTTPException(status_code=409, detail="account exists — log in instead")
+        if not body.email_code:
+            raise HTTPException(status_code=403, detail="enter the code we emailed you")
+        if not email_codes.verify(email, "signup", body.email_code):
+            raise HTTPException(status_code=403,
+                                detail="that code didn't match or expired — use the newest email")
     role = "owner" if ct_eq(email, settings.owner_email) else "member"
     pw = hash_password(body.password)
     with db() as conn:
@@ -145,9 +228,10 @@ def signup(body: SignupBody, request: Request, resp: Response):
             # never overwrite an existing account (no passwordless-claim takeover)
             raise HTTPException(status_code=409, detail="account exists — log in instead")
         cur = conn.execute(
-            "INSERT INTO members(email,display_name,role,invite_code_used,password_hash,created_at) "
-            "VALUES(?,?,?,?,?,?)",
-            (email, _clean_display_name(body.display_name), role, "redacted", pw, int(time.time())),
+            "INSERT INTO members(email,display_name,role,invite_code_used,password_hash,"
+            "email_verified_at,created_at) VALUES(?,?,?,?,?,?,?)",
+            (email, _clean_display_name(body.display_name), role, "redacted", pw,
+             int(time.time()) if settings.email_enabled else None, int(time.time())),
         )
         member = {"id": cur.lastrowid, "session_version": 1, "role": role}
     _default_settings(member["id"])
@@ -218,12 +302,14 @@ def google(body: GoogleBody, request: Request, resp: Response):
                 "SELECT 1 FROM oauth_identities WHERE member_id=? AND provider='google'",
                 (member["id"],),
             ).fetchone()
-        if prior is None and member.get("password_hash"):
-            # FIRST Google link onto a password account: Google just proved the
-            # email's real owner is here, so whoever set that password (possibly
-            # an invite-holding squatter who pre-registered this address) loses
-            # access — password sign-in is disabled and every existing session
-            # revoked. The rightful owner continues via Google alone.
+        if prior is None and member.get("password_hash") and not member.get("email_verified_at"):
+            # FIRST Google link onto a password account whose email was NEVER
+            # verified: whoever set that password (possibly an invite-holding
+            # squatter who pre-registered this address) never proved the inbox,
+            # while Google just proved its real owner is here — so the untrusted
+            # password is wiped and every existing session revoked. A VERIFIED
+            # account keeps its password: the same person proved the inbox at
+            # signup (or via reset), so this is just a link, not a takeover.
             with db() as conn:
                 conn.execute(
                     "UPDATE members SET password_hash=NULL, session_version=session_version+1 "
@@ -232,6 +318,14 @@ def google(body: GoogleBody, request: Request, resp: Response):
             member["session_version"] = int(member.get("session_version", 1)) + 1
             member["password_hash"] = None
             audit(f"member:{member['id']}", "google_link_password_disabled", email, None)
+        if not member.get("email_verified_at"):
+            # Google verified the address — stamp it (AFTER the wipe decision
+            # above, which keys off the pre-Google state).
+            now = int(time.time())
+            with db() as conn:
+                conn.execute("UPDATE members SET email_verified_at=? WHERE id=? "
+                             "AND email_verified_at IS NULL", (now, member["id"]))
+            member["email_verified_at"] = now
         _link_identity(member["id"], info)
         _log_event(member["id"], "login", request)
         return _issue(resp, member)
@@ -247,10 +341,10 @@ def google(body: GoogleBody, request: Request, resp: Response):
     role = "owner" if ct_eq(email, settings.owner_email) else "member"
     with db() as conn:
         cur = conn.execute(
-            "INSERT INTO members(email,display_name,role,invite_code_used,password_hash,created_at) "
-            "VALUES(?,?,?,?,?,?)",
+            "INSERT INTO members(email,display_name,role,invite_code_used,password_hash,"
+            "email_verified_at,created_at) VALUES(?,?,?,?,?,?,?)",
             (email, _clean_display_name(info.get("name") or email.split("@")[0]),
-             role, "redacted", None, int(time.time())),
+             role, "redacted", None, int(time.time()), int(time.time())),
         )
         member = {"id": cur.lastrowid, "session_version": 1, "role": role}
     _default_settings(member["id"])
@@ -260,6 +354,73 @@ def google(body: GoogleBody, request: Request, resp: Response):
     audit(f"member:{member['id']}", "signup", email, {"role": role, "via": "google"})
     ratelimit.record(f"signup:{ip}")   # successful signups count against the window too
     return _issue(resp, member)
+
+
+@router.post("/forgot")
+def forgot(body: ForgotBody, request: Request):
+    """Start a password reset. ALWAYS the same 200 shape — whether the account
+    exists, is Google-only, or email is off entirely — so this endpoint can't be
+    used to enumerate members. The code is issued+sent only when a matching
+    non-bot member exists (completing /reset proves inbox control, so it works
+    for verified and never-verified accounts alike)."""
+    ip = client_ip(request)
+    if ratelimit.too_many(f"forgot:{ip}", 10, 3600):
+        raise HTTPException(status_code=429, detail="too many requests — try again later")
+    if settings.email_enabled:
+        if ratelimit.too_many(f"mailcode:{body.email}", 3, 600):
+            raise HTTPException(status_code=429,
+                                detail="too many codes sent — try again in a few minutes")
+        with db() as conn:
+            row = conn.execute(
+                "SELECT id FROM members WHERE lower(email)=? AND COALESCE(is_bot,0)=0",
+                (body.email,),
+            ).fetchone()
+        if row:
+            # Send from a background thread: the synchronous Resend round-trip
+            # (~100ms+) only happening for real accounts was a timing oracle —
+            # unknown emails returned near-instantly. Now both paths return at
+            # thread-spawn speed. A send failure is audited (mail_error) but
+            # NOT surfaced — a 502 only for real accounts would be the same
+            # oracle in a different suit. The member just re-requests.
+            threading.Thread(
+                target=_send_code_email, args=(body.email, "reset"), daemon=True
+            ).start()
+        # burn the send window either way, so 429 timing can't enumerate either
+        ratelimit.record(f"mailcode:{body.email}")
+    ratelimit.record(f"forgot:{ip}")
+    return {"ok": True, "email_enabled": settings.email_enabled}
+
+
+@router.post("/reset")
+def reset(body: ResetBody, request: Request):
+    """Finish a password reset with the emailed code. One generic 403 for every
+    failure (bad/expired code, unknown email, bot row) — no enumeration."""
+    ip = client_ip(request)
+    if ratelimit.too_many(f"reset:{ip}", 20, 900):
+        raise HTTPException(status_code=429, detail="too many attempts — try again in a few minutes")
+    with db() as conn:
+        row = conn.execute(
+            "SELECT * FROM members WHERE lower(email)=? AND COALESCE(is_bot,0)=0",
+            (body.email,),
+        ).fetchone()
+    # verify runs even without a member row (it just finds no code) so both
+    # failure paths burn an attempt window and share one message + status.
+    ok = email_codes.verify(body.email, "reset", body.code)
+    if not ok or not row:
+        ratelimit.record(f"reset:{ip}")
+        raise HTTPException(status_code=403, detail="that code didn't match or expired")
+    now = int(time.time())
+    with db() as conn:
+        # session_version bump: a password reset IS a credential change — every
+        # existing session (possibly an attacker's) dies with the old password.
+        # The code just proved inbox control, so the email is now verified too.
+        conn.execute(
+            "UPDATE members SET password_hash=?, session_version=session_version+1, "
+            "email_verified_at=COALESCE(email_verified_at,?) WHERE id=?",
+            (hash_password(body.new_password), now, row["id"]),
+        )
+    audit(f"member:{row['id']}", "reset_password", body.email, None)
+    return {"ok": True}
 
 
 @router.post("/logout")

@@ -29,6 +29,19 @@ function ConsentRow({ checked, onChange }: { checked: boolean; onChange: (v: boo
   );
 }
 
+// 6-digit emailed code — one input, digits only, styled for OTP entry.
+// Shared by the signup verification step and the password-reset step.
+function CodeInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <input
+      className="input text-center text-[17px] font-semibold tracking-[0.45em]"
+      inputMode="numeric" maxLength={6} autoComplete="one-time-code"
+      placeholder="••••••" spellCheck={false} value={value}
+      onChange={(e) => onChange(e.target.value.replace(/\D/g, "").slice(0, 6))}
+    />
+  );
+}
+
 function OrDivider() {
   return (
     <div className="my-5 flex items-center gap-3" aria-hidden>
@@ -53,6 +66,19 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
   // Google state machine: a credential parked here means Google verified the user but the
   // backend wants invite + consent (first-time member) — we show the finish step and retry.
   const [gCred, setGCred] = useState<string | null>(null);
+  // Signup email-verification: true = the card shows the 6-digit-code step
+  // (form entries stay in state so "← back" loses nothing).
+  const [codeStep, setCodeStep] = useState(false);
+  const [emailCode, setEmailCode] = useState("");
+  const [resent, setResent] = useState(false);
+  // Forgot-password flow (login mode): null = not in it; "email" → "code" → done,
+  // "owner" = backend can't send mail, show the ask-the-owner fallback.
+  const [forgotStep, setForgotStep] = useState<null | "email" | "code" | "owner">(null);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotCode, setForgotCode] = useState("");
+  const [forgotNewPw, setForgotNewPw] = useState("");
+  // Green success note shown on the login form after a completed reset.
+  const [note, setNote] = useState<string | null>(null);
 
   // AppShell shows AuthGate on every route when logged out, so the legal pages must
   // render here too — signup users follow the agreement links before they have an account.
@@ -90,11 +116,32 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
 
   async function submit() {
     if (mode === "signup" && !consent) { setErr("please accept the club agreement first"); return; }
+    setErr(null); setNote(null); setBusy(true);
+    try {
+      if (mode === "signup") {
+        // Pre-flight: validates the invite and, if verification is on, emails a code.
+        const start = await api.signupStart(invite.trim(), email.trim());
+        if (start.code_required) { setEmailCode(""); setCodeStep(true); return; }
+        const res = await api.signup(invite.trim(), email.trim(), password, name.trim(), consent);
+        setToken(res.token);
+        onAuthed(res.member);
+      } else {
+        const res = await api.login(email.trim(), password);
+        setToken(res.token);
+        onAuthed(res.member);
+      }
+    } catch (e: any) {
+      setErr(e.message || "failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Code step "Verify & create account" — same signup call, plus the emailed code.
+  async function verifySignup() {
     setErr(null); setBusy(true);
     try {
-      const res = mode === "signup"
-        ? await api.signup(invite.trim(), email.trim(), password, name.trim(), consent)
-        : await api.login(email.trim(), password);
+      const res = await api.signup(invite.trim(), email.trim(), password, name.trim(), consent, emailCode.trim());
       setToken(res.token);
       onAuthed(res.member);
     } catch (e: any) {
@@ -102,6 +149,53 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
     } finally {
       setBusy(false);
     }
+  }
+
+  // Explicit resend only — never re-fires on keystrokes.
+  async function resendCode() {
+    setErr(null); setBusy(true);
+    try {
+      await api.signupStart(invite.trim(), email.trim());
+      setResent(true);
+      setTimeout(() => setResent(false), 2500);
+    } catch (e: any) {
+      setErr(e.message || "failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sendResetCode() {
+    setErr(null); setBusy(true);
+    try {
+      const res = await api.forgot(forgotEmail.trim());
+      if (res.email_enabled) { setForgotCode(""); setForgotNewPw(""); setForgotStep("code"); }
+      else setForgotStep("owner"); // club can't send mail → ask-the-owner fallback
+    } catch (e: any) {
+      setErr(e.message || "failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function doReset() {
+    setErr(null); setBusy(true);
+    try {
+      await api.resetPassword(forgotEmail.trim(), forgotCode.trim(), forgotNewPw);
+      // Back to the login form, email prefilled, with a green all-done note.
+      setEmail(forgotEmail.trim());
+      setPassword("");
+      setForgotStep(null);
+      setNote("Password reset — log in with your new password.");
+    } catch (e: any) {
+      setErr(e.message || "failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function backToLogin() {
+    setForgotStep(null); setErr(null);
   }
 
   return (
@@ -146,10 +240,107 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
               ← Sign in a different way
             </button>
           </div>
+        ) : codeStep ? (
+          /* ── Signup email-verification step: form state is kept, "← back" loses nothing ── */
+          <div className="space-y-3.5">
+            <div>
+              <div className="font-display text-[16px] font-bold">Check your email</div>
+              <p className="mt-1 text-[13px] leading-relaxed text-muted">
+                We emailed a 6-digit code to{" "}
+                <b className="font-semibold text-teal">{email.trim()}</b> — enter it to finish.
+              </p>
+            </div>
+            <div>
+              <label className="label mb-2">Verification code</label>
+              <CodeInput value={emailCode} onChange={setEmailCode} />
+            </div>
+            {err && <div className="text-[13px] text-red">⚠ {err}</div>}
+            <Button variant="go" className="w-full !py-3.5" busy={busy}
+              disabled={emailCode.trim().length !== 6}
+              onClick={verifySignup}>
+              Verify &amp; create account
+            </Button>
+            <div className="flex items-center justify-between text-[12px]">
+              <button type="button" disabled={busy}
+                className="text-subtle transition-colors hover:text-ink disabled:opacity-50"
+                onClick={() => { setCodeStep(false); setErr(null); }}>
+                ← back
+              </button>
+              <button type="button" disabled={busy || resent} onClick={resendCode}
+                className="text-subtle transition-colors hover:text-teal disabled:opacity-50">
+                {resent ? "sent ✓" : "Resend code"}
+              </button>
+            </div>
+          </div>
+        ) : mode === "login" && forgotStep ? (
+          /* ── Self-serve password reset (login mode) ── */
+          <div className="space-y-3.5">
+            {forgotStep === "email" && (
+              <>
+                <div>
+                  <div className="font-display text-[16px] font-bold">Reset your password</div>
+                  <p className="mt-1 text-[13px] leading-relaxed text-muted">
+                    Enter your email and we&apos;ll send you a 6-digit reset code.
+                  </p>
+                </div>
+                <div>
+                  <label className="label mb-2">Email</label>
+                  <input className="input" placeholder="you@email.com" type="email" value={forgotEmail}
+                    onChange={(e) => setForgotEmail(e.target.value)} spellCheck={false} autoComplete="email" />
+                </div>
+                {err && <div className="text-[13px] text-red">⚠ {err}</div>}
+                <Button variant="go" className="w-full !py-3.5" busy={busy}
+                  disabled={!forgotEmail.trim()} onClick={sendResetCode}>
+                  Email me a code
+                </Button>
+              </>
+            )}
+            {forgotStep === "owner" && (
+              <>
+                <div className="font-display text-[16px] font-bold">Reset your password</div>
+                <p className="text-[13px] leading-relaxed text-muted">
+                  This club can&apos;t send email right now. Ask the club owner to reset your
+                  password — they&apos;ll give you a temporary one you can change after logging in.
+                </p>
+              </>
+            )}
+            {forgotStep === "code" && (
+              <>
+                <div>
+                  <div className="font-display text-[16px] font-bold">Check your email</div>
+                  <p className="mt-1 text-[13px] leading-relaxed text-muted">
+                    If <b className="font-semibold text-teal">{forgotEmail.trim()}</b> has an
+                    account, we emailed it a 6-digit code.
+                  </p>
+                </div>
+                <div>
+                  <label className="label mb-2">Reset code</label>
+                  <CodeInput value={forgotCode} onChange={setForgotCode} />
+                </div>
+                <div>
+                  <label className="label mb-2">New password</label>
+                  <input className="input" placeholder="New password (8+ chars)" type="password"
+                    value={forgotNewPw} onChange={(e) => setForgotNewPw(e.target.value)}
+                    autoComplete="new-password" />
+                </div>
+                {err && <div className="text-[13px] text-red">⚠ {err}</div>}
+                <Button variant="go" className="w-full !py-3.5" busy={busy}
+                  disabled={forgotCode.trim().length !== 6 || forgotNewPw.length < 8}
+                  onClick={doReset}>
+                  Reset password
+                </Button>
+              </>
+            )}
+            <button type="button" disabled={busy}
+              className="w-full text-center text-[12px] text-subtle transition-colors hover:text-ink disabled:opacity-50"
+              onClick={backToLogin}>
+              ← back to log in
+            </button>
+          </div>
         ) : (
           <>
             <div className="mb-5 flex gap-3 text-[13px]">
-              <button onClick={() => { setMode("signup"); setErr(null); }}
+              <button onClick={() => { setMode("signup"); setErr(null); setNote(null); }}
                 className={mode === "signup" ? "font-semibold text-teal" : "text-subtle"}>Create account</button>
               <span className="text-subtle/50">·</span>
               <button onClick={() => { setMode("login"); setErr(null); }}
@@ -204,6 +395,7 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
                 </div>
               </div>
               {mode === "signup" && <ConsentRow checked={consent} onChange={setConsent} />}
+              {note && mode === "login" && <div className="text-[13px] text-teal">✓ {note}</div>}
               {err && <div className="text-[13px] text-red">⚠ {err}</div>}
               <Button type="submit" variant="go" className="w-full !py-3.5" busy={busy}
                 disabled={mode === "signup" && !consent}>
@@ -216,10 +408,19 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
 
       {mode === "login" && !gCred && (
         <>
-          <p className="mt-3 text-center text-[12px] text-subtle">
-            Forgot your password? Ask the club owner to reset it — they&apos;ll give you a
-            temporary one you can change after logging in.
-          </p>
+          {forgotStep === null && (
+            <p className="mt-3 text-center text-[12px]">
+              <button type="button"
+                className="text-subtle transition-colors hover:text-teal hover:underline"
+                onClick={() => {
+                  setForgotStep("email");
+                  setForgotEmail(email.trim()); // prefill from the login email field if set
+                  setErr(null); setNote(null);
+                }}>
+                Forgot your password?
+              </button>
+            </p>
+          )}
           {/* signup reaches these via the consent checkbox; login needs its own path */}
           <p className="mt-4 text-center text-[11.5px] text-subtle">
             <a href="/terms" target="_blank" rel="noopener noreferrer" className="text-muted hover:text-teal hover:underline">Terms</a>
