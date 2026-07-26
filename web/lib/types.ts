@@ -58,6 +58,7 @@ export type Member = {
   email: string;
   display_name: string;
   role: "owner" | "member";
+  has_password?: boolean;
   settings: MemberSettings;
   robinhood: RobinhoodStatus;
 };

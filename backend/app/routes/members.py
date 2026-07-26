@@ -26,7 +26,7 @@ class ApiKeyBody(BaseModel):
 
 
 class PasswordBody(BaseModel):
-    current_password: str
+    current_password: str = ""   # optional: Google-only accounts have none to prove
     new_password: str = Field(min_length=8)
 
 
@@ -95,10 +95,29 @@ def set_allocation(body: AllocationBody, member: dict = Depends(require_member))
 
 @router.put("/me/password")
 def change_password(body: PasswordBody, member: dict = Depends(require_member)):
-    """Change your own password (e.g. after the owner reset it to a temp one)."""
+    """Change your own password (e.g. after the owner reset it to a temp one) —
+    or SET a first one on a Google-only account (no stored hash)."""
     with db() as conn:
         row = conn.execute("SELECT password_hash FROM members WHERE id=?", (member["id"],)).fetchone()
-    if not row or not row["password_hash"] or not verify_password(body.current_password, row["password_hash"]):
+    if row and not row["password_hash"]:
+        # Session-only (like key management): the change path below is gated by
+        # knowing the current password, but here there is none — without this, a
+        # leaked API key could mint itself a full interactive login.
+        if member.get("_auth") != "session":
+            raise HTTPException(status_code=403, detail="log in to set a password")
+        # Google-only account setting its FIRST password: there is no current
+        # password to prove, and no session_version bump — nothing pre-existing
+        # to revoke, since every live session on a passwordless account was
+        # minted by Google sign-in (which already proved email ownership);
+        # bumping would only log the member out right after they set a password.
+        # The squatter-protection revocation already happened at Google-link
+        # time (auth.py google()).
+        with db() as conn:
+            conn.execute("UPDATE members SET password_hash=? WHERE id=?",
+                         (hash_password(body.new_password), member["id"]))
+        audit(f"member:{member['id']}", "set_password", None, None)
+        return {"ok": True}
+    if not row or not verify_password(body.current_password, row["password_hash"]):
         raise HTTPException(status_code=403, detail="current password is wrong")
     # Bump session_version so ALL existing sessions/tokens are revoked on a
     # password change (finding #3) — otherwise a stolen token survives the reset

@@ -57,6 +57,10 @@ def load_member(member_id: int) -> dict | None:
             (member_id,),
         ).fetchone()
     out = dict(m)
+    # Expose only WHETHER a password exists (drives the set-vs-change password
+    # UI for Google-only accounts) — computed from the raw row before the secret
+    # scrub below removes the hash itself.
+    out["has_password"] = bool(m["password_hash"])
     # Never serialize secret columns into API payloads (the members row reaches
     # the owner dashboard + every load_member caller).
     for _secret in ("password_hash", "password", "totp_secret", "session_token"):
