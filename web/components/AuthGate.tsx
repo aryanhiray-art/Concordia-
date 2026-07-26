@@ -84,9 +84,14 @@ function BrandPane() {
             concordia
           </div>
         </div>
+        {/* Hook + explainer: the slogan claims the FIGHT (never the result —
+            "beating" would be an implied performance promise), the subline
+            carries the mechanics and the custody trust. */}
         <p className="mt-6 max-w-[32rem] text-[21px] font-light leading-[1.45] text-ink xl:text-[23px]">
-          One basket, <span className="text-teal">decided together</span> — rebalanced
-          weekly in an account only you control.
+          Taking on Wall Street, <span className="text-teal">one vote at a time</span>.
+        </p>
+        <p className="mt-3 max-w-[30rem] text-[14px] leading-relaxed text-muted">
+          One basket, decided together — rebalanced weekly in an account only you control.
         </p>
         {/* The owner's favorite glass finish wraps the story itself — a real
             material anchor for the pane with no fake product data (live vote
@@ -271,9 +276,11 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
         <div className="mt-4 font-display text-[26px] font-bold tracking-tight text-[#8FD9C0]">
           concordia
         </div>
-        <p className="mt-1.5 text-[15px] leading-relaxed text-muted">
-          One basket, <span className="text-teal">decided together</span> — rebalanced
-          weekly in an account only you control.
+        <p className="mt-2 text-[15.5px] font-medium leading-snug text-ink">
+          Taking on Wall Street, <span className="text-teal">one vote at a time</span>.
+        </p>
+        <p className="mt-1.5 text-[12.5px] leading-relaxed text-muted">
+          One basket, decided together — rebalanced weekly in an account only you control.
         </p>
       </div>
 
