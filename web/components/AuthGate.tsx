@@ -487,9 +487,14 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
         </>
       )}
 
-      <p className="mt-5 text-center text-[11px] font-semibold uppercase tracking-[0.16em] text-subtle">
-        Invite-only
-      </p>
+      {/* Signup-side caption only (the Google finish step also asks for an
+          invite, so it stays there too) — a returning member logging in
+          doesn't need to be told the door policy. */}
+      {(mode === "signup" || gCred) && (
+        <p className="mt-5 text-center text-[11px] font-semibold uppercase tracking-[0.16em] text-subtle">
+          Invite-only
+        </p>
+      )}
         </div>
       </div>
     </div>
