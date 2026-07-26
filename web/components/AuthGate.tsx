@@ -135,10 +135,10 @@ function BrandPane() {
           </div>
         </div>
         {/* xl+ only: 1024-1279 viewports are too short for it (measured 18px
-            overflow at 1024x768) — the flourish appears when there's room.
-            Left edge aligns with the how-it-works TEXT column (numeral 2.6rem
-            + gap 1.25rem) so it reads composed with the grid, not appended. */}
-        <div className="enter mt-6 hidden w-[300px] xl:ml-[3.85rem] xl:block"
+            overflow at 1024x768). Full block width, no tilt, no offset — the
+            pane reads as ONE aligned column (lockup / tagline / rows / card),
+            with the card as the grounded anchor rather than an ornament. */}
+        <div className="enter mt-8 hidden max-w-[30rem] xl:block"
           style={{ animationDelay: "0.3s" }}>
           <BallotMock />
         </div>
