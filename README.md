@@ -7,13 +7,46 @@ sized as a % of their buying power. Inspired by [DeepMind's Concordia](https://g
 collective-decision idea, grounded on Robinhood's Agentic Trading API.
 
 ```
-concord/
+concordia/
 ├── ARCHITECTURE.md   ← the canonical design (read this first)
 ├── RUNBOOK.md        ← local dev, deploy, member onboarding, going live
-├── backend/          ← FastAPI + SQLite + Robinhood OAuth/MCP + executor (forge VPS)
-├── web/              ← Next.js voting UI (Vercel)
-└── infra/            ← systemd units, nginx vhost, host setup
+├── backend/          ← FastAPI + SQLite + Robinhood OAuth/MCP + executor
+├── web/              ← Next.js member app (landing, wizard, voting, account)
+├── infra/            ← systemd units, nginx vhost, host setup, MIGRATION.md
+└── scripts/          ← dev.sh (local sandbox), deploy.sh (ship to production)
 ```
+
+## Getting started (2 minutes, zero risk)
+
+```bash
+git clone https://github.com/rohanjoglekar/concordia.git && cd concordia
+./scripts/dev.sh
+```
+
+Opens the whole app at **http://localhost:3000** against a **fake Robinhood** —
+its own throwaway database, no real money, no brokerage calls. Sign up with
+invite code `demo`; the app walks the real onboarding wizard, and the 6-digit
+verification codes print in your terminal as `DEMO-MAIL` instead of being
+emailed. First run installs the Python venv and npm deps automatically.
+
+## Deploying to production
+
+`voteconcordia.com` runs on its own box (see `infra/MIGRATION.md`). Once your
+SSH key is on it:
+
+```bash
+./scripts/deploy.sh              # web + backend, restart both
+./scripts/deploy.sh --web        # web only
+```
+
+It refuses to run on a dirty tree or unpushed commits — what's live is always a
+commit that exists on GitHub — and it never syncs `.env` or `concord.db`, so a
+deploy can't clobber secrets or member data.
+
+> **This box holds real money.** Members' encrypted Robinhood tokens live in
+> `/opt/concord/concord.db`, and `/opt/concord/.env` holds the key that decrypts
+> them. Trading is gated behind `EXECUTION_MODE=live` **plus** a human arming
+> step — never automate arming.
 
 ## What works today (verified)
 
