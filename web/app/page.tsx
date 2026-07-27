@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Onboarding } from "@/components/Onboarding";
 import { CinematicOverview } from "@/components/CinematicOverview";
@@ -24,25 +23,17 @@ export default function Overview() {
     // /welcome and this redirect can never loop.
     if (getWizardFlag(WIZARD_SKIP_KEY) || getWizardFlag(WIZARD_DONE_KEY)) { setGate("app"); return; }
     if (!connected) { router.replace("/welcome"); return; }
-    // Connected but maybe mid-setup: one async look at readiness + stake +
-    // participation. Fully done → remember it (DONE flag) so this check never
-    // runs again on this device; otherwise resume the wizard at the right step.
-    let alive = true;
-    (async () => {
-      try {
-        const [acc, ready] = await Promise.all([api.account(), api.tradeReadiness()]);
-        const allDone =
-          ready.ready === true &&
-          (acc.allocation?.resolved_usd ?? 0) > 0 &&
-          Number(member.settings?.opted_in) === 1;
-        if (!alive) return;
-        if (allDone) { setWizardFlag(WIZARD_DONE_KEY); setGate("app"); }
-        else router.replace("/welcome");
-      } catch {
-        if (alive) setGate("app"); // backend blip — never lock members out of the app
-      }
-    })();
-    return () => { alive = false; };
+    // Decide from the member payload we ALREADY have — never block the page on
+    // a network call. The old version awaited /api/me/account, which does live
+    // Robinhood reads (measured 4.4s: allocation 1.6s + club P&L 2.3s), so every
+    // first visit on a device stared at a blank screen for ~5s. Host-scoped
+    // localStorage made that bite again the moment we moved domains.
+    // opted_in + a non-zero stake is the same signal minus the round-trip; the
+    // resume banner below does the precise check and surfaces anything missing.
+    const optedIn = Number(member.settings?.opted_in) === 1;
+    const staked = Number(member.settings?.alloc_value ?? 0) > 0;
+    if (optedIn && staked) { setWizardFlag(WIZARD_DONE_KEY); setGate("app"); return; }
+    router.replace("/welcome");
   }, [member, connected, router]);
 
   if (gate !== "app") return <LoadingScreen label="loading" />;

@@ -51,6 +51,12 @@ export type MemberSettings = {
   buying_power_pct: number;
   daily_cap_usd: number;
   max_orders: number;
+  /** The committed stake: alloc_type is "percent" | "dollar", alloc_value the
+   *  raw number. Resolving it to dollars needs a live balance read, so the
+   *  Overview gate uses alloc_value>0 as the cheap "has a stake" signal. */
+  alloc_type?: string;
+  alloc_value?: number;
+  voting_power?: number;
 } | null;
 
 export type Member = {
