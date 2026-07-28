@@ -18,6 +18,7 @@ calendar_covers guard) — with one plain-English reason per failed gate, so
 from __future__ import annotations
 
 import json
+import time
 
 from ..calendar_us import calendar_covers, today_et
 from ..config import settings
@@ -28,6 +29,21 @@ _PERF_CACHE_KEY = "club_perf_v1"   # performance._CACHE_KEY (kept literal: read-
 
 
 # ─── state: will the next execution place real orders? ───────────────────────
+
+def _current_open_session() -> dict | None:
+    """The open ballot, ignoring STALE rows. A session abandoned mid-cycle stays
+    status='open' forever (prod carries one from 2026-06-22), and it would
+    otherwise masquerade as "today's ballot" and have its quorum judged instead
+    of the session the next run actually executes. An open ballot whose close
+    time is more than a day past is cruft, not the current cycle."""
+    row = voting.latest_session("open")
+    if not row:
+        return None
+    closes_at = row.get("closes_at") or 0
+    if closes_at and closes_at < time.time() - 86400:
+        return None
+    return row
+
 
 def will_place_state() -> dict:
     """The executor's go/no-go, recomputed read-only, with every blocking reason."""
@@ -42,7 +58,7 @@ def will_place_state() -> dict:
         reasons.append("halted (kill switch)")
     # Quorum is judged on the session the next run would execute: today's open
     # ballot if there is one, else the sold-awaiting-buy (closed) session.
-    sess = voting.latest_session("open") or voting.latest_session("closed")
+    sess = _current_open_session() or voting.latest_session("closed")
     if sess is None:
         reasons.append("no vote session")
     else:
@@ -120,7 +136,7 @@ def member_rows() -> list[dict]:
 # ─── cycle: today's ballot + the last run that moved (or planned) orders ─────
 
 def cycle_view() -> dict:
-    open_row = voting.latest_session("open")
+    open_row = _current_open_session()
     open_view = None
     bots_voted = 0
     with db() as conn:
