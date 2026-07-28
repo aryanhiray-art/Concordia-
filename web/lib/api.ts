@@ -61,10 +61,8 @@ export const api = {
   // consent = the club-agreement checkbox (required for new signups in prod).
   // signupStart: pre-flight that validates the invite and (if email verification is on)
   // sends a 6-digit code — signup then needs that code in email_code.
-  // demo_code arrives ONLY from the demo instance (no real inbox there — the
-  // UI shows/prefills the code); production never includes it.
   signupStart: (invite_code: string, email: string) =>
-    req<{ code_required: boolean; demo_code?: string }>("/api/auth/signup/start", {
+    req<{ code_required: boolean }>("/api/auth/signup/start", {
       method: "POST", body: JSON.stringify({ invite_code, email }),
     }),
   signup: (invite_code: string, email: string, password: string, display_name: string, consent?: boolean, email_code?: string) =>

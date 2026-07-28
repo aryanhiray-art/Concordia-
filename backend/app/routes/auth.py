@@ -194,13 +194,10 @@ def signup_start(body: SignupStartBody, request: Request):
                             detail="couldn't send the verification code — try again in a minute")
     ratelimit.record(f"mailcode:{body.email}")
     ratelimit.record(f"mailip:{ip}")
-    out: dict = {"code_required": True}
-    # DEMO ONLY: the public demo's "emails" go to the server log, so no visitor
-    # could ever finish signup — surface the code so the UI can show it on
-    # screen. settings.demo_mode is False on the production club, always.
-    if settings.demo_mode:
-        out["demo_code"] = code
-    return out
+    # A demo account is still an account (owner decision 2026-07-28): the code
+    # always travels by email — the response NEVER carries it, on any instance.
+    # (Keyless local sandboxes print it to the terminal via mailer's demo path.)
+    return {"code_required": True}
 
 
 @router.post("/signup")

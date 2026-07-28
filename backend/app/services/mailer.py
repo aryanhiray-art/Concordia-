@@ -23,7 +23,10 @@ def send(to: str, subject: str, html: str, text: str) -> bool:
     False on ANY failure — the requests/status detail is audited (kind
     "mail_error"; never the message body, which may carry a login code).
     """
-    if settings.demo_mode:
+    # Demo accounts are still accounts — the public demo (which HAS a mail key)
+    # sends real verification emails exactly like the club. The stdout print is
+    # only for keyless local sandboxes, where the terminal is the inbox.
+    if settings.demo_mode and not settings.resend_api_key:
         print(f"DEMO-MAIL to={to} subject={subject}\n{text}", flush=True)
         return True
     if not settings.resend_api_key:

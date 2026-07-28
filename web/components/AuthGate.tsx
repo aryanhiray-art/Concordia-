@@ -106,8 +106,8 @@ function BrandPane() {
                 <>
                   <HowRow n={1} title="Use the invite code: demo"
                     body="Type demo in the invite box — the playground is open to everyone." />
-                  <HowRow n={2} title="Sign up with your email"
-                    body="No verification email is sent here — your 6-digit code appears right on screen." />
+                  <HowRow n={2} title="Use your real email"
+                    body="A demo account is still an account — we email you a 6-digit code to confirm it, just like the club." />
                   <HowRow n={3} title="Pick any name and password"
                     body="Demo accounts are fully separate from the real club — create and use one freely." />
                 </>
@@ -143,7 +143,7 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
   // server-side (AppShell gates it behind `ready`), so this is stable.
   const adminHost = isAdminHost();
   // demo.voteconcordia.com: fake-money playground — ".demo" branding, no
-  // Google (origin unauthorized), and emailed codes surface on screen.
+  // Google (origin unauthorized). Codes travel by REAL email, same as the club.
   const demoHost = isDemoHost();
   const [mode, setMode] = useState<"signup" | "login">("signup");
   const [invite, setInvite] = useState("");
@@ -212,12 +212,7 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
       if (mode === "signup") {
         // Pre-flight: validates the invite and, if verification is on, emails a code.
         const start = await api.signupStart(invite.trim(), email.trim());
-        if (start.code_required) {
-          // demo instance surfaces the code (no real inbox exists there)
-          setEmailCode(start.demo_code ?? "");
-          setCodeStep(true);
-          return;
-        }
+        if (start.code_required) { setEmailCode(""); setCodeStep(true); return; }
         const res = await api.signup(invite.trim(), email.trim(), password, name.trim(), consent);
         setToken(res.token);
         onAuthed(res.member);
@@ -251,8 +246,7 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
   async function resendCode() {
     setErr(null); setBusy(true);
     try {
-      const again = await api.signupStart(invite.trim(), email.trim());
-      if (again.demo_code) setEmailCode(again.demo_code);
+      await api.signupStart(invite.trim(), email.trim());
       setResent(true);
       setTimeout(() => setResent(false), 2500);
     } catch (e: any) {
@@ -358,17 +352,10 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
           /* ── Signup email-verification step: form state is kept, "← back" loses nothing ── */
           <div className="space-y-3.5">
             <div>
-              <div className="font-display text-[16px] font-bold">
-                {demoHost ? "Almost in" : "Check your email"}
-              </div>
+              <div className="font-display text-[16px] font-bold">Check your email</div>
               <p className="mt-1 text-[13px] leading-relaxed text-muted">
-                {demoHost ? (
-                  <>Demo mode — no email needed, your code is already filled in below.
-                  Just hit verify.</>
-                ) : (
-                  <>We emailed a 6-digit code to{" "}
-                  <span className="text-teal">{email.trim()}</span> — enter it to finish.</>
-                )}
+                We emailed a 6-digit code to{" "}
+                <span className="text-teal">{email.trim()}</span> — enter it to finish.
               </p>
             </div>
             <div>

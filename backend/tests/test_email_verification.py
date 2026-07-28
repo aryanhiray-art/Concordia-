@@ -339,30 +339,44 @@ def test_duplicate_account_409_does_not_burn_the_code(email_on):
                             (email,)).fetchone()[0] == 1
 
 
-# ─── demo-only on-screen code (public demo has no inbox) ─────────────────────
+# ─── the code NEVER rides in the response (demo included) ───────────────────
 
-def test_demo_code_only_in_demo_mode(email_on, monkeypatch):
-    """PRODUCTION MUST NEVER LEAK THE CODE: demo_code appears in the
-    signup/start response only under settings.demo_mode, and when it does it
-    must actually work as the emailed code."""
-    # email enabled, NOT demo: no demo_code key at all
+def test_code_never_in_response_even_in_demo_mode(email_on, monkeypatch):
+    """Owner decision 2026-07-28: demo accounts are real accounts — the code
+    always travels by email. No instance, demo included, may put it in the
+    signup/start response."""
     r = client.post("/api/auth/signup/start", headers=_hdrs(),
                     json={"invite_code": settings.invite_code, "email": "prodlike@evclub.test"})
     assert r.status_code == 200 and "demo_code" not in r.json()
 
-    # demo mode: code is surfaced and verifies
-    monkeypatch.setattr(type(settings), "demo_mode", property(lambda self: True),
-                        raising=False) if isinstance(getattr(type(settings), "demo_mode", None), property) \
-        else object.__setattr__(settings, "demo_mode", True)
+    object.__setattr__(settings, "demo_mode", True)
     try:
-        email = "demoscreen@evclub.test"
         r = client.post("/api/auth/signup/start", headers=_hdrs(),
-                        json={"invite_code": settings.invite_code, "email": email})
+                        json={"invite_code": settings.invite_code, "email": "demoscreen@evclub.test"})
         assert r.status_code == 200
-        code = r.json().get("demo_code")
-        assert code and len(code) == 6 and code.isdigit()
-        r = client.post("/api/auth/signup", headers=_hdrs(),
-                        json=_signup_payload(email, email_code=code))
-        assert r.status_code == 200
+        assert "demo_code" not in r.json()          # never on-screen
+        assert email_on[-1]["to"] == "demoscreen@evclub.test"   # it went by mail
     finally:
+        object.__setattr__(settings, "demo_mode", False)
+
+
+def test_mailer_demo_print_only_without_a_key(monkeypatch, capsys):
+    """Keyless sandbox: demo prints to stdout. Key present: demo sends REAL
+    mail (the public demo's whole point)."""
+    from app.services import mailer as m
+    object.__setattr__(settings, "demo_mode", True)
+    try:
+        object.__setattr__(settings, "resend_api_key", "")
+        assert m.send("x@y.z", "s", "<p>h</p>", "code is: 123456") is True
+        assert "DEMO-MAIL" in capsys.readouterr().out
+
+        object.__setattr__(settings, "resend_api_key", "re_test_key")
+        calls = []
+        monkeypatch.setattr(m.requests, "post",
+                            lambda *a, **k: type("R", (), {"status_code": 200,
+                                                           "json": lambda self: {"id": "x"}})())
+        assert m.send("x@y.z", "s", "<p>h</p>", "t") is True   # real-send path taken
+        assert "DEMO-MAIL" not in capsys.readouterr().out
+    finally:
+        object.__setattr__(settings, "resend_api_key", "")
         object.__setattr__(settings, "demo_mode", False)
