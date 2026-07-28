@@ -143,3 +143,25 @@ def require_owner(request: Request) -> dict:
     if member.get("role") != "owner":
         raise HTTPException(status_code=403, detail="owner only")
     return member
+
+
+def require_admin(request: Request) -> dict:
+    """Owner OR cofounder ('admin' role) via an INTERACTIVE session only.
+
+    The admin console moves real money (arm/kill/execute), so a leaked member
+    API key must never reach it — same rationale as require_session_member on
+    key management. Bots never pass regardless of role (they have no login, but
+    the row check is explicit defence-in-depth). The static service token keeps
+    working (backend-to-backend, e.g. the forge dashboard) exactly as it does
+    for require_owner — it is the deploy's own secret, not a member credential.
+    """
+    if settings.admin_api_token and ct_eq(_token_from(request), settings.admin_api_token):
+        return {"id": 0, "email": "service", "role": "owner", "display_name": "service"}
+    member = current_member(request)
+    if not member:
+        raise HTTPException(status_code=401, detail="not authenticated")
+    if member.get("_auth") != "session":
+        raise HTTPException(status_code=403, detail="log in to use the admin console")
+    if member.get("is_bot") or member.get("role") not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="admin only")
+    return member

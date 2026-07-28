@@ -1,4 +1,11 @@
-"""Owner-only: overview, master ARM switch, kill, manual triggers, member drilldown."""
+"""Admin console (owner + cofounder): overview, panel, master ARM switch, kill,
+manual triggers, member drilldown.
+
+Most routes take require_admin — the cofounder ('admin' role) has equal rights.
+The exceptions stay require_owner because they act AS the owner's member
+identity: minting/revoking the owner's API keys and casting/seeding the owner's
+research-voter ballot.
+"""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,9 +15,9 @@ from ..calendar_us import today_et
 from ..config import settings
 from ..db import audit, db, is_armed, kv_get, kv_set, set_armed
 from ..robinhood import vault
-from ..services import alloc, apikeys, bots, executor, power, reconcile, research
+from ..services import adminview, alloc, apikeys, bots, executor, power, reconcile, research
 from ..services import voting as svc
-from .deps import load_member, owner_member_id, require_owner
+from .deps import load_member, owner_member_id, require_admin, require_owner
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -42,8 +49,19 @@ def _num(v):
         return None
 
 
+@router.get("/panel")
+def admin_panel(admin: dict = Depends(require_admin)):
+    """The admin console payload — FAST, DB-only, no live Robinhood calls.
+
+    (member_allocation-style live balance reads run 1.6s+ per member; everything
+    here comes from rows the jobs already maintain — see services/adminview.py,
+    which the morning digest job shares so console and email never drift.)
+    """
+    return adminview.panel()
+
+
 @router.get("/overview")
-def overview(owner: dict = Depends(require_owner)):
+def overview(admin: dict = Depends(require_admin)):
     with db() as conn:
         members = conn.execute(
             "SELECT m.id,m.email,m.display_name,m.role,m.last_login_at,m.created_at,"
@@ -55,7 +73,7 @@ def overview(owner: dict = Depends(require_owner)):
             "LEFT JOIN rh_accounts a ON a.member_id=m.id ORDER BY s.voting_power DESC, m.id"
         ).fetchall()
     session = svc.active_session()
-    sess_view = svc.session_public(session, owner["id"]) if session else None
+    sess_view = svc.session_public(session, admin["id"]) if session else None
     execs = []
     if session:
         with db() as conn:
@@ -93,7 +111,7 @@ def overview(owner: dict = Depends(require_owner)):
 
 
 @router.get("/member/{member_id}")
-def member_detail(member_id: int, owner: dict = Depends(require_owner)):
+def member_detail(member_id: int, admin: dict = Depends(require_admin)):
     """Everything about one member: live holdings, what they bought, power history."""
     base = load_member(member_id)
     if not base:
@@ -165,34 +183,37 @@ def member_detail(member_id: int, owner: dict = Depends(require_owner)):
 
 
 @router.post("/member/{member_id}/reset-password")
-def reset_password(member_id: int, owner: dict = Depends(require_owner)):
-    """Owner-mediated recovery for a member who forgot their password.
+def reset_password(member_id: int, admin: dict = Depends(require_admin)):
+    """Admin-mediated recovery for a member who forgot their password.
 
     Generates a random temporary password, stores its hash, and invalidates the
     member's existing sessions (bump session_version). Returns the temp password
-    ONCE for the owner to relay; the member logs in with it and can change it.
-    Owner-only by design — a shared-invite self-serve reset would let any member
-    reset another member's account.
+    ONCE for the admin to relay; the member logs in with it and can change it.
+    Admin-mediated by design — a shared-invite self-serve reset would let any
+    member reset another member's account. The OWNER's own password stays
+    owner-only: a cofounder resetting it would be an owner-account takeover.
     """
     import secrets
     from ..security import hash_password
     with db() as conn:
-        row = conn.execute("SELECT id,email,is_bot FROM members WHERE id=?", (member_id,)).fetchone()
+        row = conn.execute("SELECT id,email,role,is_bot FROM members WHERE id=?", (member_id,)).fetchone()
         if not row:
             raise HTTPException(404, "no such member")
         if row["is_bot"]:
             raise HTTPException(400, "bots have no login")
+        if row["role"] == "owner" and admin.get("role") != "owner":
+            raise HTTPException(403, "only the owner can reset the owner's password")
         temp = secrets.token_urlsafe(9)  # ~12 chars, > 8 min
         conn.execute(
             "UPDATE members SET password_hash=?, session_version=session_version+1 WHERE id=?",
             (hash_password(temp), member_id),
         )
-    audit(owner["email"], "reset_password", row["email"], None)
+    audit(admin["email"], "reset_password", row["email"], None)
     return {"ok": True, "email": row["email"], "temp_password": temp}
 
 
 @router.post("/member/{member_id}/rh-reset")
-def rh_reset(member_id: int, owner: dict = Depends(require_owner)):
+def rh_reset(member_id: int, admin: dict = Depends(require_admin)):
     """Un-strand a member whose rh_accounts.status is stuck at 'error'.
 
     A transient failure used to strand members permanently; now only auth
@@ -206,14 +227,14 @@ def rh_reset(member_id: int, owner: dict = Depends(require_owner)):
         raise HTTPException(404, str(e))
     if not res.get("ok"):
         raise HTTPException(400, res.get("error") or "cannot reset")
-    audit(owner["email"], "rh_reset", str(member_id),
+    audit(admin["email"], "rh_reset", str(member_id),
           {"previous_status": res.get("previous_status")})
     return {"ok": True, "member_id": member_id, "status": "connected",
             "previous_status": res.get("previous_status")}
 
 
 @router.post("/member/{member_id}/dust-cleanup")
-def dust_cleanup(member_id: int, dry_run: bool = True, owner: dict = Depends(require_owner)):
+def dust_cleanup(member_id: int, dry_run: bool = True, admin: dict = Depends(require_admin)):
     """Sweep sub-$1 fill-drift crumbs on club-traded names for one member.
 
     dry_run=true (default) returns the preview without recording or placing;
@@ -223,7 +244,7 @@ def dust_cleanup(member_id: int, dry_run: bool = True, owner: dict = Depends(req
     if not load_member(member_id):
         raise HTTPException(404, "no such member")
     res = executor.dust_cleanup(member_id, dry_run=dry_run)
-    audit(owner["email"], "dust_cleanup", str(member_id),
+    audit(admin["email"], "dust_cleanup", str(member_id),
           {"dry_run": dry_run, "ok": res.get("ok"),
            "orders": [{"symbol": o.get("symbol"), "status": o.get("status")}
                       for o in res.get("orders", [])]})
@@ -231,7 +252,7 @@ def dust_cleanup(member_id: int, dry_run: bool = True, owner: dict = Depends(req
 
 
 @router.post("/member/{member_id}/reconcile")
-def reconcile_member(member_id: int, dry_run: bool = True, owner: dict = Depends(require_owner)):
+def reconcile_member(member_id: int, dry_run: bool = True, admin: dict = Depends(require_admin)):
     """Reconcile a member's placed executions to their REAL broker fills.
 
     Rewrites estimate-based quantities to actual fills so club_shares is truth-
@@ -242,23 +263,28 @@ def reconcile_member(member_id: int, dry_run: bool = True, owner: dict = Depends
     if not load_member(member_id):
         raise HTTPException(404, "no such member")
     res = reconcile.reconcile_fills(member_id, dry_run=dry_run)
-    audit(owner["email"], "reconcile", str(member_id),
+    audit(admin["email"], "reconcile", str(member_id),
           {"dry_run": dry_run, "changed": res.get("changed"),
            "promoted": len(res.get("promoted", [])), "demoted": len(res.get("demoted", []))})
     return res
 
 
 @router.post("/reconcile")
-def reconcile_all_members(dry_run: bool = True, owner: dict = Depends(require_owner)):
+def reconcile_all_members(dry_run: bool = True, admin: dict = Depends(require_admin)):
     """Reconcile every connected member's fills (no orders placed). dry_run previews."""
     res = reconcile.reconcile_all(dry_run=dry_run)
-    audit(owner["email"], "reconcile_all", None, {"dry_run": dry_run})
+    audit(admin["email"], "reconcile_all", None, {"dry_run": dry_run})
     return res
 
 
 @router.get("/api-keys")
 def admin_list_keys(owner: dict = Depends(require_owner)):
-    """The owner's API keys (for the research-voter program), creatable from forge."""
+    """The owner's API keys (for the research-voter program), creatable from forge.
+
+    OWNER-ONLY (not require_admin): these keys authenticate AS the owner member,
+    so minting/revoking/listing them is owner-identity-bound — a cofounder with
+    them could vote and act as the owner.
+    """
     mid = _owner_mid()
     return {"member_id": mid, "keys": apikeys.list_keys(mid)}
 
@@ -277,7 +303,12 @@ def admin_revoke_key(key_id: int, owner: dict = Depends(require_owner)):
 
 @router.post("/program/research-vote")
 def admin_research_vote(body: ProgramVoteBody, owner: dict = Depends(require_owner)):
-    """Run the research-voter as the owner (forge 'Run now'). dry_run previews."""
+    """Run the research-voter as the owner (forge 'Run now'). dry_run previews.
+
+    OWNER-ONLY (not require_admin): this casts a ballot AS the owner member —
+    and `symbols` can override the basket, so an admin could vote arbitrary
+    names under the owner's identity/weight.
+    """
     return research.research_vote(_owner_mid(), override=body.symbols, dry=body.dry_run)
 
 
@@ -288,7 +319,11 @@ class SeedResearchBody(BaseModel):
 
 @router.post("/program/seed-research")
 def admin_seed_research(body: SeedResearchBody, owner: dict = Depends(require_owner)):
-    """Seed the owner's research snapshot (fallback when a live watchlist read fails)."""
+    """Seed the owner's research snapshot (fallback when a live watchlist read fails).
+
+    OWNER-ONLY (not require_admin): the snapshot feeds the owner's ballot, so
+    seeding it steers what gets voted under the owner's identity.
+    """
     if body.research:
         data = [{"symbol": str(r.get("symbol", "")).upper(), "appearances": int(r.get("appearances") or 1)}
                 for r in body.research if r.get("symbol")]
@@ -301,23 +336,23 @@ def admin_seed_research(body: SeedResearchBody, owner: dict = Depends(require_ow
 
 
 @router.post("/arm")
-def arm(body: ArmBody, owner: dict = Depends(require_owner)):
-    set_armed(body.armed, actor=owner["email"])
+def arm(body: ArmBody, admin: dict = Depends(require_admin)):
+    set_armed(body.armed, actor=admin["email"])
     if body.armed:
         kv_set("halt", "0")
     return {"armed": is_armed()}
 
 
 @router.post("/kill")
-def kill(owner: dict = Depends(require_owner)):
+def kill(admin: dict = Depends(require_admin)):
     kv_set("halt", "1")
-    set_armed(False, actor=owner["email"])
-    audit(owner["email"], "kill", None, None)
+    set_armed(False, actor=admin["email"])
+    audit(admin["email"], "kill", None, None)
     return {"armed": False, "halt": True}
 
 
 @router.post("/run/{phase}")
-def run_phase(phase: str, dry_run: bool = True, owner: dict = Depends(require_owner)):
+def run_phase(phase: str, dry_run: bool = True, admin: dict = Depends(require_admin)):
     """Manually trigger a phase. `execute` honours dry_run unless live+armed."""
     if phase == "open":
         return {"session": svc.ensure_active_session()}

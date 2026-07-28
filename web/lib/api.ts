@@ -1,6 +1,6 @@
 "use client";
 
-import type { Member, SessionView, UniverseItem, ExecutionRow, PowerView, Account, ApiKey, ResearchResult, PerfView } from "./types";
+import type { Member, SessionView, UniverseItem, ExecutionRow, PowerView, Account, ApiKey, ResearchResult, PerfView, AdminPanel } from "./types";
 
 // Empty base = same-origin (Vercel rewrites /api + /oauth to the forge backend).
 // Local dev sets NEXT_PUBLIC_CONCORD_API=http://localhost:8780.
@@ -157,5 +157,10 @@ export const api = {
     req<ResearchResult>("/api/program/research-vote", {
       method: "POST", body: JSON.stringify({ dry_run: dry }),
     }),
-  // (owner/admin controls live on the forge dashboard, not in this member app)
+  // admin console (admin.voteconcordia.com) — read-only ops snapshot.
+  // Session-auth, owner/admin only; plain members get a 403 whose detail
+  // ("admin access required") surfaces through the normal ApiError path.
+  adminPanel: () => req<AdminPanel>("/api/admin/panel"),
+  // (owner/admin MUTATIONS stay off this app on purpose — arming real-money
+  // trading is a forge-dashboard/CLI action, never a web button here)
 };

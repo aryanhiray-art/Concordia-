@@ -1,0 +1,9 @@
+[Unit]
+Description=Concord — admin morning digest every weekday (08:00 ET, before the 08:30 close / 09:31 execute)
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 08:00 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

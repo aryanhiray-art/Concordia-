@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { usePathname } from "next/navigation";
 import { api, setToken } from "@/lib/api";
+import { isAdminHost } from "@/lib/host";
 import type { Member } from "@/lib/types";
 import { Button, Card, Logo, Wordmark } from "./ui";
 import { GoogleButton, googleEnabled } from "./GoogleButton";
@@ -116,6 +117,11 @@ function BrandPane() {
 
 export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
   const pathname = usePathname();
+  // On admin.voteconcordia.com the same login card serves the ops console —
+  // but the GIS origin isn't authorized for the admin subdomain, so Google
+  // sign-in is hidden there (email/password only). AuthGate never renders
+  // server-side (AppShell gates it behind `ready`), so this is stable.
+  const adminHost = isAdminHost();
   const [mode, setMode] = useState<"signup" | "login">("signup");
   const [invite, setInvite] = useState("");
   const [email, setEmail] = useState("");
@@ -287,6 +293,9 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
         </p>
       </div>
 
+      {/* obvious "you're on the ops console, not the member site" marker */}
+      {adminHost && <p className="label mb-3 text-center">Admin console</p>}
+
       <Card className="glass-glow">
         {gCred ? (
           /* ── Google finish step: verified with Google, new member → invite + consent ── */
@@ -423,7 +432,7 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
                 className={mode === "login" ? "font-semibold text-teal" : "text-subtle"}>Log in</button>
             </div>
 
-            {googleEnabled && (
+            {googleEnabled && !adminHost && (
               <>
                 <GoogleButton onCredential={(c) =>
                   finishGoogle(c,

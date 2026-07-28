@@ -23,9 +23,11 @@ _cors_kwargs: dict = dict(
 )
 # Any-localhost-port is a dev/preview convenience (servers hop ports) AND a
 # credentialed-CORS hole — restrict it to non-prod (finding #27). In prod only
-# the explicit web_origin is allowed.
+# the explicit web_origin is allowed. `admin.localhost` (any *.localhost label)
+# is included so the admin-host flow is testable locally — prod never needs
+# this: the Next app proxies /api same-origin, so no preflight ever fires.
 if not settings.is_prod:
-    _cors_kwargs["allow_origin_regex"] = r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
+    _cors_kwargs["allow_origin_regex"] = r"https?://([a-z0-9-]+\.)?(localhost|127\.0\.0\.1)(:\d+)?"
 app.add_middleware(CORSMiddleware, **_cors_kwargs)
 
 

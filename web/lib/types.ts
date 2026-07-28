@@ -63,7 +63,9 @@ export type Member = {
   id: number;
   email: string;
   display_name: string;
-  role: "owner" | "member";
+  /** "owner" | "admin" | "member" — kept open: the admin console gates on
+   *  owner/admin and new roles must fail closed, not fail to compile. */
+  role: string;
   has_password?: boolean;
   /** Ever confirmed a code emailed to this address (signup flow or the interstitial). */
   email_verified?: boolean;
@@ -92,6 +94,68 @@ export type ResearchResult = {
   dry_run: boolean;
   error?: string;
   session?: { id?: number; trade_date: string; status: string };
+};
+
+// ── Admin console (admin.voteconcordia.com) ────────────────────────────────
+// Mirrors GET /api/admin/panel exactly — read-only ops snapshot for owner/admin.
+// Numeric flags may arrive as 0/1 from SQLite, so booleans are typed loosely
+// where the backend is known to store ints (see Member.settings above).
+
+export type AdminMemberRow = {
+  id: number;
+  email: string;
+  display_name: string;
+  role: string;
+  connected: boolean;
+  agentic: boolean;
+  opted_in: boolean;
+  stake_type: string | null;
+  stake_value: number | null;
+  email_verified: boolean;
+  /** Anything wrong with this member — empty array = healthy. */
+  exceptions: string[];
+};
+
+export type AdminPanel = {
+  state: {
+    execution_mode: string;
+    is_live: boolean;
+    armed: boolean;
+    halt: boolean;
+    will_place_next: boolean;
+    reasons: string[];
+  };
+  members: AdminMemberRow[];
+  cycle: {
+    open: {
+      id: number;
+      trade_date: string;
+      closes_at: number;           // epoch seconds (same convention as SessionView)
+      voters: number;
+      human_voters: number;
+      quorum_met: boolean;
+      picks_so_far: number;
+    } | null;
+    bots: { count: number; voted_today: number };
+    last_executed: {
+      id: number;
+      trade_date: string;
+      by_status: Record<string, number>;
+      latest_verify_verdict: string | null;
+    } | null;
+  };
+  money: {
+    per_member: {
+      id: number;
+      display_name: string;
+      stake_type: string | null;
+      stake_value: number | null;
+      voting_power: number | null;
+    }[];
+    /** Shape intentionally loose — cached club performance, rendered defensively. */
+    club_perf_cached?: unknown;
+  };
+  audit: { ts: number; actor: string; action: string; target?: string | null }[];
 };
 
 export type ExecutionRow = {

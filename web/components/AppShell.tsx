@@ -6,7 +6,9 @@ import { useAuth } from "@/lib/auth";
 import { AuthGate } from "@/components/AuthGate";
 import { ConfirmEmail } from "@/components/ConfirmEmail";
 import { Nav } from "@/components/Nav";
+import { AdminConsole, AdminDenied } from "@/components/AdminConsole";
 import { LoadingScreen } from "@/components/ui";
+import { isAdminHost } from "@/lib/host";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { ready, member, refreshMember, offline } = useAuth();
@@ -14,6 +16,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   if (!ready) return <LoadingScreen label="starting concordia" />;
   if (!member) return <AuthGate onAuthed={() => refreshMember()} />;
+
+  // admin.voteconcordia.com: same accounts, entirely different shell — no Nav,
+  // no wizard/overview, no member banners. Ops console for owner/admin, a clean
+  // "no access" card for everyone else. Normal hosts fall through untouched.
+  // The legal pages stay legal pages even here (ConfirmEmail links to /terms;
+  // it must not render the console instead of the agreement).
+  if (isAdminHost() && pathname !== "/terms" && pathname !== "/privacy") {
+    if (member.needs_email_verification) return <ConfirmEmail />;
+    const isAdmin = member.role === "owner" || member.role === "admin";
+    return isAdmin ? <AdminConsole /> : <AdminDenied />;
+  }
 
   // Legacy members must confirm their email before ANYTHING else (wizard
   // included) — the legal pages stay reachable so the doc links keep working.
