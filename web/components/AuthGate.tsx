@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { usePathname } from "next/navigation";
 import { api, setToken } from "@/lib/api";
-import { isAdminHost } from "@/lib/host";
+import { isAdminHost, isDemoHost } from "@/lib/host";
 import type { Member } from "@/lib/types";
 import { Button, Card, Logo, Wordmark } from "./ui";
 import { GoogleButton, googleEnabled } from "./GoogleButton";
@@ -73,6 +73,7 @@ function HowRow({ n, title, body }: { n: number; title: string; body: string }) 
 // Desktop-only (lg+) left pane: the mark, the wordmark, and the three-step
 // story. Below lg the stacked mobile header carries the tagline instead.
 function BrandPane() {
+  const demo = isDemoHost();
   return (
     <div className="relative hidden min-w-0 lg:flex lg:flex-col lg:justify-center">
       <div className="authglow" aria-hidden />
@@ -82,7 +83,7 @@ function BrandPane() {
             <Logo size={76} />
           </span>
           <div className="font-display text-[52px] font-bold leading-none tracking-tight text-[#8FD9C0]">
-            concordia
+            concordia{demo && <span className="text-[0.62em] font-semibold text-teal/70">.demo</span>}
           </div>
         </div>
         {/* The slogan claims the FIGHT, never the result — "beating" would be
@@ -122,6 +123,9 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
   // sign-in is hidden there (email/password only). AuthGate never renders
   // server-side (AppShell gates it behind `ready`), so this is stable.
   const adminHost = isAdminHost();
+  // demo.voteconcordia.com: fake-money playground — ".demo" branding, no
+  // Google (origin unauthorized), and emailed codes surface on screen.
+  const demoHost = isDemoHost();
   const [mode, setMode] = useState<"signup" | "login">("signup");
   const [invite, setInvite] = useState("");
   const [email, setEmail] = useState("");
@@ -189,7 +193,12 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
       if (mode === "signup") {
         // Pre-flight: validates the invite and, if verification is on, emails a code.
         const start = await api.signupStart(invite.trim(), email.trim());
-        if (start.code_required) { setEmailCode(""); setCodeStep(true); return; }
+        if (start.code_required) {
+          // demo instance surfaces the code (no real inbox exists there)
+          setEmailCode(start.demo_code ?? "");
+          setCodeStep(true);
+          return;
+        }
         const res = await api.signup(invite.trim(), email.trim(), password, name.trim(), consent);
         setToken(res.token);
         onAuthed(res.member);
@@ -223,7 +232,8 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
   async function resendCode() {
     setErr(null); setBusy(true);
     try {
-      await api.signupStart(invite.trim(), email.trim());
+      const again = await api.signupStart(invite.trim(), email.trim());
+      if (again.demo_code) setEmailCode(again.demo_code);
       setResent(true);
       setTimeout(() => setResent(false), 2500);
     } catch (e: any) {
@@ -286,7 +296,7 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
           <Logo size={56} />
         </span>
         <div className="mt-4 font-display text-[26px] font-bold tracking-tight text-[#8FD9C0]">
-          concordia
+          concordia{demoHost && <span className="text-[0.62em] font-semibold text-teal/70">.demo</span>}
         </div>
         <p className="mt-2.5 text-[17px] font-light leading-snug text-ink">
           Taking on Wall Street, <span className="text-teal">one vote at a time</span>.
@@ -329,10 +339,17 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
           /* ── Signup email-verification step: form state is kept, "← back" loses nothing ── */
           <div className="space-y-3.5">
             <div>
-              <div className="font-display text-[16px] font-bold">Check your email</div>
+              <div className="font-display text-[16px] font-bold">
+                {demoHost ? "Almost in" : "Check your email"}
+              </div>
               <p className="mt-1 text-[13px] leading-relaxed text-muted">
-                We emailed a 6-digit code to{" "}
-                <span className="text-teal">{email.trim()}</span> — enter it to finish.
+                {demoHost ? (
+                  <>Demo mode — no email needed, your code is already filled in below.
+                  Just hit verify.</>
+                ) : (
+                  <>We emailed a 6-digit code to{" "}
+                  <span className="text-teal">{email.trim()}</span> — enter it to finish.</>
+                )}
               </p>
             </div>
             <div>
@@ -432,7 +449,7 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
                 className={mode === "login" ? "font-semibold text-teal" : "text-subtle"}>Log in</button>
             </div>
 
-            {googleEnabled && !adminHost && (
+            {googleEnabled && !adminHost && !demoHost && (
               <>
                 <GoogleButton onCredential={(c) =>
                   finishGoogle(c,

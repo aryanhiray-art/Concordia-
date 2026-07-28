@@ -9,3 +9,11 @@ export function isAdminHost(): boolean {
   const h = window.location.hostname;
   return h === "admin.voteconcordia.com" || h.startsWith("admin.");
 }
+
+/** demo.voteconcordia.com — the public fake-money instance. Branding gains a
+ *  ".demo" suffix and Google sign-in hides (GIS origin not authorized there).
+ *  Covers demo.localhost dev too. */
+export function isDemoHost(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.location.hostname.startsWith("demo.");
+}

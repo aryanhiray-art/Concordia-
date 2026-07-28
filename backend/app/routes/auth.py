@@ -142,8 +142,11 @@ def _link_identity(member_id: int, info: dict) -> None:
     audit(f"member:{member_id}", "google_link", info["email"], {"sub": info["sub"]})
 
 
-def _send_code_email(email: str, purpose: str) -> bool:
-    """Mail a fresh (email, purpose) code. False = mail failed.
+def _send_code_email(email: str, purpose: str) -> str | None:
+    """Mail a fresh (email, purpose) code. Returns the plaintext code on
+    success, None on mail failure — callers must NEVER put the code in a
+    response outside demo mode (the public demo has no inbox to check, so
+    there the UI shows it on screen; see signup_start).
 
     The code is persisted only AFTER the send succeeds — a mail hiccup must not
     destroy the previous still-valid code the member may be about to type."""
@@ -156,9 +159,9 @@ def _send_code_email(email: str, purpose: str) -> bool:
             "<p>It expires in 15 minutes.</p>"
             "<p>If you didn't request this, you can ignore this email.</p>")
     if not mailer.send(email, "Your Concordia code", html, text):
-        return False
+        return None
     email_codes.store(email, purpose, code)
-    return True
+    return code
 
 
 @router.post("/signup/start")
@@ -185,12 +188,19 @@ def signup_start(body: SignupStartBody, request: Request):
     if ratelimit.too_many(f"mailcode:{body.email}", 3, 600) or \
        ratelimit.too_many(f"mailip:{ip}", 12, 3600):
         raise HTTPException(status_code=429, detail="too many codes sent — try again in a few minutes")
-    if not _send_code_email(body.email, "signup"):
+    code = _send_code_email(body.email, "signup")
+    if code is None:
         raise HTTPException(status_code=502,
                             detail="couldn't send the verification code — try again in a minute")
     ratelimit.record(f"mailcode:{body.email}")
     ratelimit.record(f"mailip:{ip}")
-    return {"code_required": True}
+    out: dict = {"code_required": True}
+    # DEMO ONLY: the public demo's "emails" go to the server log, so no visitor
+    # could ever finish signup — surface the code so the UI can show it on
+    # screen. settings.demo_mode is False on the production club, always.
+    if settings.demo_mode:
+        out["demo_code"] = code
+    return out
 
 
 @router.post("/signup")

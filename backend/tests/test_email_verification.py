@@ -337,3 +337,32 @@ def test_duplicate_account_409_does_not_burn_the_code(email_on):
     with db() as conn:   # the code row survived the 409
         assert conn.execute("SELECT COUNT(*) FROM email_codes WHERE email=? AND purpose='signup'",
                             (email,)).fetchone()[0] == 1
+
+
+# ─── demo-only on-screen code (public demo has no inbox) ─────────────────────
+
+def test_demo_code_only_in_demo_mode(email_on, monkeypatch):
+    """PRODUCTION MUST NEVER LEAK THE CODE: demo_code appears in the
+    signup/start response only under settings.demo_mode, and when it does it
+    must actually work as the emailed code."""
+    # email enabled, NOT demo: no demo_code key at all
+    r = client.post("/api/auth/signup/start", headers=_hdrs(),
+                    json={"invite_code": settings.invite_code, "email": "prodlike@evclub.test"})
+    assert r.status_code == 200 and "demo_code" not in r.json()
+
+    # demo mode: code is surfaced and verifies
+    monkeypatch.setattr(type(settings), "demo_mode", property(lambda self: True),
+                        raising=False) if isinstance(getattr(type(settings), "demo_mode", None), property) \
+        else object.__setattr__(settings, "demo_mode", True)
+    try:
+        email = "demoscreen@evclub.test"
+        r = client.post("/api/auth/signup/start", headers=_hdrs(),
+                        json={"invite_code": settings.invite_code, "email": email})
+        assert r.status_code == 200
+        code = r.json().get("demo_code")
+        assert code and len(code) == 6 and code.isdigit()
+        r = client.post("/api/auth/signup", headers=_hdrs(),
+                        json=_signup_payload(email, email_code=code))
+        assert r.status_code == 200
+    finally:
+        object.__setattr__(settings, "demo_mode", False)
