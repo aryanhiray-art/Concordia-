@@ -90,25 +90,44 @@ function BrandPane() {
             an implied performance promise. Wordmark + slogan are deliberately
             the two largest text elements on the page; the mechanics live in
             the How-it-works panel below. */}
-        <p className="mt-7 text-[26px] font-light leading-[1.35] text-ink xl:text-[28px]">
-          Taking on Wall Street,
-          <br />
-          <span className="text-teal">one vote at a time</span>.
+        {/* One line at xl (measured: 477px in a 520px column), balanced two-line
+            wrap at lg (440px column) — nowrap alone overflowed at 1024. */}
+        <p className="mt-7 text-[21px] font-light leading-snug text-ink [text-wrap:balance] xl:text-[22px]">
+          Taking on Wall Street, <span className="text-teal">one vote at a time</span>.
         </p>
         {/* The owner's favorite glass finish wraps the story itself — a real
             material anchor for the pane with no fake product data (live vote
             counts are members-only; ballots go public only after they close). */}
         <div className="enter mt-9" style={{ animationDelay: "0.15s" }}>
           <div className="glass glass-glow shine p-6 xl:p-7">
-            <p className="label">How it works</p>
+            <p className="label">{demo ? "How the demo works" : "How it works"}</p>
             <div className="stagger mt-5 space-y-6">
-              <HowRow n={1} title="Vote on the basket"
-                body="Every member votes for their stocks — the top picks become the club's basket." />
-              <HowRow n={2} title="You set the stake"
-                body="You choose how much of your account plays, and only that slice ever trades." />
-              <HowRow n={3} title="Your account stays yours"
-                body="Every trade executes in your own brokerage account — the club never holds or touches your money." />
+              {demo ? (
+                <>
+                  <HowRow n={1} title="Use the invite code: demo"
+                    body="Type demo in the invite box — the playground is open to everyone." />
+                  <HowRow n={2} title="Sign up with your email"
+                    body="No verification email is sent here — your 6-digit code appears right on screen." />
+                  <HowRow n={3} title="Pick any name and password"
+                    body="Demo accounts are fully separate from the real club — create and use one freely." />
+                </>
+              ) : (
+                <>
+                  <HowRow n={1} title="Vote on the basket"
+                    body="Every member votes for their stocks — the top picks become the club's basket." />
+                  <HowRow n={2} title="You set the stake"
+                    body="You choose how much of your account plays, and only that slice ever trades." />
+                  <HowRow n={3} title="Your account stays yours"
+                    body="Every trade executes in your own brokerage account — the club never holds or touches your money." />
+                </>
+              )}
             </div>
+            {demo && (
+              <p className="mt-5 border-t border-white/10 pt-4 text-[12.5px] leading-relaxed text-subtle">
+                Everything works exactly like the real club — voting, stakes, the
+                dashboard — except Robinhood is simulated and votes never move real money.
+              </p>
+            )}
           </div>
         </div>
       </div>
@@ -319,7 +338,7 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
             </div>
             <div>
               <label className="label mb-2">Invite code</label>
-              <input className="input" placeholder="Code" value={invite}
+              <input className="input" placeholder={isDemoHost() ? "demo" : "Code"} value={invite}
                 onChange={(e) => setInvite(e.target.value)} spellCheck={false} autoComplete="off" />
             </div>
             <ConsentRow checked={consent} onChange={setConsent} />
@@ -463,7 +482,7 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
               {mode === "signup" && (
                 <div>
                   <label className="label mb-2">Invite code</label>
-                  <input className="input" placeholder="Code" value={invite}
+                  <input className="input" placeholder={isDemoHost() ? "demo" : "Code"} value={invite}
                     onChange={(e) => setInvite(e.target.value)} spellCheck={false} autoComplete="off" />
                 </div>
               )}

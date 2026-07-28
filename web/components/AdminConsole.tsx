@@ -1,9 +1,11 @@
 "use client";
 
-// The ops console served at admin.voteconcordia.com — one dense read-only
-// screen answering "will the next 09:31 ET run place orders, and if not, why?".
-// READ-ONLY v1 by design: no arm/halt/kill controls here. Anything that can
-// move real money stays on the forge dashboard behind the human two-key flow.
+// The ops console served at admin.voteconcordia.com — one dense screen
+// answering "will the next 09:31 ET run place orders, and if not, why?".
+// The ONLY mutation is the arm/disarm switch (owner-requested 2026-07-28):
+// arming demands a typed ARM confirmation — it is the human step that lets
+// real money move. Disarming is deliberately one click: stopping must always
+// be easier than starting.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
@@ -12,6 +14,82 @@ import type { AdminPanel } from "@/lib/types";
 import { Button, Card, Logo, Pill } from "./ui";
 
 const POLL_MS = 60_000;
+
+// ── the one mutation on this page ───────────────────────────────────────────
+// Arming = the human step that allows real orders. Typed confirmation, no
+// shortcuts. Disarming is one click — stopping must always be easy.
+function ArmControl({ armed, isLive, onChanged }: { armed: boolean; isLive: boolean; onChanged: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function setArmed(on: boolean) {
+    setBusy(true); setErr(null);
+    try {
+      await api.adminArm(on);
+      setConfirming(false); setTyped("");
+      onChanged();
+    } catch (e: any) {
+      setErr(e?.message || "failed");
+    } finally { setBusy(false); }
+  }
+
+  if (armed) {
+    return (
+      <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-white/10 pt-4">
+        <span className="text-[12.5px] text-muted">
+          Trading is armed — the next eligible run places real orders.
+        </span>
+        <Button variant="danger" busy={busy} onClick={() => setArmed(false)}>Disarm</Button>
+        {err && <span className="text-[12.5px] text-red">⚠ {err}</span>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-4 border-t border-white/10 pt-4">
+      {!confirming ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="text-[12.5px] text-muted">
+            {isLive
+              ? "Mode is live — arming is the last gate before real orders."
+              : "Mode is dry_run — arming alone won't place orders until the mode is live."}
+          </span>
+          <Button variant="ok" onClick={() => { setConfirming(true); setErr(null); }}>
+            Arm trading…
+          </Button>
+          {err && <span className="text-[12.5px] text-red">⚠ {err}</span>}
+        </div>
+      ) : (
+        <div className="space-y-2.5">
+          <p className="text-[12.5px] leading-relaxed text-muted">
+            This allows the club to place <b className="text-ink">real orders in every
+            connected member&apos;s account</b> at the next eligible run. Type{" "}
+            <b className="text-ink">ARM</b> to confirm.
+          </p>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <input
+              value={typed}
+              onChange={(e) => { setTyped(e.target.value); setErr(null); }}
+              placeholder="ARM"
+              className="input h-10 !w-28 !rounded-[12px] !py-0 text-center font-mono !text-[12px]"
+              spellCheck={false} autoComplete="off"
+            />
+            <Button variant="ok" className="h-10" busy={busy}
+              disabled={typed.trim().toUpperCase() !== "ARM"}
+              onClick={() => setArmed(true)}>
+              Arm trading
+            </Button>
+            <button onClick={() => { setConfirming(false); setTyped(""); setErr(null); }}
+              className="text-[12.5px] text-subtle hover:text-ink">cancel</button>
+          </div>
+          {err && <div className="text-[12.5px] text-red">⚠ {err}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ── formatting helpers ──────────────────────────────────────────────────────
 
@@ -193,6 +271,7 @@ export function AdminConsole() {
                 ))}
               </div>
             )}
+            <ArmControl armed={panel.state.armed} isLive={panel.state.is_live} onChanged={() => load(true)} />
           </div>
 
           {/* ── MEMBERS — healthy collapse to one line, exceptions get rows ── */}

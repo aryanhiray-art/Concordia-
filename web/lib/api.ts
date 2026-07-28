@@ -163,6 +163,9 @@ export const api = {
   // Session-auth, owner/admin only; plain members get a 403 whose detail
   // ("admin access required") surfaces through the normal ApiError path.
   adminPanel: () => req<AdminPanel>("/api/admin/panel"),
+  // the console's ONLY mutation — arming lets real orders happen; audited server-side
+  adminArm: (armed: boolean) =>
+    req<{ armed: boolean }>("/api/admin/arm", { method: "POST", body: JSON.stringify({ armed }) }),
   // (owner/admin MUTATIONS stay off this app on purpose — arming real-money
   // trading is a forge-dashboard/CLI action, never a web button here)
 };
