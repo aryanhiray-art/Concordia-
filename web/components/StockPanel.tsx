@@ -187,9 +187,33 @@ function StockPanel({ symbol, onClose }: { symbol: string; onClose: () => void }
     return () => { alive = false; };
   }, [symbol]);
 
-  // Esc closes
+  // Esc closes; Tab is trapped inside the dialog — without the trap, tabbing
+  // walks focus into the page behind the backdrop while the panel is modal.
+  // (Focus-return on close lives in the mount effect below, untouched.)
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { onClose(); return; }
+      if (e.key !== "Tab") return;
+      const panel = panelRef.current;
+      if (!panel) return;
+      const focusables = Array.from(panel.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), ' +
+        'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ));
+      if (focusables.length === 0) { e.preventDefault(); panel.focus(); return; }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+      // Wrap at either edge; also pull focus back in if it's outside the panel
+      // (or on the panel itself, whose natural shift-tab would walk out).
+      if (e.shiftKey) {
+        if (!active || !panel.contains(active) || active === first || active === panel) {
+          e.preventDefault(); last.focus();
+        }
+      } else if (!active || !panel.contains(active) || active === last) {
+        e.preventDefault(); first.focus();
+      }
+    };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);

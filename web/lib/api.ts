@@ -83,6 +83,15 @@ export const api = {
     req<{ token: string; member: Member }>("/api/auth/login", {
       method: "POST", body: JSON.stringify({ email, password }),
     }),
+  // server-side logout — clears the 30-day httpOnly session cookie, which the
+  // client-only logout can't touch. credentials:'include' so the cookie
+  // actually rides along (and gets deleted) across the Vercel↔API origin.
+  logout: () =>
+    req<{ ok: boolean }>("/api/auth/logout", { method: "POST", credentials: "include" }),
+  // log out EVERYWHERE — session_version bump revokes every session on every
+  // device (this one included); the caller must hard-logout locally after.
+  logoutAll: () =>
+    req<{ ok: boolean }>("/api/me/logout-all", { method: "POST", credentials: "include" }),
   // Google sign-in — credential = the Google ID token from Identity Services.
   // Existing members just log in; new members must also send invite_code + consent.
   googleLogin: (credential: string, invite_code?: string, consent?: boolean) =>
@@ -104,6 +113,17 @@ export const api = {
   verifyEmail: (code: string) =>
     req<{ ok: boolean; member: Member }>("/api/me/verify-email", {
       method: "POST", body: JSON.stringify({ code }),
+    }),
+  // change the account email — start mails a 6-digit code to the NEW address
+  // (never in the response); confirm swaps members.email and returns the fresh
+  // member. Both session-only (403 on api-key auth).
+  emailChangeStart: (new_email: string) =>
+    req<{ sent: boolean }>("/api/me/email/start", {
+      method: "POST", body: JSON.stringify({ new_email }),
+    }),
+  emailChangeConfirm: (new_email: string, code: string) =>
+    req<{ member: Member }>("/api/me/email/confirm", {
+      method: "POST", body: JSON.stringify({ new_email, code }),
     }),
 
   // robinhood — start, then paste back the redirect URL Robinhood sends you

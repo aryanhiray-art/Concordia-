@@ -213,7 +213,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(id);
   }, [offline, refreshMember]);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    // Best-effort server logout FIRST: without it the 30-day httpOnly cookie
+    // stays valid long after the client forgot the member. A failure (offline,
+    // already-dead session) must never block the local logout.
+    try { await api.logout(); } catch { /* best-effort */ }
     setToken(null); setMember(null); setPower(null); setSession(null);
     setOffline(false); setSessionError(null);
     setAccount(null); setHoldings([]); setAccountReady(false);

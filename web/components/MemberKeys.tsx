@@ -4,7 +4,14 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { ApiKey } from "@/lib/types";
 
-const PUBLIC_URL = "https://concord.5.78.193.177.sslip.io";
+// Where a bot should POST: the API base when it's a separate origin (local
+// dev), else wherever this app is being served from — never a hardcoded host,
+// which went stale at the voteconcordia.com cutover. SSR-safe: no window on
+// the server, but this only renders client-side (behind the session gate).
+function publicUrl(): string {
+  if (api.base) return api.base;
+  return typeof window === "undefined" ? "" : window.location.origin;
+}
 
 function fmtTime(epoch?: number | null) {
   if (!epoch) return "—";
@@ -95,7 +102,7 @@ export function MemberKeys() {
       )}
 
       <p className="mt-4 text-[11.5px] text-subtle">
-        Point your bot at <span className="font-mono text-muted">POST {PUBLIC_URL}/api/program/research-vote</span> with{" "}
+        Point your bot at <span className="font-mono text-muted">POST {publicUrl()}/api/program/research-vote</span> with{" "}
         <span className="font-mono text-muted">Authorization: Bearer ck_live_…</span>
       </p>
     </div>

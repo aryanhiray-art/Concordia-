@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useAuth } from "@/lib/auth";
+import type { SessionView } from "@/lib/types";
 import { AllocSliders } from "@/components/AllocSliders";
 import { MemberKeys } from "@/components/MemberKeys";
 import { Button, Card, Countdown, LoadingScreen } from "@/components/ui";
@@ -10,6 +11,45 @@ import { StockLink } from "@/components/StockLink";
 function money(n?: number | null) {
   if (n == null) return "—";
   return n.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+}
+
+// A participating member after close: the ballot is LOCKED, not "participation
+// off" — the old message sent them to Account to flip a switch that was already
+// on. Shows when the ballot locked plus their submitted picks, read-only.
+function ClosedBallot({ session }: { session: SessionView }) {
+  const names: Record<string, string> = {};
+  session.tally.forEach((t) => { names[t.symbol] = t.name; });
+  const picks = session.my_picks || [];
+  const lockedAt = new Date(session.closes_at * 1000)
+    .toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return (
+    <div className="glass rise p-5 sm:p-6">
+      <div className="flex items-center justify-between border-b border-hair pb-3">
+        <span className="label">Your ballot</span>
+        <span className="text-[11.5px] text-subtle">read-only</span>
+      </div>
+      <p className="mt-3 text-[13px] text-muted">
+        Voting is closed — today&apos;s ballot locked at <b className="text-ink">{lockedAt}</b>.
+      </p>
+      {picks.length === 0 ? (
+        <p className="mt-3 text-[13px] text-subtle">You didn&apos;t cast a vote this cycle.</p>
+      ) : (
+        <div className="mt-3">
+          {picks.map((p) => (
+            <div key={p.symbol} className="vrow">
+              <div className="vtk">
+                <StockLink symbol={p.symbol} unstyled className="text-left transition hover:text-teal">
+                  <b>{p.symbol}</b>
+                </StockLink>
+                <s>{names[p.symbol] || p.symbol}</s>
+              </div>
+              <span className="ml-auto text-[13px] font-semibold tnum">{Math.round(p.weight)}%</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function VotePage() {
@@ -58,7 +98,12 @@ export default function VotePage() {
       </header>
 
       <div className="grid items-start gap-7 lg:grid-cols-[1.55fr_1fr]">
-        <AllocSliders session={session} participating={participating && open} onVoted={() => refreshSession()} />
+        {/* three distinct states: participation actually OFF → AllocSliders'
+            turn-it-on-in-Account message; ON but the ballot closed → the
+            read-only locked ballot; ON and open → the live sliders. */}
+        {participating && !open
+          ? <ClosedBallot session={session} />
+          : <AllocSliders session={session} participating={participating} onVoted={() => refreshSession()} />}
 
         <div className="space-y-7">
           {/* generate your own API key here — let a bot cast this vote for you */}

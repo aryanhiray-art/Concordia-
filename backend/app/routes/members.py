@@ -3,18 +3,18 @@ from __future__ import annotations
 
 import time
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel
 
 from fastapi import HTTPException
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from .. import ratelimit
 from ..config import settings
 from ..db import audit, db
 from ..security import hash_password, verify_password
 from ..services import accountsnap, alloc, apikeys, email_codes, power
-from .deps import client_ip, load_member, require_member, require_session_member
+from .deps import COOKIE_NAME, client_ip, load_member, require_member, require_session_member
 
 router = APIRouter(prefix="/api", tags=["member"])
 
@@ -194,6 +194,24 @@ def change_password(body: PasswordBody, member: dict = Depends(require_member)):
     return {"ok": True}
 
 
+@router.post("/me/logout-all")
+def logout_all(request: Request, resp: Response, member: dict = Depends(require_member)):
+    """Log out everywhere: bump session_version so EVERY existing session/token
+    (this one included) dies instantly — deps.current_member rejects any token
+    whose `ver` no longer matches. Session-only, same rationale as the password
+    paths: a leaked API key must not be able to lock the member out of their
+    own browser sessions."""
+    if member.get("_auth") != "session":
+        raise HTTPException(status_code=403, detail="log in to log out everywhere")
+    with db() as conn:
+        conn.execute("UPDATE members SET session_version=session_version+1 WHERE id=?",
+                     (member["id"],))
+    # the httpOnly cookie in THIS browser is now a dead token — clear it too
+    resp.delete_cookie(COOKIE_NAME)
+    audit(f"member:{member['id']}", "logout_all", None, None)
+    return {"ok": True}
+
+
 class VerifyEmailBody(BaseModel):
     code: str
 
@@ -248,6 +266,82 @@ def verify_email(body: VerifyEmailBody, request: Request, member: dict = Depends
                      (int(time.time()), member["id"]))
     audit(f"member:{member['id']}", "email_verified", member["email"], None)
     return {"ok": True, "member": load_member(member["id"])}
+
+
+class EmailChangeStartBody(BaseModel):
+    new_email: str
+
+    # same floor as auth._EmailBody — normalize, then a cheap sanity check
+    @field_validator("new_email")
+    @classmethod
+    def _valid_email(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if "@" not in v or "." not in v.split("@")[-1]:
+            raise ValueError("invalid email")
+        return v
+
+
+class EmailChangeConfirmBody(EmailChangeStartBody):
+    code: str
+
+
+@router.post("/me/email/start")
+def email_change_start(body: EmailChangeStartBody, request: Request,
+                       member: dict = Depends(require_member)):
+    """Step 1 of changing the account email: mail a 6-digit code to the NEW
+    address (proof the member controls that inbox — the change lands only via
+    /me/email/confirm). Session-only like verify-email: the address is where
+    password resets go, so a leaked API key must not be able to redirect it.
+    The response NEVER carries the code (house rule, test_email_verification)."""
+    _require_interactive(member)
+    if not settings.email_enabled:
+        # without mail there is no way to prove the new inbox — fail closed
+        raise HTTPException(status_code=503,
+                            detail="email isn't configured — ask the owner to change your address")
+    new_email = body.new_email
+    with db() as conn:
+        # own row included on purpose: "change" to your current address is a no-op
+        if conn.execute("SELECT 1 FROM members WHERE lower(email)=?", (new_email,)).fetchone():
+            raise HTTPException(status_code=409, detail="that email already has an account")
+    ip = client_ip(request)
+    # Same two send windows as signup/start + verify-email/start.
+    if ratelimit.too_many(f"mailcode:{new_email}", 3, 600) or \
+       ratelimit.too_many(f"mailip:{ip}", 12, 3600):
+        raise HTTPException(status_code=429, detail="too many codes sent — try again in a few minutes")
+    from .auth import _send_code_email
+    if not _send_code_email(new_email, "email_change"):
+        raise HTTPException(status_code=502, detail="couldn't send the code — try again in a minute")
+    ratelimit.record(f"mailcode:{new_email}")
+    ratelimit.record(f"mailip:{ip}")
+    return {"sent": True}
+
+
+@router.post("/me/email/confirm")
+def email_change_confirm(body: EmailChangeConfirmBody, request: Request,
+                         member: dict = Depends(require_member)):
+    """Finish the email change with the code that went to the new address."""
+    _require_interactive(member)
+    ip = client_ip(request)
+    if ratelimit.too_many(f"emailchangeip:{ip}", 20, 900):
+        raise HTTPException(status_code=429, detail="too many attempts — try again in a few minutes")
+    new_email = body.new_email
+    if not email_codes.verify(new_email, "email_change", body.code):
+        ratelimit.record(f"emailchangeip:{ip}")
+        raise HTTPException(status_code=403,
+                            detail="that code didn't match or expired — use the newest email")
+    old_email = member["email"]
+    with db() as conn:
+        # re-check INSIDE the write transaction: two members racing the same
+        # address between start and confirm must not both land it
+        if conn.execute("SELECT 1 FROM members WHERE lower(email)=? AND id!=?",
+                        (new_email, member["id"])).fetchone():
+            raise HTTPException(status_code=409, detail="that email already has an account")
+        # the code just proved the new inbox, so the address arrives verified —
+        # a member never loses email_verified by changing their email
+        conn.execute("UPDATE members SET email=?, email_verified_at=? WHERE id=?",
+                     (new_email, int(time.time()), member["id"]))
+    audit(f"member:{member['id']}", "email_change", new_email, {"from": old_email})
+    return {"member": load_member(member["id"])}
 
 
 @router.get("/me/api-keys")

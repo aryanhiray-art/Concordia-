@@ -6,8 +6,10 @@ import { useAuth } from "@/lib/auth";
 import type { Member } from "@/lib/types";
 import { ConnectCard } from "@/components/ConnectCard";
 import { AllocationCard } from "@/components/AllocationCard";
+import { ChangeEmail } from "@/components/ChangeEmail";
 import { ChangePassword } from "@/components/ChangePassword";
 import { DeleteAccount } from "@/components/DeleteAccount";
+import { LogoutEverywhere } from "@/components/LogoutEverywhere";
 import { SetupResumeBar, useSetupProgress } from "@/components/Onboarding";
 
 // One quiet row under the page title: the display name with a pencil that
@@ -62,7 +64,6 @@ function NameRow({ member, onSaved }: { member: Member; onSaved: (m: Member) => 
           </button>
         </>
       )}
-      <span>· {member.email}</span>
       {err && <span className="text-[12px] text-red">⚠ {err}</span>}
     </div>
   );
@@ -74,29 +75,25 @@ export default function AccountPage() {
   const { loaded, done, complete } = useSetupProgress();
   if (!member) return null;
 
-  // Robinhood rotated the tokens out from under a member who WAS set up —
-  // that's the one case the full ConnectCard (reconnect flow) still owns.
-  // Everything else unfinished points back at the wizard instead of inlining
-  // the whole connect/onboarding flow here.
-  const reconnect = member.robinhood?.status === "error";
-  const showFull = reconnect || complete;
-
+  // Gate the cards on CONNECTION, never on setup completion: opting out makes
+  // setup "incomplete", and hiding the participation toggle behind completion
+  // locked sitting-out members out of turning it back on (the vote page sends
+  // them here — a dead loop). While setup is unfinished the resume bar renders
+  // ADDITIVELY above the cards; a member with no Robinhood link at all still
+  // gets only the bar (the wizard owns first-time connect).
   return (
     <div className="stagger space-y-5">
       <header className="enter">
         <h1 className="font-display text-[34px] font-bold leading-none tracking-tight sm:text-[40px]">Account</h1>
         <NameRow member={member} onSaved={setMember} />
+        <ChangeEmail member={member} onChanged={setMember} />
       </header>
 
-      {showFull ? (
-        <>
-          <ConnectCard member={member} onChange={refreshMember} />
-          {member.robinhood?.status === "connected" && <AllocationCard onChange={refreshMember} />}
-        </>
-      ) : (
-        loaded && <SetupResumeBar done={done} />
-      )}
+      {loaded && !complete && <SetupResumeBar done={done} />}
+      {member.robinhood && <ConnectCard member={member} onChange={refreshMember} />}
+      {member.robinhood?.status === "connected" && <AllocationCard onChange={refreshMember} />}
       <ChangePassword />
+      <LogoutEverywhere />
       <DeleteAccount />
     </div>
   );
