@@ -34,6 +34,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return <ConfirmEmail />;
   }
 
+  // /welcome is a standalone, full-screen experience — no Nav, no banners, no
+  // footer (owner feedback: "onboarding should be completely separate"). The
+  // wizard brings its own logo header and escape hatches, and members who skip
+  // still get the Account-page connect fallback. The reauth/offline banners
+  // come right back on every other page below.
+  if (pathname === "/welcome") {
+    return (
+      <main className="mx-auto w-[min(1080px,100%)] px-4 pb-24 pt-10 sm:px-6 sm:pt-14">
+        {children}
+      </main>
+    );
+  }
+
   // Robinhood rotated the tokens out from under us — trading is paused until reconnect.
   const needsReauth = member?.robinhood?.status === "error";
   const hasBanner = offline || needsReauth;

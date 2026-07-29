@@ -361,6 +361,81 @@ def session_picks(session: dict) -> list[dict]:
     return []
 
 
+def execution_order_counts(session_id: int) -> dict:
+    """Aggregate execution counts by status (e.g. {'placed': 4, 'error': 1}).
+
+    Counts only — never per-member rows. This feeds the club-shared history,
+    which must not identify members.
+    """
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT status, COUNT(*) AS n FROM executions WHERE session_id=? GROUP BY status",
+            (session_id,),
+        ).fetchall()
+    return {r["status"]: r["n"] for r in rows}
+
+
+def club_history(limit: int = 30) -> list[dict]:
+    """The club's shared record: DECIDED sessions (closed/executed), newest first.
+
+    The fund's history is not unique per person — every member sees the same
+    record, so nothing here may identify a member (no emails, names, ids, or
+    per-member execution rows). Capped at 60 sessions.
+    """
+    limit = max(1, min(int(limit), 60))
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM vote_sessions WHERE status IN ('closed','executed') "
+            "ORDER BY trade_date DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [{
+        "id": s["id"],
+        "trade_date": s["trade_date"],
+        "status": s["status"],
+        "basket": [p["symbol"] for p in session_picks(dict(s))],
+        "voters": voter_count(s["id"]),
+        "human_voters": human_voter_count(s["id"]),
+        "orders": execution_order_counts(s["id"]),
+    } for s in rows]
+
+
+def member_vote_history(member_id: int, limit: int = 30) -> list[dict]:
+    """The CALLER's ballots, newest first — only sessions this member voted in.
+
+    A member's votes are theirs alone, so an OPEN session's ballot is included
+    for its owner — but with basket/hits empty until the ballot closes. Pre-close
+    the only vote anyone may see is their own (same rule as session_public's
+    my_picks vs the aggregate tally), and the decided basket doesn't exist yet.
+    Capped at 60 sessions.
+    """
+    limit = max(1, min(int(limit), 60))
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM vote_sessions WHERE id IN "
+            "(SELECT session_id FROM votes WHERE member_id=?) "
+            "ORDER BY trade_date DESC LIMIT ?",
+            (member_id, limit),
+        ).fetchall()
+    out: list[dict] = []
+    for s in rows:
+        mine = member_picks(s["id"], member_id)
+        # Belt-and-braces: gate on status, not just picks_json presence — an
+        # open session must never show a basket, whatever the row contains.
+        decided = s["status"] in ("closed", "executed")
+        basket = [p["symbol"] for p in session_picks(dict(s))] if decided else []
+        chosen = set(basket)
+        out.append({
+            "id": s["id"],
+            "trade_date": s["trade_date"],
+            "status": s["status"],
+            "my_allocations": mine,
+            "basket": basket,
+            "hits": [a["symbol"] for a in mine if a["symbol"] in chosen],
+        })
+    return out
+
+
 def session_public(session: dict, member_id: int | None) -> dict:
     """API view of a session, including the caller's own picks + the live tally."""
     return {

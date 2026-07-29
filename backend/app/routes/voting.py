@@ -52,6 +52,17 @@ def cast_vote(body: VoteBody, member: dict = Depends(require_member)):
     return svc.session_public(svc.get_session(session["id"]), member["id"])
 
 
+@router.get("/me/votes")
+def my_votes(limit: int = 30, member: dict = Depends(require_member)):
+    """The caller's own ballots, newest first — the PERSONAL half of History.
+
+    Only sessions this member voted in. Open sessions show the caller's ballot
+    (it's theirs) with basket/hits empty until close; the club-shared record
+    lives at GET /api/club/history.
+    """
+    return {"sessions": svc.member_vote_history(member["id"], limit)}
+
+
 @router.get("/vote/results")
 def vote_results(member: dict = Depends(require_member)):
     """Latest session's consensus picks + this member's execution rows (owner sees all)."""

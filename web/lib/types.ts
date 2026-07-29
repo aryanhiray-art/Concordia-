@@ -158,6 +158,34 @@ export type AdminPanel = {
   audit: { ts: number; actor: string; action: string; target?: string | null }[];
 };
 
+// ── History split ──────────────────────────────────────────────────────────
+// GET /api/club/history — one row per cycle, club-shared, NO member identities.
+// `orders` maps execution status → count (e.g. {placed: 12, error: 1}).
+export type ClubHistorySession = {
+  id: number;
+  trade_date: string;
+  /** "open" | "closed" | "executed" — kept open so new states render neutral. */
+  status: string;
+  basket: string[];
+  voters: number;
+  human_voters: number;
+  orders: Record<string, number>;
+};
+export type ClubHistoryView = { sessions: ClubHistorySession[] };
+
+// GET /api/me/votes — caller-only ballot log. `hits` = my picks that made the
+// basket. An open session arrives with basket:[] and hits:[] (results hidden
+// until close).
+export type MyVoteSession = {
+  id: number;
+  trade_date: string;
+  status: string;
+  my_allocations: Alloc[];
+  basket: string[];
+  hits: string[];
+};
+export type MyVotesView = { sessions: MyVoteSession[] };
+
 export type ExecutionRow = {
   symbol: string;
   side: string;

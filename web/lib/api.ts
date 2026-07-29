@@ -1,6 +1,6 @@
 "use client";
 
-import type { Member, SessionView, UniverseItem, ExecutionRow, PowerView, Account, ApiKey, ResearchResult, PerfView, AdminPanel } from "./types";
+import type { Member, SessionView, UniverseItem, ExecutionRow, PowerView, Account, ApiKey, ResearchResult, PerfView, AdminPanel, ClubHistoryView, MyVotesView } from "./types";
 
 // Empty base = same-origin (Vercel rewrites /api + /oauth to the forge backend).
 // Local dev sets NEXT_PUBLIC_CONCORD_API=http://localhost:8780.
@@ -130,6 +130,10 @@ export const api = {
     req<Account>("/api/me/allocation", { method: "PUT", body: JSON.stringify({ type, value }) }),
   // club decisions vs SPY, both indexed to 100 — club-level, identical for every member
   clubPerformance: () => req<PerfView>("/api/club/performance"),
+  // history split — the fund's cycle-by-cycle record (club-shared, no member
+  // identities) vs. the caller's own ballots (caller-only)
+  clubHistory: (limit = 30) => req<ClubHistoryView>(`/api/club/history?limit=${limit}`),
+  myVotes: (limit = 30) => req<MyVotesView>(`/api/me/votes?limit=${limit}`),
 
   // voting
   searchUniverse: (q: string, limit = 40) =>
