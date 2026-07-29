@@ -13,10 +13,14 @@ from .. import ratelimit
 from ..config import settings
 from ..db import audit, db
 from ..security import hash_password, verify_password
-from ..services import alloc, apikeys, email_codes, positions, power
+from ..services import accountsnap, alloc, apikeys, email_codes, power
 from .deps import client_ip, load_member, require_member, require_session_member
 
 router = APIRouter(prefix="/api", tags=["member"])
+
+# At most one member-forced live refresh per this many seconds (POST
+# /me/account/refresh) — the button must not become a way to hammer Robinhood.
+FORCED_REFRESH_SECS = 30
 
 
 class ParticipateBody(BaseModel):
@@ -45,15 +49,44 @@ def me(member: dict = Depends(require_member)):
     return {"member": load_member(member["id"]), "power": power.member_power_view(member["id"])}
 
 
+def _account_response(view: dict) -> dict:
+    """The fixed /me/account contract, sliced out of an accountsnap view."""
+    return {
+        "allocation": view["allocation"],   # {type, value, resolved_usd, balance}
+        "pnl": view["pnl"],
+        "power": view["power"],
+        "as_of": view["as_of"],             # epoch of the last successful broker read
+        "stale": view["stale"],             # older than accountsnap.STALE_SECS
+        "live": view["live"],               # this response did the broker read itself
+    }
+
+
 @router.get("/me/account")
 def me_account(member: dict = Depends(require_member)):
-    """Agentic-account balance + allocation + club-only P&L (live Robinhood reads)."""
+    """Agentic-account balance + allocation + club-only P&L.
+
+    Served from the member's cached snapshot (services/accountsnap) — a local DB
+    read, not the ~4s of live Robinhood calls this used to cost on every visit.
+    The snapshot is rebuilt by the 10-minute interval refresher, refreshed behind
+    the response once it ages past FRESH_SECS, and built inline only on a
+    member's very first load. `as_of`/`stale` tell the UI how old the numbers are.
+    """
+    return _account_response(accountsnap.get(member["id"]))
+
+
+@router.post("/me/account/refresh")
+def me_account_refresh(member: dict = Depends(require_member)):
+    """Force a live re-read now (the UI's refresh button). Rate-limited so it can't
+    be turned into a broker hammer."""
     mid = member["id"]
-    return {
-        "allocation": alloc.member_allocation(mid),   # {type, value, resolved_usd, balance}
-        "pnl": alloc.club_pnl(mid),
-        "power": power.member_power_view(mid),
-    }
+    key = f"acctrefresh:{mid}"
+    if ratelimit.too_many(key, 1, FORCED_REFRESH_SECS):
+        raise HTTPException(
+            status_code=429,
+            detail=f"your account was just refreshed — wait {FORCED_REFRESH_SECS}s between refreshes",
+        )
+    ratelimit.record(key)
+    return _account_response(accountsnap.refresh_view(mid))
 
 
 @router.get("/me/trade-readiness")
@@ -64,8 +97,11 @@ def me_trade_readiness(force: bool = False, member: dict = Depends(require_membe
 
 @router.get("/me/holdings")
 def me_holdings(member: dict = Depends(require_member)):
-    """The member's live long positions, valued at the current quote."""
-    return {"holdings": positions.holdings_with_value(member["id"])}
+    """The member's long positions valued at the quote, from the same cached
+    snapshot as /me/account — so Overview and Account together cost zero broker
+    calls instead of five."""
+    view = accountsnap.get(member["id"])
+    return {"holdings": view["holdings"], "as_of": view["as_of"], "stale": view["stale"]}
 
 
 @router.put("/me/allocation")
@@ -92,7 +128,10 @@ def set_allocation(body: AllocationBody, member: dict = Depends(require_member))
     except Exception:  # noqa: BLE001
         pass
     audit(f"member:{member['id']}", "allocation", None, {"type": body.type, "value": body.value})
-    return me_account(member)
+    # Force a live rebuild rather than serving the cache: the member changed their
+    # stake and must see the new resolved_usd (and the power just re-snapshotted
+    # above) immediately, not whatever the last interval refresh captured.
+    return _account_response(accountsnap.refresh_view(member["id"]))
 
 
 @router.put("/me/password")
@@ -249,6 +288,8 @@ def delete_account(body: DeleteAccountBody, member: dict = Depends(require_sessi
                          "WHERE member_id=?", (mid,))
             # revoke broker access + every way to authenticate
             conn.execute("DELETE FROM rh_accounts WHERE member_id=?", (mid,))
+            # the display snapshot caches their balances/holdings — erase it too
+            conn.execute("DELETE FROM account_snapshots WHERE member_id=?", (mid,))
             conn.execute("DELETE FROM api_keys WHERE member_id=?", (mid,))
             conn.execute("DELETE FROM oauth_identities WHERE member_id=?", (mid,))
             conn.execute("DELETE FROM login_events WHERE member_id=?", (mid,))

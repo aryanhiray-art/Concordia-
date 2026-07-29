@@ -214,6 +214,22 @@ CREATE TABLE IF NOT EXISTS oauth_identities (
     created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_oauth_member ON oauth_identities(member_id);
+
+-- DISPLAY cache of a member's Robinhood-backed account view, refreshed on an
+-- interval (jobs/refresh_accounts.py) so the Overview/Account pages are instant
+-- DB reads instead of ~4s of live broker calls on every single visit.
+-- Written ONLY by services/accountsnap.py, read ONLY by the /api/me read routes.
+-- The TRADING path must never read this table — the executor, voting power and
+-- reputation always take a live balance (sizing real orders off a stale number
+-- could over-order real money).
+CREATE TABLE IF NOT EXISTS account_snapshots (
+    member_id    INTEGER PRIMARY KEY REFERENCES members(id) ON DELETE CASCADE,
+    payload      TEXT NOT NULL,               -- JSON {allocation, pnl, power}
+    holdings     TEXT NOT NULL,               -- JSON [{symbol, quantity, value, pnl}]
+    refreshed_at INTEGER NOT NULL,            -- epoch of the last SUCCESSFUL broker read
+    ok           INTEGER NOT NULL DEFAULT 1,  -- 0 = last refresh failed; payload is the last GOOD one
+    error        TEXT                         -- why the last refresh failed (truncated)
+);
 """
 
 

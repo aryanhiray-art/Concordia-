@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from ..config import settings
 from ..db import audit, db
 from ..robinhood import oauth, vault
-from ..services import power
+from ..services import accountsnap, power
 from .deps import require_member
 
 router = APIRouter(tags=["robinhood"])
@@ -78,6 +78,9 @@ def _finish(member_id: int, code: str, state: str) -> dict:
         power.snapshot_member(member_id)
     except Exception:  # noqa: BLE001 — never fail the connect over a snapshot
         pass
+    # The cached account view belongs to the PREVIOUS (or absent) connection —
+    # drop it so the next page load rebuilds against the account just linked.
+    accountsnap.invalidate(member_id)
     return {"ok": True, "account_number": info.get("account_number"),
             "agentic_allowed": bool(info.get("agentic_allowed"))}
 
@@ -99,6 +102,7 @@ def complete(body: CompleteBody, member: dict = Depends(require_member)):
             power.snapshot_member(member["id"])
         except Exception:  # noqa: BLE001
             pass
+        accountsnap.invalidate(member["id"])
         return {"ok": True, "account_number": DemoClient.DEMO_ACCOUNT, "agentic_allowed": True}
     raw = (body.redirect_url or "").strip()
     if not raw:
@@ -134,6 +138,7 @@ def callback(request: Request):
             power.snapshot_member(pending["member_id"])
         except Exception:  # noqa: BLE001 — never fail the connect over a snapshot
             pass
+        accountsnap.invalidate(pending["member_id"])
     except Exception as e:  # noqa: BLE001
         audit(f"member:{pending['member_id']}", "rh_oauth_error", None, {"err": str(e)})
         return RedirectResponse(f"{web}/connected?status=error&reason=exchange_failed")
@@ -148,5 +153,7 @@ def disconnect(member: dict = Depends(require_member)):
     with db() as conn:
         conn.execute("UPDATE rh_accounts SET status='revoked', enc_tokens=NULL WHERE member_id=?",
                      (member["id"],))
+    # Stop serving the disconnected account's cached balances/holdings.
+    accountsnap.invalidate(member["id"])
     audit(f"member:{member['id']}", "rh_disconnect", None, None)
     return {"ok": True}

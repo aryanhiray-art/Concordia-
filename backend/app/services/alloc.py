@@ -143,7 +143,7 @@ def member_allocation(member_id: int) -> dict:
     }
 
 
-def club_pnl(member_id: int) -> dict:
+def club_pnl(member_id: int, holds: list[dict] | None = None) -> dict:
     """Unrealized P&L on the member's LIVE holdings — current value vs the broker's
     average cost basis, read straight from the account.
 
@@ -153,9 +153,15 @@ def club_pnl(member_id: int) -> dict:
     liquidate-then-rebuy the ledger double-counts and reports phantom positions /
     2x invested. The account is the truth, so value + position count + cost basis
     all come from it. (finding #7 + the manual-sale ledger-drift it exposed.)
+
+    `holds` lets a caller that has ALREADY read the member's positions hand them
+    in (services/accountsnap.build), so building a snapshot costs ONE holdings
+    read instead of two. Omitted/None = read them here, i.e. behaviour identical
+    to before for every existing caller.
     """
     from . import positions
-    holds = positions.holdings_with_value(member_id)   # live positions, valued vs avg cost
+    if holds is None:
+        holds = positions.holdings_with_value(member_id)   # live positions, valued vs avg cost
     if not holds:
         return {"invested": 0.0, "value": 0.0, "profit": 0.0, "profit_pct": None, "positions": 0}
     value = sum(h.get("value") or 0.0 for h in holds)

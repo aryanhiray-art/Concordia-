@@ -1,0 +1,9 @@
+[Unit]
+Description=Concord — warm the member account snapshots every 10 minutes (display cache; never touches orders)
+
+[Timer]
+OnCalendar=*-*-* *:00/10 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target
