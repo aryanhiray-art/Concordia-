@@ -11,8 +11,11 @@ import { LoadingScreen } from "@/components/ui";
 import { isAdminHost } from "@/lib/host";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const { ready, member, refreshMember, offline } = useAuth();
+  const { ready, member, refreshMember, offline, accountReady } = useAuth();
   const pathname = usePathname();
+  // /terms + /privacy are documents, not app screens: they must render for a
+  // half-verified member, on the admin host, and without any account data.
+  const isLegal = pathname === "/terms" || pathname === "/privacy";
 
   if (!ready) return <LoadingScreen label="starting concordia" />;
   if (!member) return <AuthGate onAuthed={() => refreshMember()} />;
@@ -22,7 +25,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // "no access" card for everyone else. Normal hosts fall through untouched.
   // The legal pages stay legal pages even here (ConfirmEmail links to /terms;
   // it must not render the console instead of the agreement).
-  if (isAdminHost() && pathname !== "/terms" && pathname !== "/privacy") {
+  if (isAdminHost() && !isLegal) {
     if (member.needs_email_verification) return <ConfirmEmail />;
     const isAdmin = member.role === "owner" || member.role === "admin";
     return isAdmin ? <AdminConsole /> : <AdminDenied />;
@@ -30,7 +33,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   // Legacy members must confirm their email before ANYTHING else (wizard
   // included) — the legal pages stay reachable so the doc links keep working.
-  if (member.needs_email_verification && pathname !== "/terms" && pathname !== "/privacy") {
+  if (member.needs_email_verification && !isLegal) {
     return <ConfirmEmail />;
   }
 
@@ -46,6 +49,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </main>
     );
   }
+
+  // Account info is checked ONCE, here, before the app proper renders — every
+  // screen below then reads the snapshot out of the auth context instead of
+  // re-paying a broker read on each navigation. accountReady flips on the first
+  // SETTLED attempt (success OR failure), so a broker/API blip delays the shell
+  // by one request, never blocks it. Deliberately placed after the four gates
+  // above: the admin console, ConfirmEmail, the legal docs and the /welcome
+  // wizard all return before this line and never wait on account data — the
+  // wizard especially, since a member who hasn't connected Robinhood yet has no
+  // snapshot to wait for.
+  if (!accountReady && !isLegal) return <LoadingScreen label="loading your account" />;
 
   // Robinhood rotated the tokens out from under us — trading is paused until reconnect.
   const needsReauth = member?.robinhood?.status === "error";

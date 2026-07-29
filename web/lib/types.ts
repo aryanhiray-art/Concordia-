@@ -6,7 +6,25 @@ export type Alloc = { symbol: string; weight: number };   // weight = % of votin
 export type Balance = { total_value: number | null; cash: number | null; buying_power: number | null } | null;
 export type Allocation = { type: "percent" | "dollar"; value: number; resolved_usd: number; balance: Balance };
 export type Pnl = { invested: number; value: number; profit: number; profit_pct: number | null; positions: number };
-export type Account = { allocation: Allocation; pnl: Pnl; power: PowerView };
+/** GET /api/me/account — served from a cached snapshot the backend refreshes on a
+ *  ~10-minute timer. The freshness trio is optional on purpose: an older backend
+ *  (or one mid-deploy) omits it, and a missing `as_of` must read as "unknown",
+ *  never as 1970. */
+export type Account = {
+  allocation: Allocation;
+  pnl: Pnl;
+  power: PowerView;
+  /** epoch SECONDS of the snapshot; null/undefined = the backend didn't say. */
+  as_of?: number | null;
+  /** snapshot older than 30 minutes. */
+  stale?: boolean;
+  /** this payload came straight off the broker (a forced refresh), not the cache. */
+  live?: boolean;
+};
+
+export type Holding = { symbol: string; quantity: number; value: number; pnl: number | null };
+/** GET /api/me/holdings — same snapshot contract as Account. */
+export type HoldingsView = { holdings: Holding[]; as_of?: number | null; stale?: boolean };
 
 export type PowerPoint = { week_start: string; power: number; equity: number | null; delta: number | null };
 export type PowerView = {

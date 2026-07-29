@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
-import type { Account } from "@/lib/types";
-import { Button, Card } from "./ui";
+import { useAuth } from "@/lib/auth";
+import { Button, Card, Freshness } from "./ui";
 import { ClubPerformance } from "./ClubPerformance";
 
 function money(n: number | null | undefined, dp = 0) {
@@ -12,26 +12,32 @@ function money(n: number | null | undefined, dp = 0) {
 }
 
 export function AllocationCard({ onChange }: { onChange?: () => void }) {
-  const [acc, setAcc] = useState<Account | null>(null);
+  // Snapshot from the auth context — no broker read on every Account visit.
+  const {
+    account: acc, applyAccount,
+    accountAsOf, accountStale, accountRefreshing, refreshAccount,
+  } = useAuth();
   const [type, setType] = useState<"percent" | "dollar">("percent");
   const [value, setValue] = useState<number>(0);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const seeded = useRef(false);
 
-  async function load() {
-    try {
-      const a = await api.account();
-      setAcc(a);
-      setType(a.allocation.type);
-      setValue(a.allocation.value);
-    } catch {}
-  }
-  useEffect(() => { load(); }, []);
+  // Seed the editor from the snapshot ONCE. The 5-minute poll must never yank a
+  // half-typed number out from under the member.
+  useEffect(() => {
+    if (!acc || seeded.current) return;
+    seeded.current = true;
+    setType(acc.allocation.type);
+    setValue(acc.allocation.value);
+  }, [acc]);
 
   async function save() {
     setBusy(true); setSaved(false); setErr(null);
-    try { const a = await api.setAllocation(type, Number(value)); setAcc(a); setSaved(true); onChange?.(); }
+    // PUT /me/allocation hands back the whole fresh account payload — push it
+    // into the context instead of re-fetching it.
+    try { applyAccount(await api.setAllocation(type, Number(value))); setSaved(true); onChange?.(); }
     catch (e: any) { setErr(e?.message || "couldn't save your stake — please try again."); }
     finally { setBusy(false); }
   }
@@ -56,6 +62,9 @@ export function AllocationCard({ onChange }: { onChange?: () => void }) {
           {" · "}{money(bal.cash)} cash
         </div>
       )}
+      {/* these balances are a cached snapshot, not a live quote — date them */}
+      <Freshness asOf={accountAsOf} stale={accountStale} busy={accountRefreshing}
+        onRefresh={refreshAccount} className="mt-1.5" />
 
       {/* allocation editor */}
       <div className="mt-4 rounded-[14px] border border-white/10 bg-white/[0.03] p-4">

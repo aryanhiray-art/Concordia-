@@ -5,44 +5,47 @@
 // mirrored, not shared). The committed slice is all the club ever trades and
 // becomes voting power. Continue stays disabled until a value > 0 is saved.
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
-import type { Account } from "@/lib/types";
+import { useAuth } from "@/lib/auth";
 import { Button, Dots } from "@/components/ui";
 import { money } from "./money";
 
 export function StepStake({ onNext }: { onNext: () => void }) {
-  const [acc, setAcc] = useState<Account | null>(null);
-  const [loadErr, setLoadErr] = useState(false);
+  // Balance comes from the shared snapshot (fetched once when the member — or
+  // their brand-new Robinhood link — was established). `reloadAccount` is the
+  // cheap cached re-read behind "try again".
+  const { account: acc, accountReady, accountError, applyAccount, reloadAccount } = useAuth();
   const [type, setType] = useState<"percent" | "dollar">("percent");
   const [value, setValue] = useState<number>(0);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const seeded = useRef(false);
 
-  const load = useCallback(async () => {
-    setLoadErr(false);
-    try {
-      const a = await api.account();
-      setAcc(a);
-      setType(a.allocation.type);
-      setValue(a.allocation.value);
-    } catch { setLoadErr(true); }
-  }, []);
-  useEffect(() => { load(); }, [load]);
+  // seed the editor once — a background refresh must not overwrite what the
+  // member is typing
+  useEffect(() => {
+    if (!acc || seeded.current) return;
+    seeded.current = true;
+    setType(acc.allocation.type);
+    setValue(acc.allocation.value);
+  }, [acc]);
 
   async function save() {
     setBusy(true); setSaved(false); setErr(null);
-    try { const a = await api.setAllocation(type, Number(value)); setAcc(a); setSaved(true); }
+    // the PUT returns the fresh account — hand it to the context so StepFinish's
+    // recap (and the Account page) see it without another round-trip
+    try { applyAccount(await api.setAllocation(type, Number(value))); setSaved(true); }
     catch (e: any) { setErr(e?.message || "couldn't save your stake — please try again"); }
     finally { setBusy(false); }
   }
 
   if (!acc) {
-    return loadErr ? (
+    return accountReady ? (
       <div className="py-4 text-[13px] text-muted">
-        ⚠ Couldn&apos;t load your account balance.{" "}
-        <button onClick={load} className="text-teal underline underline-offset-2">try again</button>
+        ⚠ Couldn&apos;t load your account balance.{accountError ? ` (${accountError})` : ""}{" "}
+        <button onClick={reloadAccount} className="text-teal underline underline-offset-2">try again</button>
       </div>
     ) : (
       <div className="flex items-center gap-3 py-6 text-[13px] text-muted">

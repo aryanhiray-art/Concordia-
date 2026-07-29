@@ -10,31 +10,27 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 
 export function Onboarding() {
-  const { member } = useAuth();
+  // "allocated" comes from the shared account snapshot; only trade-readiness
+  // (a different endpoint, with its own server-side TTL) is still fetched here.
+  const { member, account, accountReady } = useAuth();
   const connected = member?.robinhood?.status === "connected" && !!member?.robinhood?.account_number;
   const optedIn = Number(member?.settings?.opted_in) === 1;
-  const [state, setState] = useState<{ loaded: boolean; ready: boolean; allocated: boolean }>(
-    { loaded: false, ready: false, allocated: false },
-  );
+  const allocated = (account?.allocation?.resolved_usd ?? 0) > 0;
+  const [state, setState] = useState<{ loaded: boolean; ready: boolean }>({ loaded: false, ready: false });
 
   useEffect(() => {
-    if (!connected) { setState({ loaded: true, ready: false, allocated: false }); return; }
+    if (!connected) { setState({ loaded: true, ready: false }); return; }
     let alive = true;
-    Promise.allSettled([api.tradeReadiness(), api.account()]).then(([r, a]) => {
-      if (!alive) return;
-      setState({
-        loaded: true,
-        ready: r.status === "fulfilled" && r.value.ready === true,
-        allocated: a.status === "fulfilled" && (a.value.allocation?.resolved_usd ?? 0) > 0,
-      });
-    });
+    api.tradeReadiness()
+      .then((r) => { if (alive) setState({ loaded: true, ready: r.ready === true }); })
+      .catch(() => { if (alive) setState({ loaded: true, ready: false }); });
     return () => { alive = false; };
   }, [connected, member]);
 
-  if (!state.loaded) return null; // no flash while we find out
+  if (!state.loaded || !accountReady) return null; // no flash while we find out
   // Step 1 (the rules) counts as done — anyone seeing this banner has been
   // through, or deliberately skipped, the wizard.
-  const done = 1 + (connected ? 1 : 0) + (state.ready ? 1 : 0) + (state.allocated ? 1 : 0) + (optedIn ? 1 : 0);
+  const done = 1 + (connected ? 1 : 0) + (state.ready ? 1 : 0) + (allocated ? 1 : 0) + (optedIn ? 1 : 0);
   if (done >= 5) return null; // fully set up — nothing to resume
 
   return (

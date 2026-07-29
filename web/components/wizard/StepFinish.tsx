@@ -4,24 +4,18 @@
 // line on what it means, a recap of the member's setup, and the door into the
 // club. Deliberately confetti-free.
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import type { Account } from "@/lib/types";
 import { Button, Toggle } from "@/components/ui";
 import { money } from "./money";
 
 export function StepFinish({ onEnter }: { onEnter: () => void }) {
-  const { member, refreshMember } = useAuth();
-  const [acc, setAcc] = useState<Account | null>(null);
+  // The recap reads the shared snapshot — StepStake's Commit pushed its result
+  // straight into the context, so this is already the number just saved.
+  const { member, account: acc, refreshMember } = useAuth();
   const [on, setOn] = useState(Number(member?.settings?.opted_in) === 1);
   const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    api.account().then((a) => { if (alive) setAcc(a); }).catch(() => {});
-    return () => { alive = false; };
-  }, []);
 
   // persists immediately, stays where you leave it (revert on failure)
   async function toggle(v: boolean) {

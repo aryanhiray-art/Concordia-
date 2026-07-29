@@ -5,8 +5,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { Freshness } from "@/components/ui";
 import { sectorOf, sectorColor } from "@/lib/sectors";
-import type { Account } from "@/lib/types";
 
 // A representative market shape; we compress its daily returns to the member's
 // real club P&L and scale it to end at their real club value.
@@ -24,23 +24,21 @@ function shade(hex: string, i: number, n: number): string {
 }
 
 export function CinematicOverview() {
-  const { session } = useAuth();
+  // Account + holdings come from the auth context's snapshot — fetched once at
+  // sign-in and kept warm on a 5-minute poll. Navigating back here costs zero
+  // broker reads (it used to cost ~4s of live Robinhood calls every visit).
+  const {
+    session, account: acc, holdings: hold, accountReady, accountError,
+    accountAsOf, accountStale, accountRefreshing, refreshAccount,
+  } = useAuth();
   const router = useRouter();
   const root = useRef<HTMLDivElement>(null);
-  const [acc, setAcc] = useState<Account | null>(null);
-  const [hold, setHold] = useState<{ symbol: string; value: number; pnl: number | null }[]>([]);
+  const counted = useRef(false); // the hero count-up is a first-paint flourish, not a per-poll one
   const [lastPicks, setLastPicks] = useState<{ symbol: string; name?: string; weight?: number }[]>([]);
-  const [loaded, setLoaded] = useState(false); // account + holdings settled
-  const [failed, setFailed] = useState(false); // …and BOTH failed → can't know the real value
+  const loaded = accountReady;              // the snapshot attempt has settled
+  const failed = !acc && !!accountError;    // …and we still have no numbers at all
 
   useEffect(() => {
-    Promise.allSettled([
-      api.account().then(setAcc),
-      api.holdings().then((r) => setHold(r.holdings || [])),
-    ]).then((rs) => {
-      setFailed(rs.every((r) => r.status === "rejected"));
-      setLoaded(true);
-    });
     // the most recent DECIDED basket — the donut's fallback when the account is
     // all cash AND the active ballot hasn't collected votes yet
     api.results().then((r) => setLastPicks(r.last_decided?.picks || [])).catch(() => {});
@@ -238,8 +236,15 @@ export function CinematicOverview() {
       : `<div style="color:var(--subtle);font:500 13px/1.6 var(--font-inter);padding:8px 2px">No holdings yet — once the basket runs, your positions show here. <a href="/vote" style="color:var(--teal)">Cast your vote →</a></div>`;
 
     drawChart("ALL"); renderSectors();
-    // count-up the hero
-    if (!RM) { const el = $("#val"); let t0: number | null = null; const cu = (ts: number) => { if (!t0) t0 = ts; const p = Math.min((ts - t0) / 950, 1), e = 1 - Math.pow(1 - p, 3); el.textContent = fmt(value * e); if (p < 1) requestAnimationFrame(cu); }; requestAnimationFrame(cu); }
+    // Count up the hero ONCE per visit. The snapshot now refreshes on a 5-minute
+    // poll, and replaying a 0→$23,567 count-up every five minutes would read as a
+    // glitch — drawChart() already wrote the new value, so later updates just land.
+    if (!RM && !counted.current) {
+      counted.current = true;
+      const el = $("#val"); let t0: number | null = null;
+      const cu = (ts: number) => { if (!t0) t0 = ts; const p = Math.min((ts - t0) / 950, 1), e = 1 - Math.pow(1 - p, 3); el.textContent = fmt(value * e); if (p < 1) requestAnimationFrame(cu); };
+      requestAnimationFrame(cu);
+    }
 
     // ── carousel ──
     const dots = [...r.querySelectorAll(".dots button")] as any[];
@@ -301,6 +306,9 @@ export function CinematicOverview() {
           <Link href="/account" className="text-teal">Account</Link> and flip Participate on;
           your first basket buys on the next buy day.
         </p>
+        {/* "nothing invested" is itself a money claim — date it. */}
+        <Freshness asOf={accountAsOf} stale={accountStale} busy={accountRefreshing}
+          onRefresh={refreshAccount} className="mt-3" />
       </div>
     );
   }
@@ -359,7 +367,12 @@ export function CinematicOverview() {
       </section>
 
       <section id="hold">
-        <div className="label mb-3">Consensus basket · {session?.voters ?? 0} voter{(session?.voters ?? 0) === 1 ? "" : "s"} · by voting power</div>
+        {/* The dollars above and below are a snapshot, not a live tape — say when
+            it was taken. Footnote-quiet, and only turns amber when it's old. */}
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+          <div className="label">Consensus basket · {session?.voters ?? 0} voter{(session?.voters ?? 0) === 1 ? "" : "s"} · by voting power</div>
+          <Freshness asOf={accountAsOf} stale={accountStale} busy={accountRefreshing} onRefresh={refreshAccount} />
+        </div>
         <div id="holdings" />
       </section>
     </div>

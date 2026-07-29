@@ -40,7 +40,7 @@ const TITLES = [
 ];
 
 export function Wizard() {
-  const { member } = useAuth();
+  const { member, account, accountReady } = useAuth();
   const router = useRouter();
   const [step, setStep] = useState(1);
   const [unlocked, setUnlocked] = useState(1); // furthest step reached this visit
@@ -55,12 +55,18 @@ export function Wizard() {
       setStep(start); setUnlocked(start); setDerived(true);
       return;
     }
+    // The stake comes from the shared snapshot; wait for its first attempt to
+    // settle (success OR failure) so we don't derive step 4 from a null account.
+    // /welcome is deliberately NOT gated on accountReady in AppShell — a member
+    // who just connected has no snapshot yet, and this is the only step that
+    // actually needs one.
+    if (!accountReady) return;
     let alive = true;
     (async () => {
       let start = 3;
       try {
-        const [acc, r] = await Promise.all([api.account(), api.tradeReadiness()]);
-        if (r.ready === true) start = (acc.allocation?.resolved_usd ?? 0) > 0 ? 5 : 4;
+        const r = await api.tradeReadiness();
+        if (r.ready === true) start = (account?.allocation?.resolved_usd ?? 0) > 0 ? 5 : 4;
       } catch {
         // can't tell — resume at the readiness step, which re-checks itself
       }
@@ -68,7 +74,7 @@ export function Wizard() {
       setStep(start); setUnlocked(start); setDerived(true);
     })();
     return () => { alive = false; };
-  }, [member, derived]);
+  }, [member, derived, account, accountReady]);
 
   const go = useCallback((n: number) => {
     setStep(n);

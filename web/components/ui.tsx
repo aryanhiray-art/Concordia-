@@ -105,6 +105,41 @@ export function LoadingScreen({ label = "loading" }: { label?: string }) {
   );
 }
 
+// The money on screen comes from a cached snapshot, so say so — a footnote,
+// not a banner. Quiet + subtle while fresh; amber with a manual pull once the
+// backend flags it stale. Renders nothing when there's nothing honest to claim
+// (no as_of from the backend and not stale).
+export function Freshness({
+  asOf, stale = false, busy = false, onRefresh, className = "",
+}: {
+  asOf: number | null;          // epoch SECONDS
+  stale?: boolean;
+  busy?: boolean;
+  onRefresh?: () => void;
+  className?: string;
+}) {
+  if (!asOf && !stale) return null;
+  let when = "";
+  if (asOf) {
+    const d = new Date(asOf * 1000);
+    const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    // A snapshot from another day must not masquerade as "9:42 this morning".
+    const sameDay = d.toDateString() === new Date().toDateString();
+    when = sameDay ? time : `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${time}`;
+  }
+  return (
+    <span className={`inline-flex items-center gap-2 text-[11.5px] ${stale ? "text-amber" : "text-subtle"} ${className}`}>
+      <span className="tnum">{when ? `as of ${when}` : "may be out of date"}</span>
+      {stale && onRefresh && (
+        <button type="button" onClick={onRefresh} disabled={busy}
+          className="font-semibold underline underline-offset-2 transition hover:text-ink disabled:opacity-50">
+          {busy ? "refreshing…" : "Refresh"}
+        </button>
+      )}
+    </span>
+  );
+}
+
 export function Toggle({ on, onChange, disabled }: { on: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
   return (
     <button type="button" role="switch" aria-checked={on} disabled={disabled}

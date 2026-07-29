@@ -1,6 +1,6 @@
 "use client";
 
-import type { Member, SessionView, UniverseItem, ExecutionRow, PowerView, Account, ApiKey, ResearchResult, PerfView, AdminPanel, ClubHistoryView, MyVotesView } from "./types";
+import type { Member, SessionView, UniverseItem, ExecutionRow, PowerView, Account, HoldingsView, ApiKey, ResearchResult, PerfView, AdminPanel, ClubHistoryView, MyVotesView } from "./types";
 
 // Empty base = same-origin (Vercel rewrites /api + /oauth to the forge backend).
 // Local dev sets NEXT_PUBLIC_CONCORD_API=http://localhost:8780.
@@ -117,15 +117,23 @@ export const api = {
   participate: (on: boolean) =>
     req<{ member: Member }>("/api/me/participate", { method: "PUT", body: JSON.stringify({ on }) }),
 
-  // agentic balance + allocation (% or $) + club-only P&L
+  // agentic balance + allocation (% or $) + club-only P&L.
+  // CHEAP: served from the backend's cached snapshot (refreshed on a ~10-min
+  // timer), so this is safe to call on navigation. Live Robinhood reads happen
+  // only on accountRefresh() below. Nothing should call either of these
+  // directly any more — lib/auth.tsx owns the snapshot; read it from useAuth().
   account: () => req<Account>("/api/me/account"),
+  // FORCED live pull — the member pressed "Refresh" on a stale snapshot. Costs
+  // real broker round-trips and may 429 when spammed; never put it on a timer.
+  refreshAccount: () => req<Account>("/api/me/account/refresh", { method: "POST" }),
   // is the RH account cleared to place buys (investing-goals questionnaire done)?
+  // NOT part of the account snapshot — it has its own server-side TTL.
   tradeReadiness: (force = false) =>
     req<{ connected: boolean; ready: boolean; reason: string; detail?: string }>(
       `/api/me/trade-readiness${force ? "?force=true" : ""}`),
-  // the member's live positions (for the overview donut + holdings list)
-  holdings: () =>
-    req<{ holdings: { symbol: string; quantity: number; value: number; pnl: number | null }[] }>("/api/me/holdings"),
+  // the member's positions (for the overview donut + holdings list) — same
+  // cached-snapshot contract as account().
+  holdings: () => req<HoldingsView>("/api/me/holdings"),
   setAllocation: (type: "percent" | "dollar", value: number) =>
     req<Account>("/api/me/allocation", { method: "PUT", body: JSON.stringify({ type, value }) }),
   // club decisions vs SPY, both indexed to 100 — club-level, identical for every member
