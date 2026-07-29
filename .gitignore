@@ -20,3 +20,6 @@ web/.vercel/
 web/.env*.local
 web/next-env.d.ts
 web/*.tsbuildinfo
+
+# local dev-server config: absolute paths, per-machine
+.claude/launch.json
