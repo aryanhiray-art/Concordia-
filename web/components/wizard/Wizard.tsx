@@ -1,18 +1,22 @@
 "use client";
 
-// The /welcome onboarding wizard — a guided 5-step journey replacing the old
+// The /welcome onboarding wizard — a guided 6-screen journey replacing the old
 // drop-them-in-the-app checklist. Centered ~640px column, small Logo up top,
 // a stepper with the current step lit, Back among completed steps, and a quiet
-// escape hatch at the bottom (never trap anyone).
+// escape hatch at the bottom (never trap anyone). Every screen is deliberately
+// short — title + one compact action block — so it fits a laptop viewport
+// (~700px) without scrolling.
 //
 // STEP DERIVATION (on load, once): the furthest COMPLETED step decides where a
 // returning member resumes —
 //   not connected, never was    → 1  (rules first)
 //   not connected, was before   → 2  (reconnect — skip the rules re-read)
 //   connected, readiness check
-//     pending/failed or !ready  → 3  (the check re-runs there anyway)
-//   connected + ready, no stake → 4
-//   connected + ready + stake   → 5  (participation + recap, even if opted in)
+//     pending/failed or !ready  → 4  (the check re-runs there anyway)
+//   connected + ready, no stake → 5
+//   connected + ready + stake   → 6  (participation + recap, even if opted in)
+// Step 3 (paste the URL back) is transient — a half-done OAuth approval can't
+// be resumed, so derivation never starts there; step 2 restarts the flow.
 // Back and the stepper move freely among steps ≤ the furthest reached
 // (`unlocked`); /welcome never redirects out except via its own CTAs, and both
 // exits ("Skip for now" and "Enter the club") set the skip flag first so the
@@ -27,14 +31,18 @@ import { WIZARD_SKIP_KEY, setWizardFlag } from "./flags";
 import { Stepper } from "./Stepper";
 import { StepRules } from "./StepRules";
 import { StepConnect } from "./StepConnect";
+import { StepPaste } from "./StepPaste";
 import { StepReadiness } from "./StepReadiness";
 import { StepStake } from "./StepStake";
 import { StepFinish } from "./StepFinish";
 
+const LAST = 6;
+
 const TITLES = [
   "How the club works",
   "Connect your Robinhood",
-  "One quick Robinhood check",
+  "Paste the URL back",
+  "One quick check",
   "Commit your stake",
   "You're in",
 ];
@@ -56,17 +64,17 @@ export function Wizard() {
       return;
     }
     // The stake comes from the shared snapshot; wait for its first attempt to
-    // settle (success OR failure) so we don't derive step 4 from a null account.
+    // settle (success OR failure) so we don't derive step 5 from a null account.
     // /welcome is deliberately NOT gated on accountReady in AppShell — a member
     // who just connected has no snapshot yet, and this is the only step that
     // actually needs one.
     if (!accountReady) return;
     let alive = true;
     (async () => {
-      let start = 3;
+      let start = 4;
       try {
         const r = await api.tradeReadiness();
-        if (r.ready === true) start = (account?.allocation?.resolved_usd ?? 0) > 0 ? 5 : 4;
+        if (r.ready === true) start = (account?.allocation?.resolved_usd ?? 0) > 0 ? 6 : 5;
       } catch {
         // can't tell — resume at the readiness step, which re-checks itself
       }
@@ -80,7 +88,7 @@ export function Wizard() {
     setStep(n);
     setUnlocked((u) => (n > u ? n : u));
   }, []);
-  const next = useCallback(() => go(Math.min(5, step + 1)), [go, step]);
+  const next = useCallback(() => go(Math.min(LAST, step + 1)), [go, step]);
   const back = useCallback(() => setStep((s) => Math.max(1, s - 1)), []);
 
   // Both exits set the skip flag BEFORE navigating: the Overview redirects
@@ -109,10 +117,10 @@ export function Wizard() {
         <>
           {/* key={step} replays the entrance on each step change — .enter is a
               subtle rise+fade, already stilled under prefers-reduced-motion */}
-          <div key={step} className="enter mt-6">
-            <div className="glass shine p-5 sm:p-8">
+          <div key={step} className="enter mt-5">
+            <div className="glass shine p-5 sm:p-6">
               <div className="flex items-baseline justify-between gap-3">
-                <span className="label">Step {step} of 5</span>
+                <span className="label">Step {step} of {LAST}</span>
                 {step > 1 && (
                   <button onClick={back} className="text-[12px] text-subtle transition hover:text-ink">
                     ← Back
@@ -124,15 +132,17 @@ export function Wizard() {
               </h1>
               <div className="mt-4">
                 {step === 1 && <StepRules onNext={next} />}
-                {step === 2 && <StepConnect onDone={next} />}
-                {step === 3 && <StepReadiness onDone={next} auto={unlocked === 3} />}
-                {step === 4 && <StepStake onNext={next} />}
-                {step === 5 && <StepFinish onEnter={leaveToApp} />}
+                {/* already connected → skip the paste screen entirely */}
+                {step === 2 && <StepConnect onOpened={() => go(3)} onConnected={() => go(4)} />}
+                {step === 3 && <StepPaste onDone={() => go(4)} />}
+                {step === 4 && <StepReadiness onDone={next} auto={unlocked === 4} />}
+                {step === 5 && <StepStake onNext={next} />}
+                {step === 6 && <StepFinish onEnter={leaveToApp} />}
               </div>
             </div>
           </div>
 
-          <div className="mt-5 text-center">
+          <div className="mt-4 text-center">
             <button onClick={leaveToApp} className="text-[12px] text-subtle transition hover:text-muted">
               Skip for now → go to the app
             </button>

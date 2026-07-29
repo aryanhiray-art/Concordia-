@@ -149,6 +149,9 @@ class RobinhoodClient:
     def get_quotes(self, symbols: list[str]) -> dict:
         return self.mcp.call_tool("get_equity_quotes", {"symbols": symbols})
 
+    def get_equity_fundamentals(self, symbols: list[str]) -> dict:
+        return self.mcp.call_tool("get_equity_fundamentals", {"symbols": symbols})
+
     def get_equity_historicals(self, symbols: list[str], start_time: str, interval: str = "day") -> dict:
         """Daily (or intraday) bars since start_time (RFC3339 UTC, e.g.
         "2026-07-01T00:00:00Z"). Tool caps at 10 symbols — the caller batches."""

@@ -126,8 +126,8 @@ export function ConnectExplainer() {
       </div>
 
       <p className="mt-3 border-t border-white/[0.07] pt-3 text-[12px] leading-relaxed text-subtle">
-        Heads up: Robinhood sometimes needs two tries — if pasting fails, just click Connect
-        again and redo it. Takes under a minute.
+        Heads up: Robinhood sometimes needs two tries — if pasting fails, click Connect
+        and redo. Under a minute.
       </p>
     </div>
   );

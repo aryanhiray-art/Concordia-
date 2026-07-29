@@ -43,8 +43,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // still get the Account-page connect fallback. The reauth/offline banners
   // come right back on every other page below.
   if (pathname === "/welcome") {
+    // tighter top padding than the app pages: every wizard step must fit a
+    // laptop viewport (~700px) without scrolling
     return (
-      <main className="mx-auto w-[min(1080px,100%)] px-4 pb-24 pt-10 sm:px-6 sm:pt-14">
+      <main className="mx-auto w-[min(1080px,100%)] px-4 pb-24 pt-6 sm:px-6 sm:pt-8">
         {children}
       </main>
     );
@@ -88,7 +90,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         {children}
       </main>
       <p className="pb-8 text-center text-[11px] text-subtle">
-        Concordia · a trading club that votes · one shared basket, rebalanced in your own Robinhood
+        Concordia · a trading club that votes
       </p>
     </>
   );

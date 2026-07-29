@@ -302,8 +302,8 @@ export function CinematicOverview() {
           <h2 className="font-display text-[16px] font-bold">You&apos;re connected</h2>
         </div>
         <p className="mt-2 max-w-[58ch] text-[13px] leading-relaxed text-muted">
-          Your account is connected — commit an amount in{" "}
-          <Link href="/account" className="text-teal">Account</Link> and flip Participate on;
+          Commit an amount in{" "}
+          <Link href="/account" className="text-teal">Account</Link> and flip Participate on —
           your first basket buys on the next buy day.
         </p>
         {/* "nothing invested" is itself a money claim — date it. */}

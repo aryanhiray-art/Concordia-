@@ -26,7 +26,7 @@ const RULES: { icon: React.ReactNode; uid: string; title: string; body: React.Re
     icon: HOW_ICONS.yours,
     uid: "rule3",
     title: "Your account stays yours",
-    body: <>Every trade executes in your own Robinhood — the club never holds or touches your money.</>,
+    body: <>Every trade runs in your own Robinhood — the club never touches your money.</>,
   },
   {
     icon: HOW_ICONS.control,
@@ -54,20 +54,20 @@ export function StepRules({ onNext }: { onNext: () => void }) {
   return (
     <div>
       <p className="text-[13.5px] leading-relaxed text-muted">
-        Concordia is a trading club that decides together. Four things to know:
+        Four things to know:
       </p>
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+      <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
         {RULES.map((r) => (
-          <div key={r.title} className="rounded-[14px] border border-white/10 bg-white/[0.03] p-4">
+          <div key={r.title} className="rounded-[14px] border border-white/10 bg-white/[0.03] p-3.5">
             <HowChip icon={r.icon} uid={r.uid} />
-            <div className="mt-2.5 font-display text-[14px] font-semibold">{r.title}</div>
+            <div className="mt-2 font-display text-[14px] font-semibold">{r.title}</div>
             <p className="mt-1 text-[12.5px] leading-relaxed text-muted">{r.body}</p>
           </div>
         ))}
       </div>
 
-      <Button variant="go" className="mt-5 w-full" onClick={onNext}>
+      <Button variant="go" className="mt-4 w-full" onClick={onNext}>
         {connected ? "Continue" : "Got it — let's connect Robinhood"}
       </Button>
     </div>

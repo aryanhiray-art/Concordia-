@@ -88,7 +88,7 @@ export function AllocationCard({ onChange }: { onChange?: () => void }) {
         </div>
         {err && <div className="mt-2.5 text-[12px] text-red">⚠ {err}</div>}
         <div className="mt-2.5 text-[12.5px] text-muted">
-          Committing <b className="text-teal">{money(resolved, 2)}</b> — only this is traded + tracked. The rest of your account is untouched.
+          Committing <b className="text-teal">{money(resolved, 2)}</b> — the rest of your account stays untouched.
         </div>
       </div>
 

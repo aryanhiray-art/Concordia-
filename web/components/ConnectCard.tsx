@@ -73,11 +73,11 @@ export function ConnectCard({ member, onChange }: { member: Member; onChange: ()
           <p className="text-[13.5px] leading-relaxed text-muted">
             {reauth ? (
               rh!.status === "error"
-                ? "Robinhood signed this connection out (it rotates credentials periodically). Reconnect to resume trading — takes under a minute."
-                : "This account was disconnected. Reconnect to resume trading — takes under a minute."
+                ? "Robinhood rotates credentials periodically — reconnect to resume trading. Under a minute."
+                : "This account was disconnected — reconnect to resume trading."
             ) : (
-              <>Connect Robinhood to take part. You log in on Robinhood&apos;s own site and approve
-              agentic trading — your credentials never touch Concordia.</>
+              <>Connect Robinhood to take part. You approve on Robinhood&apos;s own site —
+              your credentials never touch Concordia.</>
             )}
           </p>
 
@@ -119,9 +119,8 @@ export function ConnectCard({ member, onChange }: { member: Member; onChange: ()
               ⚠ {err}
               {failedAttempts >= 1 && (
                 <div className="mt-1.5 text-[12.5px] text-amber">
-                  This happens — Robinhood approvals sometimes expire before the paste. Click
-                  &ldquo;Re-open Robinhood&rdquo; and approve again; the second attempt almost
-                  always works.
+                  This happens — approvals sometimes expire before the paste.
+                  &ldquo;Re-open Robinhood&rdquo; and approve again; the second try almost always works.
                 </div>
               )}
             </div>
@@ -141,8 +140,8 @@ export function ConnectCard({ member, onChange }: { member: Member; onChange: ()
               </div>
               <div className="mt-0.5 text-[12px] text-subtle">
                 {optedIn
-                  ? "Your committed amount is deployed across the basket each day."
-                  : "Voting is off. Flip this on to vote and trade today."}
+                  ? "Your stake trades with the basket each day."
+                  : "Flip on to vote and trade today."}
               </div>
             </div>
             <Toggle on={optedIn} onChange={toggle} />

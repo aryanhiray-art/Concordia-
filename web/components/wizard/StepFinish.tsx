@@ -1,6 +1,6 @@
 "use client";
 
-// Step 5 — "You're in": the participation switch (api.participate) with one
+// Step 6 — "You're in": the participation switch (api.participate) with one
 // line on what it means, a recap of the member's setup, and the door into the
 // club. Deliberately confetti-free.
 
@@ -36,8 +36,8 @@ export function StepFinish({ onEnter }: { onEnter: () => void }) {
           </div>
           <div className="mt-0.5 text-[12px] leading-relaxed text-subtle">
             {on
-              ? "You vote in the daily ballot and the decided basket trades your committed slice."
-              : "Flip this on to vote daily and have the decided basket trade your committed slice."}
+              ? "You vote daily and the decided basket trades your slice."
+              : "Flip on to vote daily and trade the decided basket."}
           </div>
         </div>
         <Toggle on={on} onChange={toggle} />
@@ -66,7 +66,7 @@ export function StepFinish({ onEnter }: { onEnter: () => void }) {
         </dl>
       </div>
 
-      <Button variant="go" className="mt-5 w-full" onClick={onEnter}>Enter the club →</Button>
+      <Button variant="go" className="mt-4 w-full" onClick={onEnter}>Enter the club →</Button>
     </div>
   );
 }

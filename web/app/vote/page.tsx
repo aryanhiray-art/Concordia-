@@ -27,7 +27,7 @@ export default function VotePage() {
         <Card className="enter mx-auto max-w-[460px]">
           <span className="label">Today&apos;s ballot</span>
           <p className="mt-3 text-[13px] text-red">⚠ Couldn&apos;t load the ballot — {sessionError}</p>
-          <p className="mt-1.5 text-[12px] text-subtle">You&apos;re still signed in — this is a connection problem, not a logout.</p>
+          <p className="mt-1.5 text-[12px] text-subtle">A connection blip — you&apos;re still signed in.</p>
           <Button variant="glass" busy={retrying} onClick={retry} className="mt-4">Retry</Button>
         </Card>
       </div>

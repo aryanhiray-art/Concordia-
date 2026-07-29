@@ -107,7 +107,7 @@ function BrandPane() {
                   <HowRow n={1} title="Use the invite code: demo"
                     body="Type demo in the invite box — the playground is open to everyone." />
                   <HowRow n={2} title="Use your real email"
-                    body="A demo account is still an account — we email you a 6-digit code to confirm it, just like the club." />
+                    body="We email you a 6-digit code to confirm it, just like the club." />
                   <HowRow n={3} title="Pick any name and password"
                     body="Demo accounts are fully separate from the real club — create and use one freely." />
                 </>
@@ -118,14 +118,14 @@ function BrandPane() {
                   <HowRow n={2} title="You set the stake"
                     body="You choose how much of your account plays, and only that slice ever trades." />
                   <HowRow n={3} title="Your account stays yours"
-                    body="Every trade executes in your own brokerage account — the club never holds or touches your money." />
+                    body="Every trade runs in your own brokerage account — the club never touches your money." />
                 </>
               )}
             </div>
             {demo && (
               <p className="mt-5 border-t border-white/10 pt-4 text-[12.5px] leading-relaxed text-subtle">
-                Everything works exactly like the real club — voting, stakes, the
-                dashboard — except Robinhood is simulated and votes never move real money.
+                Everything works like the real club — except Robinhood is simulated
+                and no real money ever moves.
               </p>
             )}
           </div>
@@ -326,8 +326,7 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
             <div>
               <div className="font-display text-[16px] font-bold">Almost in</div>
               <p className="mt-1 text-[13px] leading-relaxed text-muted">
-                Google verified you, and you&apos;re new here — new members need a club invite
-                and to accept the club agreement.
+                Google verified you — now enter your club invite and accept the agreement.
               </p>
             </div>
             <div>

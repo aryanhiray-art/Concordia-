@@ -184,6 +184,10 @@ export type ClubHistorySession = {
   trade_date: string;
   /** "open" | "closed" | "executed" — kept open so new states render neutral. */
   status: string;
+  /** Presentation status: stale closed sessions whose cycle is over arrive as
+   *  "executed"; only the LATEST closed row keeps "closed". Optional so the UI
+   *  compiles (and falls back to `status`) before the backend ships it. */
+  status_display?: string;
   basket: string[];
   voters: number;
   human_voters: number;
@@ -198,6 +202,8 @@ export type MyVoteSession = {
   id: number;
   trade_date: string;
   status: string;
+  /** Same contract as ClubHistorySession.status_display. */
+  status_display?: string;
   my_allocations: Alloc[];
   basket: string[];
   hits: string[];

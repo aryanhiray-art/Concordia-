@@ -1,10 +1,10 @@
 "use client";
 
-// The wizard's 5-step progress rail. Desktop: numbered circles + labels;
+// The wizard's 6-step progress rail. Desktop: numbered circles + labels;
 // mobile: compresses to dots (current = teal pill). Completed / previously
 // reached steps are clickable so members can move freely among them.
 
-const LABELS = ["Rules", "Connect", "Check", "Stake", "You're in"];
+const LABELS = ["Rules", "Connect", "Paste", "Check", "Stake", "You're in"];
 
 export function Stepper({
   step, unlocked, onGo,
@@ -12,7 +12,7 @@ export function Stepper({
   step: number; unlocked: number; onGo: (n: number) => void;
 }) {
   return (
-    <ol className="flex items-center gap-1.5 sm:gap-2" aria-label={`Setup step ${step} of 5`}>
+    <ol className="flex items-center gap-1.5 sm:gap-2" aria-label={`Setup step ${step} of ${LABELS.length}`}>
       {LABELS.map((label, i) => {
         const n = i + 1;
         const done = n < step;

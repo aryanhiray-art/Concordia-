@@ -1,6 +1,6 @@
 "use client";
 
-// Step 3 — "One quick Robinhood check": can the connected account actually
+// Step 4 — "One quick check": can the connected account actually
 // place buys? Ready → success beat, auto-advance (only when this is the
 // member's furthest step — revisits via Back get a manual Continue instead,
 // so Back navigation is never fought by an auto-advance). The common blocker
@@ -63,8 +63,8 @@ export function StepReadiness({ onDone, auto }: { onDone: () => void; auto: bool
     return (
       <div>
         <p className="text-[13.5px] leading-relaxed text-muted">
-          Robinhood needs you to answer a few <b className="text-ink">investing-goals
-          questions</b> before it lets the club place buys. One-time, about two minutes:
+          Robinhood needs a few <b className="text-ink">investing-goals answers</b> before
+          it allows buys. One-time, about two minutes:
         </p>
         <ol className="ml-4 mt-3 list-decimal space-y-1.5 text-[13px] leading-relaxed text-muted">
           <li>Open the <b className="text-ink">Robinhood app</b>.</li>

@@ -375,6 +375,30 @@ def execution_order_counts(session_id: int) -> dict:
     return {r["status"]: r["n"] for r in rows}
 
 
+def _latest_decided_session_id() -> int | None:
+    """The one decided session whose cycle can still be in flight.
+
+    The executor's buy leg only ever processes the LATEST decided cycle, so an
+    OLDER row stuck at status='closed' (its buy day never completed) can never
+    run — its cycle is over. Used for DISPLAY derivation only; vote_sessions
+    itself is trading data and is never mutated from here.
+    """
+    with db() as conn:
+        row = conn.execute(
+            "SELECT id FROM vote_sessions WHERE status IN ('closed','executed') "
+            "ORDER BY trade_date DESC LIMIT 1"
+        ).fetchone()
+    return row["id"] if row else None
+
+
+def _status_display(status: str, session_id: int, latest_decided_id: int | None) -> str:
+    """'executed' for a STALE closed session (see _latest_decided_session_id),
+    else the raw status unchanged."""
+    if status == "closed" and session_id != latest_decided_id:
+        return "executed"
+    return status
+
+
 def club_history(limit: int = 30) -> list[dict]:
     """The club's shared record: DECIDED sessions (closed/executed), newest first.
 
@@ -389,10 +413,12 @@ def club_history(limit: int = 30) -> list[dict]:
             "ORDER BY trade_date DESC LIMIT ?",
             (limit,),
         ).fetchall()
+    latest_decided = _latest_decided_session_id()
     return [{
         "id": s["id"],
         "trade_date": s["trade_date"],
         "status": s["status"],
+        "status_display": _status_display(s["status"], s["id"], latest_decided),
         "basket": [p["symbol"] for p in session_picks(dict(s))],
         "voters": voter_count(s["id"]),
         "human_voters": human_voter_count(s["id"]),
@@ -417,6 +443,7 @@ def member_vote_history(member_id: int, limit: int = 30) -> list[dict]:
             "ORDER BY trade_date DESC LIMIT ?",
             (member_id, limit),
         ).fetchall()
+    latest_decided = _latest_decided_session_id()
     out: list[dict] = []
     for s in rows:
         mine = member_picks(s["id"], member_id)
@@ -429,6 +456,7 @@ def member_vote_history(member_id: int, limit: int = 30) -> list[dict]:
             "id": s["id"],
             "trade_date": s["trade_date"],
             "status": s["status"],
+            "status_display": _status_display(s["status"], s["id"], latest_decided),
             "my_allocations": mine,
             "basket": basket,
             "hits": [a["symbol"] for a in mine if a["symbol"] in chosen],

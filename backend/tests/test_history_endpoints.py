@@ -147,7 +147,7 @@ def test_club_history_shape_order_and_no_member_data():
     assert ids.index(s_closed) < ids.index(s_exec)
 
     ex = by_id[s_exec]
-    assert set(ex) == {"id", "trade_date", "status", "basket",
+    assert set(ex) == {"id", "trade_date", "status", "status_display", "basket",
                        "voters", "human_voters", "orders"}
     assert ex["trade_date"] == "2026-06-01" and ex["status"] == "executed"
     assert ex["basket"] == ["AAPL", "MSFT"]          # the DECIDED picks, in order
@@ -195,7 +195,7 @@ def test_me_votes_only_caller_rows_and_hits():
     a_sessions = {s["id"]: s for s in r_a.json()["sessions"]}
     assert set(a_sessions) == {sid}                  # only sessions A voted in
     mine = a_sessions[sid]
-    assert set(mine) == {"id", "trade_date", "status",
+    assert set(mine) == {"id", "trade_date", "status", "status_display",
                          "my_allocations", "basket", "hits"}
     assert mine["trade_date"] == "2026-06-06" and mine["status"] == "executed"
     assert mine["my_allocations"] == [{"symbol": "AAPL", "weight": 60.0},
@@ -241,3 +241,45 @@ def test_open_session_ballot_visible_to_owner_with_empty_basket():
     assert sid not in {s["id"] for s in r_b.json()["sessions"]}
     hist = client.get("/api/club/history", headers=_hdrs(tok_b))
     assert sid not in {s["id"] for s in hist.json()["sessions"]}
+
+
+# ─── status_display: a stale-closed row's cycle is over ──────────────────────
+
+def test_status_display_marks_stale_closed_as_executed():
+    """A 'closed' session that is no longer the LATEST decided one can never run
+    its buy leg (the executor only processes the latest cycle) — History shows it
+    as 'executed' via status_display, while the raw status (trading data) stays
+    'closed' and the vote_sessions row is never mutated."""
+    mid, tok = _mk_member("sd-alice@hclub.test")
+    # 2030-* dates sort after every date other modules seed (real 2026 dates via
+    # close_and_select, 2026-06-* above), so "latest decided" is deterministic
+    # here. picks=None keeps these out of performance.decided_cycles entirely.
+    s_stale = _mk_session("2030-06-01", "closed")
+    s_exec = _mk_session("2030-06-02", "executed")
+    s_latest = _mk_session("2030-06-03", "closed")
+    _vote(s_stale, mid, [("AAPL", 100)])
+    _vote(s_latest, mid, [("MSFT", 100)])
+
+    r = client.get("/api/club/history?limit=60", headers=_hdrs(tok))
+    assert r.status_code == 200
+    by_id = {s["id"]: s for s in r.json()["sessions"]}
+    # stale closed → displayed executed; raw status kept in the payload
+    assert by_id[s_stale]["status"] == "closed"
+    assert by_id[s_stale]["status_display"] == "executed"
+    # the latest decided session IS the live cycle — stays closed
+    assert by_id[s_latest]["status"] == "closed"
+    assert by_id[s_latest]["status_display"] == "closed"
+    # executed rows display as themselves
+    assert by_id[s_exec]["status"] == by_id[s_exec]["status_display"] == "executed"
+    # derivation only — the trading rows are untouched
+    with db() as conn:
+        raw = conn.execute("SELECT status FROM vote_sessions WHERE id IN (?,?,?) "
+                           "ORDER BY id", (s_stale, s_exec, s_latest)).fetchall()
+    assert [x["status"] for x in raw] == ["closed", "executed", "closed"]
+
+    # the personal history applies the SAME derivation
+    mine = {s["id"]: s for s in
+            client.get("/api/me/votes", headers=_hdrs(tok)).json()["sessions"]}
+    assert mine[s_stale]["status"] == "closed"
+    assert mine[s_stale]["status_display"] == "executed"
+    assert mine[s_latest]["status_display"] == "closed"

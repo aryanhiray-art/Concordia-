@@ -1,6 +1,6 @@
 "use client";
 
-// Step 4 — "Commit your stake": the wizard's compact allocation editor (the
+// Step 5 — "Commit your stake": the wizard's compact allocation editor (the
 // account page has the richer AllocationCard; the %/$ + setAllocation logic is
 // mirrored, not shared). The committed slice is all the club ever trades and
 // becomes voting power. Continue stays disabled until a value > 0 is saved.
@@ -60,10 +60,9 @@ export function StepStake({ onNext }: { onNext: () => void }) {
   return (
     <div>
       <p className="text-[13.5px] leading-relaxed text-muted">
-        Pick the slice of your account you commit to the club. That slice is{" "}
-        <b className="text-ink">all the club ever trades</b> — everything else in your
-        account stays untouched — and it becomes your <b className="text-ink">voting power</b>.
-        A global per-cycle safety cap applies on top.
+        Pick the slice of your account the club trades —{" "}
+        <b className="text-ink">only that slice, ever</b> — and it becomes your{" "}
+        <b className="text-ink">voting power</b>. A per-cycle safety cap applies on top.
       </p>
 
       {bal && (
@@ -95,11 +94,11 @@ export function StepStake({ onNext }: { onNext: () => void }) {
         {err && <div className="mt-2.5 text-[12px] text-red">⚠ {err}</div>}
         <div className="mt-2.5 text-[12.5px] text-muted">
           Committing <b className="text-teal">{money(acc.allocation.resolved_usd, 2)}</b> —
-          only this is traded + tracked.
+          the rest of your account stays untouched.
         </div>
       </div>
 
-      <Button variant="go" className="mt-5 w-full" onClick={onNext} disabled={!committed}>
+      <Button variant="go" className="mt-4 w-full" onClick={onNext} disabled={!committed}>
         Continue
       </Button>
       {!committed && (

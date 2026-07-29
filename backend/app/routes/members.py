@@ -134,6 +134,28 @@ def set_allocation(body: AllocationBody, member: dict = Depends(require_member))
     return _account_response(accountsnap.refresh_view(member["id"]))
 
 
+class DisplayNameBody(BaseModel):
+    display_name: str
+
+
+@router.put("/me/display-name")
+def set_display_name(body: DisplayNameBody, member: dict = Depends(require_member)):
+    """Change your own display name.
+
+    Session-only, same gate as the password paths: the name is how every other
+    member sees this account, so a leaked API key must not be able to rewrite it.
+    """
+    if member.get("_auth") != "session":
+        raise HTTPException(status_code=403, detail="log in to change your display name")
+    name = (body.display_name or "").strip()
+    if not name or len(name) > 40:
+        raise HTTPException(status_code=422, detail="display name must be 1–40 characters")
+    with db() as conn:
+        conn.execute("UPDATE members SET display_name=? WHERE id=?", (name, member["id"]))
+    audit(f"member:{member['id']}", "display_name", None, {"display_name": name})
+    return {"member": load_member(member["id"])}
+
+
 @router.put("/me/password")
 def change_password(body: PasswordBody, member: dict = Depends(require_member)):
     """Change your own password (e.g. after the owner reset it to a temp one) —

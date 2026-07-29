@@ -91,12 +91,15 @@ function VoteChip({ symbol, weight, hit }: { symbol: string; weight: number; hit
 
 function ClubCycleRow({ s }: { s: ClubHistorySession }) {
   const counts = orderedCounts(s.orders ?? {});
+  // status_display is presentation-only: stale closed cycles arrive as
+  // "executed"; only the latest closed row keeps "closed" (and the note).
+  const shown = s.status_display ?? s.status;
   return (
     <div className="border-t border-hair py-4 first:border-t-0 first:pt-0 last:pb-0">
       <div className="flex flex-wrap items-center gap-2.5">
         <span className="font-display text-[13.5px] font-semibold tnum">{s.trade_date}</span>
-        <Pill tone={sessionTone(s.status)}>{s.status}</Pill>
-        {s.status === "closed" && (
+        <Pill tone={sessionTone(shown)}>{shown}</Pill>
+        {shown === "closed" && (
           <span className="text-[11px] text-amber/80">sell settled, buy pending</span>
         )}
         <span className="ml-auto whitespace-nowrap text-[12px] text-muted tnum">
@@ -125,13 +128,14 @@ function ClubCycleRow({ s }: { s: ClubHistorySession }) {
 
 function VoteCard({ s }: { s: MyVoteSession }) {
   const open = s.status === "open";
+  const shown = s.status_display ?? s.status; // same contract as ClubCycleRow
   const hits = new Set(s.hits ?? []);
   const allocs = [...(s.my_allocations ?? [])].sort((a, b) => (b.weight ?? 0) - (a.weight ?? 0));
   return (
     <Card>
       <div className="flex flex-wrap items-center gap-2.5">
         <span className="font-display text-[13.5px] font-semibold tnum">{s.trade_date}</span>
-        <Pill tone={open ? "neutral" : sessionTone(s.status)}>{open ? "ballot open" : s.status}</Pill>
+        <Pill tone={open ? "neutral" : sessionTone(shown)}>{open ? "ballot open" : shown}</Pill>
         {open && <span className="text-[11px] text-subtle">results after close</span>}
       </div>
       {allocs.length > 0 ? (
@@ -205,7 +209,7 @@ export default function HistoryPage() {
       <header className="enter">
         <h1 className="font-display text-[34px] font-bold leading-none tracking-tight sm:text-[40px]">History</h1>
         <p className="mt-2 max-w-[620px] text-[13px] leading-relaxed text-muted">
-          The fund&apos;s cycle-by-cycle record — and, separately, your own ballots.
+          The fund&apos;s record — and your own ballots.
         </p>
       </header>
 
