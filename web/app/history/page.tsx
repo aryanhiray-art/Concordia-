@@ -12,7 +12,8 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { ClubHistorySession, ClubHistoryView, ExecutionRow, MyVoteSession, MyVotesView } from "@/lib/types";
-import { Card, Chip, Dots, LoadingScreen, Pill } from "@/components/ui";
+import { Card, Dots, LoadingScreen, Pill } from "@/components/ui";
+import { StockLink } from "@/components/StockLink";
 
 // The backend returns the raw executions row (SELECT *), which carries more
 // than the shared ExecutionRow type declares — the fields we render extra:
@@ -77,15 +78,18 @@ function orderedCounts(orders: Record<string, number>): [string, number][] {
 }
 
 // A pick chip for the "Your votes" tab: hits (made the basket) keep the teal
-// chip language, misses go quiet — same shape, neutral hairline.
+// chip language, misses go quiet — same shape, neutral hairline. Clicking one
+// opens the stock detail panel (StockLink unstyled keeps this custom skin).
 function VoteChip({ symbol, weight, hit }: { symbol: string; weight: number; hit: boolean }) {
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-display text-[12.5px] font-semibold ${
-      hit ? "border-teal/40 bg-teal/[0.1] text-ink" : "border-white/10 bg-white/[0.04] text-muted"
-    }`}>
+    <StockLink symbol={symbol} unstyled
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-display text-[12.5px] font-semibold transition ${
+        hit ? "border-teal/40 bg-teal/[0.1] text-ink hover:bg-teal/[0.16]"
+            : "border-white/10 bg-white/[0.04] text-muted hover:border-white/20 hover:text-ink"
+      }`}>
       {symbol} <span className="tnum">{weight}%</span>
       {hit && <span className="text-[10.5px] font-medium text-teal">✓ in basket</span>}
-    </span>
+    </StockLink>
   );
 }
 
@@ -108,7 +112,7 @@ function ClubCycleRow({ s }: { s: ClubHistorySession }) {
       </div>
       {s.basket.length > 0 ? (
         <div className="mt-2.5 flex flex-wrap gap-1.5">
-          {s.basket.map((sym) => <Chip key={sym}>{sym}</Chip>)}
+          {s.basket.map((sym) => <StockLink key={sym} symbol={sym} />)}
         </div>
       ) : (
         <p className="mt-2 text-[12px] text-subtle">no basket for this cycle</p>
@@ -249,7 +253,7 @@ export default function HistoryPage() {
                 </div>
                 {picks.length > 0 ? (
                   <div className="mt-4 flex flex-wrap gap-2">
-                    {picks.map((p) => <Chip key={p.symbol}>{p.symbol}</Chip>)}
+                    {picks.map((p) => <StockLink key={p.symbol} symbol={p.symbol} />)}
                   </div>
                 ) : (
                   <p className="mt-4 text-[13px] text-subtle">No decided basket yet — nothing has been voted through.</p>

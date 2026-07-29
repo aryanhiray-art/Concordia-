@@ -8,6 +8,7 @@ import { Logo } from "./ui";
 const TABS = [
   { href: "/", label: "Overview" },
   { href: "/vote", label: "Vote" },
+  { href: "/stocks", label: "Stocks" },
   { href: "/history", label: "History" },
   { href: "/account", label: "Account" },
 ];

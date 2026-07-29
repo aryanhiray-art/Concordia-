@@ -5,6 +5,7 @@ import { useAuth } from "@/lib/auth";
 import { AllocSliders } from "@/components/AllocSliders";
 import { MemberKeys } from "@/components/MemberKeys";
 import { Button, Card, Countdown, LoadingScreen } from "@/components/ui";
+import { StockLink } from "@/components/StockLink";
 
 function money(n?: number | null) {
   if (n == null) return "—";
@@ -76,7 +77,10 @@ export default function VotePage() {
               <div className="mt-4 flex flex-col gap-2.5">
                 {basket.map((b) => (
                   <div key={b.symbol} className="flex items-center gap-2.5">
-                    <span className="w-14 flex-none font-display text-[13px] font-semibold">{b.symbol}</span>
+                    <StockLink symbol={b.symbol} unstyled
+                      className="w-14 flex-none text-left font-display text-[13px] font-semibold transition hover:text-teal">
+                      {b.symbol}
+                    </StockLink>
                     <div className="bar flex-1"><i style={{ width: `${((b.weight || 0) / maxW) * 100}%` }} /></div>
                     <span className="w-16 flex-none text-right text-[12px] tnum text-muted">{money(b.weight)}</span>
                   </div>

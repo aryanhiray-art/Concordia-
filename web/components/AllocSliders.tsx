@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import type { Alloc, SessionView, UniverseItem } from "@/lib/types";
 import { Dots } from "./ui";
+import { StockLink } from "./StockLink";
 
 const MAX_PICKS = 20;
 
@@ -111,7 +112,10 @@ export function AllocSliders({
           {rows.map((r, i) => (
             <div key={r.symbol} className="vrow">
               <div className="vtk">
-                <b>{r.symbol}</b>
+                {/* the symbol opens the stock detail panel; .vtk b keeps its skin */}
+                <StockLink symbol={r.symbol} unstyled className="text-left transition hover:text-teal">
+                  <b>{r.symbol}</b>
+                </StockLink>
                 <s>{r.name}</s>
               </div>
               <input className="slider" type="range" min={0} max={100} step={1} value={r.weight}

@@ -1,6 +1,6 @@
 "use client";
 
-import type { Member, SessionView, UniverseItem, ExecutionRow, PowerView, Account, HoldingsView, ApiKey, ResearchResult, PerfView, AdminPanel, ClubHistoryView, MyVotesView } from "./types";
+import type { Member, SessionView, UniverseItem, ExecutionRow, PowerView, Account, HoldingsView, ApiKey, ResearchResult, PerfView, AdminPanel, ClubHistoryView, MyVotesView, StockDetail, StockSearchResult } from "./types";
 
 // Empty base = same-origin (Vercel rewrites /api + /oauth to the forge backend).
 // Local dev sets NEXT_PUBLIC_CONCORD_API=http://localhost:8780.
@@ -142,6 +142,21 @@ export const api = {
   // identities) vs. the caller's own ballots (caller-only)
   clubHistory: (limit = 30) => req<ClubHistoryView>(`/api/club/history?limit=${limit}`),
   myVotes: (limit = 30) => req<MyVotesView>(`/api/me/votes?limit=${limit}`),
+
+  // change how every other member sees you — session login only (403 on api-key)
+  renameDisplayName: (display_name: string) =>
+    req<{ member: Member }>("/api/me/display-name", {
+      method: "PUT", body: JSON.stringify({ display_name }),
+    }),
+
+  // stocks — the search page + the per-symbol detail slide-over.
+  // Detail is cheap to call: the backend caches per symbol (5-min quotes,
+  // 1-hour history) and 404s cleanly on garbage.
+  stockSearch: (q: string, limit = 20) =>
+    req<{ results: StockSearchResult[] }>(
+      `/api/stocks/search?q=${encodeURIComponent(q)}&limit=${limit}`),
+  stockDetail: (symbol: string) =>
+    req<StockDetail>(`/api/stocks/${encodeURIComponent(symbol.trim().toUpperCase())}`),
 
   // voting
   searchUniverse: (q: string, limit = 40) =>

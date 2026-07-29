@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { Inter, Outfit } from "next/font/google";
 import { AuthProvider } from "@/lib/auth";
 import { AppShell } from "@/components/AppShell";
+import { StockPanelProvider } from "@/components/StockPanel";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "swap" });
 const outfit = Outfit({ subsets: ["latin"], weight: ["500", "600", "700", "800"], variable: "--font-outfit", display: "swap" });
@@ -19,7 +20,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <div className="bgfx" aria-hidden />
         <div className="aurora" aria-hidden />
         <AuthProvider>
-          <AppShell>{children}</AppShell>
+          {/* ONE stock panel for the whole app — pages call openStock(sym) */}
+          <StockPanelProvider>
+            <AppShell>{children}</AppShell>
+          </StockPanelProvider>
         </AuthProvider>
       </body>
     </html>

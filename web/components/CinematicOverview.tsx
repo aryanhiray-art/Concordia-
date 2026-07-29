@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Freshness } from "@/components/ui";
+import { useStockPanel } from "@/components/StockPanel";
 import { sectorOf, sectorColor } from "@/lib/sectors";
 
 // A representative market shape; we compress its daily returns to the member's
@@ -32,6 +33,7 @@ export function CinematicOverview() {
     accountAsOf, accountStale, accountRefreshing, refreshAccount,
   } = useAuth();
   const router = useRouter();
+  const { openStock } = useStockPanel();  // stable callback from the app-level provider
   const root = useRef<HTMLDivElement>(null);
   const counted = useRef(false); // the hero count-up is a first-paint flourish, not a per-poll one
   const [lastPicks, setLastPicks] = useState<{ symbol: string; name?: string; weight?: number }[]>([]);
@@ -232,7 +234,7 @@ export function CinematicOverview() {
       ? `<span class="tnum" style="flex:1;text-align:right;font:600 14px/1 var(--font-outfit);color:var(--muted)">—</span>`
       : `<span class="tnum" style="flex:1;text-align:right;font:600 14px/1 var(--font-outfit);color:${p >= 0 ? "var(--green)" : "var(--red)"}">${p >= 0 ? "+" : "-"}$${Math.abs(p).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>`;
     $("#holdings").innerHTML = items.length
-      ? items.map((h) => `<div class="holdrow" data-vote="1"><span class="htk">${h.sym}</span><div class="hn"><b>${h.name || h.sym}</b><s>${h.sym}</s></div>${hold.length ? pnlCell(h.pnl) : `<span style="flex:1"></span>`}${hold.length ? `<span class="hwt tnum">$${Math.round(h.val || 0).toLocaleString()}</span>` : ""}</div>`).join("")
+      ? items.map((h) => `<div class="holdrow" data-stock="${h.sym}"><span class="htk">${h.sym}</span><div class="hn"><b>${h.name || h.sym}</b><s>${h.sym}</s></div>${hold.length ? pnlCell(h.pnl) : `<span style="flex:1"></span>`}${hold.length ? `<span class="hwt tnum">$${Math.round(h.val || 0).toLocaleString()}</span>` : ""}</div>`).join("")
       : `<div style="color:var(--subtle);font:500 13px/1.6 var(--font-inter);padding:8px 2px">No holdings yet — once the basket runs, your positions show here. <a href="/vote" style="color:var(--teal)">Cast your vote →</a></div>`;
 
     drawChart("ALL"); renderSectors();
@@ -257,7 +259,13 @@ export function CinematicOverview() {
     const onKey = (e: KeyboardEvent) => { if (e.key === "ArrowRight") next(); else if (e.key === "ArrowLeft") prev(); };
     document.addEventListener("keydown", onKey);
     $("#donutring").addEventListener("click", (e: any) => e.stopPropagation());
-    const onNav = (e: any) => { if (e.target.closest("[data-vote],.strip a")) router.push("/vote"); };
+    const onNav = (e: any) => {
+      // a holdings/consensus row opens the stock detail panel…
+      const st = e.target.closest("[data-stock]");
+      if (st) { openStock(st.getAttribute("data-stock") || ""); return; }
+      // …everything else tagged for voting still goes to the ballot
+      if (e.target.closest("[data-vote],.strip a")) router.push("/vote");
+    };
     r.addEventListener("click", onNav);
 
     // drag / wheel / touch
@@ -279,7 +287,7 @@ export function CinematicOverview() {
     // `loaded` matters: the stage only mounts after it flips, and that render can
     // have identical value/items deps — without it the effect would never
     // initialize the freshly-mounted stage.
-  }, [loaded, value, pctTarget, itemsKey, itemsLabel, histKey, router]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [loaded, value, pctTarget, itemsKey, itemsLabel, histKey, router, openStock]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Wait for the account + holdings fetches before choosing what to show — a
   // funded member should never flash the zero-state (or a $0 hero) while loading.

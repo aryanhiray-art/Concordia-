@@ -210,6 +210,38 @@ export type MyVoteSession = {
 };
 export type MyVotesView = { sessions: MyVoteSession[] };
 
+// ── Stocks (search page + the detail slide-over) ───────────────────────────
+// GET /api/stocks/search — universe matcher, each hit {symbol, name}.
+export type StockSearchResult = { symbol: string; name: string };
+
+export type StockRangeKey = "1M" | "3M" | "1Y";
+export type StockPricePoint = { d: string; c: number };  // ISO date, close
+
+/** GET /api/stocks/{SYM} fundamentals — every field nullable: the backend
+ *  serves nulls when the broker is unreachable or doesn't know. */
+export type StockFundamentals = {
+  market_cap: number | null;
+  pe_ratio: number | null;
+  dividend_yield: number | null;   // already a percent (0.44 = 0.44%)
+  high_52w: number | null;
+  low_52w: number | null;
+  volume: number | null;
+  avg_volume: number | null;
+  sector: string | null;
+  description: string | null;
+};
+
+export type StockDetail = {
+  symbol: string;
+  name: string;
+  quote: { price: number | null; prev_close: number | null; change_pct: number | null };
+  range: Record<StockRangeKey, StockPricePoint[]>;
+  fundamentals: StockFundamentals;
+  in_universe: boolean;
+  /** epoch seconds of the quote snapshot. */
+  as_of: number;
+};
+
 export type ExecutionRow = {
   symbol: string;
   side: string;
