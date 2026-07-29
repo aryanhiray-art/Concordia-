@@ -207,6 +207,10 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
 
   async function submit() {
     if (mode === "signup" && !consent) { setErr("please accept the club agreement first"); return; }
+    // Check the password BEFORE signupStart: that call emails a real code and
+    // burns a slot in two rate-limit windows, so a password the server will
+    // reject at the final step must not cost the member a send first.
+    if (mode === "signup" && password.length < 8) { setErr("password must be at least 8 characters"); return; }
     setErr(null); setNote(null); setBusy(true);
     try {
       if (mode === "signup") {
