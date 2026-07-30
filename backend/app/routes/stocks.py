@@ -22,8 +22,9 @@ def search_stocks(q: str = "", limit: int = 20, member: dict = Depends(require_m
 
 @router.get("/{symbol}")
 def stock_detail(symbol: str, member: dict = Depends(require_member)):
-    """One payload for the stock-detail view: quote, 1M/3M/1Y closes,
-    normalized fundamentals, universe membership. 404 on garbage."""
+    """One payload for the stock-detail view: quote, the latest session's
+    day range (open/high/low/volume), 1M/3M/1Y closes, normalized fundamentals,
+    universe membership. 404 on garbage."""
     try:
         return svc.detail(symbol)
     except svc.UnknownSymbol:

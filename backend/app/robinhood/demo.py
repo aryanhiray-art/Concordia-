@@ -76,7 +76,9 @@ class DemoClient:
         Each bar is a pure function of (symbol, date): a gentle drift from ~80%
         of the symbol's pseudo-price up to it, plus a ±4.5% per-day hash wiggle —
         so the stock-detail range charts (and demo club performance) render with
-        plausible, refresh-stable data instead of an empty series.
+        plausible, refresh-stable data instead of an empty series. Bars carry
+        full OHLCV like the broker's do: the detail payload's day range is read
+        off the last one.
         """
         try:
             start = datetime.date.fromisoformat(str(start_time)[:10])
@@ -95,7 +97,21 @@ class DemoClient:
                     wig = int(hashlib.sha256(f"{sym}:{d}".encode()).hexdigest()[:6], 16)
                     trend = 0.80 + 0.20 * (d - start).days / span
                     close = p * trend * (1 + (wig % 900 - 450) / 10000)
-                    bars.append({"begins_at": d.isoformat(), "close_price": round(close, 2)})
+                    lo = close * (1 - (wig % 40 + 5) / 2000)   # 0.25%–2.2% below
+                    hi = close * (1 + ((wig >> 5) % 40 + 5) / 2000)
+                    if d == today:
+                        # the live quote is _price(sym) and moves on the hour —
+                        # today's bar must still contain it, or the demo's day
+                        # range renders with the price outside its own low/high
+                        lo, hi = min(lo, p * 0.995), max(hi, p * 1.005)
+                    bars.append({
+                        "begins_at": d.isoformat(),
+                        "open_price": round((lo + hi) / 2, 2),
+                        "close_price": round(close, 2),
+                        "high_price": round(hi, 2),
+                        "low_price": round(lo, 2),
+                        "volume": 800_000 + wig % 40_000_000,
+                    })
                 d += datetime.timedelta(days=1)
             results.append({"symbol": sym, "bars": bars})
         return {"data": {"results": results}}

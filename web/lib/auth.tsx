@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { api, ApiError, getToken, setToken } from "@/lib/api";
+import { api, ApiError, getToken, markActivity, readActivity, setToken } from "@/lib/api";
 import type { Account, Holding, Member, PowerView, SessionView } from "@/lib/types";
 
 type Ctx = {
@@ -41,6 +41,9 @@ type Ctx = {
   refreshMember: () => Promise<void>;
   refreshSession: () => Promise<void>;
   logout: () => void;
+  /** Set when the session ended on its own (idle timeout) — the sign-in screen
+   *  shows it as a quiet note so being logged out never reads as an error. */
+  signedOutNote: string | null;
 };
 
 const AuthCtx = createContext<Ctx | null>(null);
@@ -70,6 +73,35 @@ const POLL_MS = 5 * 60_000;
  *  from overnight should. */
 const VIS_MIN_AGE_MS = 60_000;
 
+// ── idle auto-logout ──────────────────────────────────────────────────────
+/** How long a member can go without touching the app before we sign them out.
+ *  This is the ONE knob for the policy (change IDLE_NOTE below to match).
+ *  Being logged out is the safe failure here (the session can move real money
+ *  in the member's brokerage account), so every ambiguity resolves to logout. */
+const IDLE_LOGOUT_MS = 2 * 60 * 60_000; // 2 hours
+/** How often the deadline is re-checked. Only ever compares timestamps, so a
+ *  throttled background tab or a sleeping laptop can delay the check but never
+ *  extend the session. */
+const IDLE_CHECK_MS = 30_000;
+/** Activity is recorded at most this often — pointer/key/scroll events are
+ *  cheap only if they don't each write storage (and they never set state). */
+const ACTIVITY_THROTTLE_MS = 10_000;
+/** If the deadline lands while the member is literally mid-entry (a non-empty
+ *  text field focused), they get ONE grace window, then they're out. Typing
+ *  itself counts as activity, so this only covers "typed, then paused". */
+const IDLE_GRACE_MS = 60_000;
+
+const IDLE_NOTE = "Signed out after 2 hours of inactivity — log back in to pick up where you left off.";
+
+/** A non-empty text field has focus → treat as mid-typing. */
+function midEntry(): boolean {
+  const el = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
+  if (!el) return false;
+  const tag = el.tagName;
+  if (tag !== "INPUT" && tag !== "TEXTAREA" && !(el as HTMLElement).isContentEditable) return false;
+  return Boolean((el.value ?? (el as HTMLElement).textContent ?? "").trim());
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false);
   const [member, setMember] = useState<Member | null>(null);
@@ -77,6 +109,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<SessionView | null>(null);
   const [offline, setOffline] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
+  const [signedOutNote, setSignedOutNote] = useState<string | null>(null);
 
   const [account, setAccount] = useState<Account | null>(null);
   const [holdings, setHoldings] = useState<Holding[]>([]);
@@ -213,9 +246,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(id);
   }, [offline, refreshMember]);
 
-  const logout = useCallback(async () => {
-    // Best-effort server logout FIRST: without it the 30-day httpOnly cookie
-    // stays valid long after the client forgot the member. A failure (offline,
+  // `note` is the reason the session ended, shown on the sign-in screen. The
+  // exported logout() takes none on purpose: it's wired straight to onClick in
+  // Nav/ConfirmEmail, which would otherwise hand it a MouseEvent.
+  const endSession = useCallback(async (note: string | null) => {
+    setSignedOutNote(note);
+    // Best-effort server logout FIRST: without it the httpOnly cookie stays
+    // valid long after the client forgot the member. A failure (offline,
     // already-dead session) must never block the local logout.
     try { await api.logout(); } catch { /* best-effort */ }
     setToken(null); setMember(null); setPower(null); setSession(null);
@@ -224,6 +261,63 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAccountError(null); setAccountRefreshing(false);
     lastFetchRef.current = 0;
   }, []);
+  const logout = useCallback(() => { endSession(null); }, [endSession]);
+
+  // Idle auto-logout. The deadline is computed from a shared lastActivity
+  // stamp (lib/api.ts, localStorage) rather than a setTimeout, so a throttled
+  // background tab, a closed laptop or a reload can't extend the session — and
+  // a second tab being used keeps this one alive.
+  const memberId = member?.id ?? null;
+  useEffect(() => {
+    if (!memberId) return;
+    let fired = false;
+    let lastMark = 0;
+    let graceUntil = 0;
+    let graceUsed = false;
+    // Fallback deadline for sessions with no stamp at all — blocked storage,
+    // or a session that predates this feature. They get the full window from
+    // this mount; the policy degrades to this tab only, never to "off".
+    let memLast = Date.now();
+
+    const mark = () => {
+      const now = Date.now();
+      if (now - lastMark < ACTIVITY_THROTTLE_MS) return;
+      lastMark = now;
+      memLast = now;
+      graceUntil = 0; graceUsed = false;
+      markActivity(now);
+    };
+
+    const check = () => {
+      if (fired) return;
+      const last = readActivity() ?? memLast;
+      const now = Date.now();
+      if (now - last < IDLE_LOGOUT_MS) return;
+      if (!graceUsed && midEntry()) { graceUsed = true; graceUntil = now + IDLE_GRACE_MS; return; }
+      if (graceUntil && now < graceUntil) return;
+      fired = true;
+      endSession(IDLE_NOTE);
+    };
+
+    // Coming back to the tab: settle the deadline BEFORE counting the return
+    // as activity, or a tab left buried past the deadline would revive itself.
+    const onVis = () => { if (!document.hidden) { check(); mark(); } };
+
+    check();                                    // a reload can't launder idle time away
+    const opts = { passive: true } as const;
+    window.addEventListener("pointerdown", mark, opts);
+    window.addEventListener("keydown", mark, opts);
+    window.addEventListener("scroll", mark, { passive: true, capture: true });
+    document.addEventListener("visibilitychange", onVis);
+    const id = setInterval(check, IDLE_CHECK_MS);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener("pointerdown", mark);
+      window.removeEventListener("keydown", mark);
+      window.removeEventListener("scroll", mark, { capture: true } as any);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [memberId, endSession]);
 
   return (
     <AuthCtx.Provider value={{
@@ -233,7 +327,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       accountStale: account?.stale === true,
       accountReady, accountError, accountRefreshing,
       refreshAccount, reloadAccount, applyAccount,
-      setMember, refreshMember, refreshSession, logout,
+      setMember, refreshMember, refreshSession, logout, signedOutNote,
     }}>
       {children}
     </AuthCtx.Provider>

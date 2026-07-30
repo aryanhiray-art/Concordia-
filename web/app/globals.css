@@ -395,11 +395,21 @@ body { background: transparent; }
 .vtk { width: 92px; flex: none; }
 .vtk b { font: 600 13.5px/1 var(--font-outfit), sans-serif; }
 .vtk s { display: block; font: 400 11px/1.2 var(--font-inter), sans-serif; color: var(--subtle); text-decoration: none; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.slider { flex: 1; -webkit-appearance: none; appearance: none; height: 6px; border-radius: 999px; background: var(--hair); outline: none; cursor: pointer; }
+/* min-width:0 is load-bearing: a flex item defaults to min-width:auto, and a
+   range input's intrinsic minimum (~129px) refused to shrink, so vtk 92 +
+   slider + pctin 64 + gaps overflowed a 375px phone and scrolled /vote
+   sideways. Without this the media query below can't help. */
+.slider { flex: 1; min-width: 0; -webkit-appearance: none; appearance: none; height: 6px; border-radius: 999px; background: var(--hair); outline: none; cursor: pointer; }
 .slider::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 0 4px rgba(45,212,191,0.18), 0 2px 6px rgba(0,0,0,0.4); cursor: grab; }
 .slider::-moz-range-thumb { width: 18px; height: 18px; border: none; border-radius: 50%; background: var(--teal); }
 .pctin { width: 64px; flex: none; text-align: right; font: 600 15px/1 var(--font-outfit), sans-serif; color: var(--ink); background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 6px 4px; font-variant-numeric: tabular-nums; }
 .pctin:focus { outline: none; border-color: rgba(45,212,191,0.4); background: rgba(255,255,255,0.04); }
+/* Phones: buy the slider back some travel so it stays draggable. */
+@media (max-width: 460px) {
+  .vrow { gap: 10px; }
+  .vtk { width: 76px; }
+  .pctin { width: 54px; }
+}
 .del { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; color: var(--subtle); border: 1px solid transparent; cursor: pointer; transition: .18s; flex: none; background: none; }
 .del:hover { color: var(--red); background: rgba(255,107,107,0.08); border-color: rgba(255,107,107,0.25); }
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { fmtDateTime, fmtTime } from "@/lib/format";
 
 export function Logo({ size = 40 }: { size?: number }) {
   // The concordia mark: three concentric "C" arcs, gaps facing right —
@@ -121,11 +122,9 @@ export function Freshness({
   if (!asOf && !stale) return null;
   let when = "";
   if (asOf) {
-    const d = new Date(asOf * 1000);
-    const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
     // A snapshot from another day must not masquerade as "9:42 this morning".
-    const sameDay = d.toDateString() === new Date().toDateString();
-    when = sameDay ? time : `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${time}`;
+    const sameDay = new Date(asOf * 1000).toDateString() === new Date().toDateString();
+    when = sameDay ? fmtTime(asOf) : fmtDateTime(asOf);
   }
   return (
     <span className={`inline-flex items-center gap-2 text-[11.5px] ${stale ? "text-amber" : "text-subtle"} ${className}`}>

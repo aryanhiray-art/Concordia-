@@ -7,6 +7,7 @@ import { AllocSliders } from "@/components/AllocSliders";
 import { MemberKeys } from "@/components/MemberKeys";
 import { Button, Card, Countdown, LoadingScreen } from "@/components/ui";
 import { StockLink } from "@/components/StockLink";
+import { fmtTime, fmtTradeDate } from "@/lib/format";
 
 function money(n?: number | null) {
   if (n == null) return "—";
@@ -20,8 +21,7 @@ function ClosedBallot({ session }: { session: SessionView }) {
   const names: Record<string, string> = {};
   session.tally.forEach((t) => { names[t.symbol] = t.name; });
   const picks = session.my_picks || [];
-  const lockedAt = new Date(session.closes_at * 1000)
-    .toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const lockedAt = fmtTime(session.closes_at);
   return (
     <div className="glass rise p-5 sm:p-6">
       <div className="flex items-center justify-between border-b border-hair pb-3">
@@ -29,7 +29,7 @@ function ClosedBallot({ session }: { session: SessionView }) {
         <span className="text-[11.5px] text-subtle">read-only</span>
       </div>
       <p className="mt-3 text-[13px] text-muted">
-        Voting is closed — today&apos;s ballot locked at <b className="text-ink">{lockedAt}</b>.
+        Locked at <b className="text-ink">{lockedAt}</b>.
       </p>
       {picks.length === 0 ? (
         <p className="mt-3 text-[13px] text-subtle">You didn&apos;t cast a vote this cycle.</p>
@@ -68,7 +68,6 @@ export default function VotePage() {
         <Card className="enter mx-auto max-w-[460px]">
           <span className="label">Today&apos;s ballot</span>
           <p className="mt-3 text-[13px] text-red">⚠ Couldn&apos;t load the ballot — {sessionError}</p>
-          <p className="mt-1.5 text-[12px] text-subtle">A connection blip — you&apos;re still signed in.</p>
           <Button variant="glass" busy={retrying} onClick={retry} className="mt-4">Retry</Button>
         </Card>
       </div>
@@ -86,7 +85,7 @@ export default function VotePage() {
         <div>
           <h1 className="font-display text-[34px] font-bold leading-none tracking-tight sm:text-[40px]">Cast your vote</h1>
           <div className="mt-2.5 text-[13.5px] text-muted">
-            {session.trade_date} ·{" "}
+            {fmtTradeDate(session.trade_date)} ·{" "}
             {open ? <>voting <b className="text-teal">closes in <Countdown to={session.closes_at} /></b></>
               : <span className="text-red">voting closed</span>}
           </div>
@@ -117,7 +116,7 @@ export default function VotePage() {
             </div>
             <p className="mt-1 text-[12px] text-subtle">top {session.top_n} by voting power</p>
             {basket.length === 0 ? (
-              <p className="mt-5 text-[13px] text-subtle">No votes yet — yours could lead.</p>
+              <p className="mt-5 text-[13px] text-subtle">No votes yet.</p>
             ) : (
               <div className="mt-4 flex flex-col gap-2.5">
                 {basket.map((b) => (

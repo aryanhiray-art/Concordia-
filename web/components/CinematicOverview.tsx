@@ -8,6 +8,7 @@ import { useAuth } from "@/lib/auth";
 import { Freshness } from "@/components/ui";
 import { useStockPanel } from "@/components/StockPanel";
 import { sectorOf, sectorColor } from "@/lib/sectors";
+import { fmtDate, fmtTradeDate } from "@/lib/format";
 
 // A representative market shape; we compress its daily returns to the member's
 // real club P&L and scale it to end at their real club value.
@@ -55,9 +56,13 @@ export function CinematicOverview() {
   const pctTarget = (pnl && pnl.invested > 0 && pnl.profit_pct != null) ? pnl.profit_pct : 0;
   // Real weekly account-value history (voting_power_history.equity) → the line
   // plots ACTUAL values, not a canned market shape, once there are ≥2 points.
-  const equityHist = (acc?.power?.history || [])
-    .map((h) => h.equity).filter((e): e is number => e != null && e > 0);
+  // week_start rides along so the axis/scrub can label REAL dates; when this is
+  // empty the line is the synthetic fallback shape and gets no dates at all
+  // (a made-up date on a money chart is worse than no date).
+  const histPoints = (acc?.power?.history || []).filter((h) => h.equity != null && h.equity > 0);
+  const equityHist = histPoints.map((h) => h.equity as number);
   const histKey = equityHist.join(",");
+  const dateKey = histPoints.map((h) => h.week_start).join(",");
   // donut + holdings reflect what you actually HOLD; fall back to today's forming
   // basket, then to the LAST DECIDED basket (early morning / post-liquidation the
   // active ballot is empty — never show a bare dash).
@@ -102,11 +107,45 @@ export function CinematicOverview() {
       const fsc = value / fund[N - 1];
       FUSD = fund.map((v) => v * fsc);
     }
+    // Scrub-tooltip dates, interpolated across the SAME anchors as the values —
+    // so a point on the line is dated by the week it actually came from. No real
+    // history ⇒ no dates (the tooltip renders empty rather than inventing one).
     const DATES: string[] = [];
-    const d0 = new Date(2026, 2, 1);
-    for (let j = 0; j < N; j++) DATES.push(new Date(d0.getTime() + j * 1.4 * 864e5).toLocaleDateString("en-US", { month: "short", day: "numeric" }));
+    const nowSec = Math.floor(Date.now() / 1000);
+    const anchorSecs = anchors.length >= 2
+      ? [...histPoints.map((h) => {
+          const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(h.week_start || "");
+          return m ? new Date(+m[1], +m[2] - 1, +m[3]).getTime() / 1000 : nowSec;
+        }), nowSec]
+      : [];
+    if (anchorSecs.length >= 2) {
+      const segs = anchorSecs.length - 1;
+      for (let i = 0; i < N; i++) {
+        const t = (i / (N - 1)) * segs;
+        const lo = Math.min(segs - 1, Math.floor(t)), f = t - lo;
+        DATES.push(fmtDate(anchorSecs[lo] * (1 - f) + anchorSecs[lo + 1] * f));
+      }
+    }
     const TF: Record<string, number> = { "1D": 6, "1W": 9, "1M": 22, "3M": 64, "1Y": N, ALL: N };
-    const TFAX: Record<string, string[]> = { "1D": ["10AM","12PM","2PM","4PM"], "1W": ["Mon","Wed","Fri"], "1M": ["Wk1","Wk2","Wk3","Wk4"], "3M": ["3mo","2mo","now"], "1Y": ["Q1","Q2","Q3","now"], ALL: ["start","now"] };
+    // Every timeframe labels the span it ACTUALLY plots, read out of DATES (the
+    // per-point dates interpolated from real weekly anchors). These used to be
+    // hard-coded decoration — "10AM/12PM/2PM/4PM", "Mon/Wed/Fri", "Wk1..Wk4",
+    // "Q1/Q2/Q3/now" — invented labels bearing no relation to the plotted data,
+    // which on a money chart reads as fact. Owner call, now applied to ALL
+    // ranges, not just ALL: real dates or nothing.
+    const axisFor = (sliceFrom: number, ticks = 3): string[] => {
+      if (DATES.length < 2) return [];
+      const last = N - 1;
+      const from = Math.max(0, Math.min(sliceFrom, last));
+      if (last - from < 1) return [];
+      const out: string[] = [];
+      for (let k = 0; k < ticks; k++) {
+        const idx = Math.round(from + ((last - from) * k) / (ticks - 1));
+        out.push(DATES[Math.min(last, Math.max(0, idx))]);
+      }
+      // Short spans can land two ticks on the same day — show it once.
+      return out.filter((d, i) => i === 0 || d !== out[i - 1]);
+    };
     let fundPts: number[][] = [], usd: number[] = [], sliceStart = 0;
     const fmt = (v: number) => "$" + v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const setColor = (up: boolean) => { const c = up ? "#2DD4BF" : "#8A94A6"; $("#fundpath")?.setAttribute("stroke", c); $("#fc0")?.setAttribute("stop-color", c); $("#fc1")?.setAttribute("stop-color", c); };
@@ -127,7 +166,7 @@ export function CinematicOverview() {
       const fp = fundPts.map((p) => p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
       $("#fundpath")?.setAttribute("points", fp);
       $("#area")?.setAttribute("points", fp + " " + W + "," + H + " 0," + H);
-      $("#axis").innerHTML = TFAX[tf].map((l) => "<span>" + l + "</span>").join("");
+      $("#axis").innerHTML = axisFor(s).map((l) => "<span>" + l + "</span>").join("");
       r!.querySelectorAll(".tf").forEach((b: any) => b.classList.toggle("on", b.dataset.tf === tf));
       readout(m - 1);
     }
@@ -235,7 +274,7 @@ export function CinematicOverview() {
       : `<span class="tnum" style="flex:1;text-align:right;font:600 14px/1 var(--font-outfit);color:${p >= 0 ? "var(--green)" : "var(--red)"}">${p >= 0 ? "+" : "-"}$${Math.abs(p).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>`;
     $("#holdings").innerHTML = items.length
       ? items.map((h) => `<div class="holdrow" data-stock="${h.sym}"><span class="htk">${h.sym}</span><div class="hn"><b>${h.name || h.sym}</b><s>${h.sym}</s></div>${hold.length ? pnlCell(h.pnl) : `<span style="flex:1"></span>`}${hold.length ? `<span class="hwt tnum">$${Math.round(h.val || 0).toLocaleString()}</span>` : ""}</div>`).join("")
-      : `<div style="color:var(--subtle);font:500 13px/1.6 var(--font-inter);padding:8px 2px">No holdings yet — once the basket runs, your positions show here. <a href="/vote" style="color:var(--teal)">Cast your vote →</a></div>`;
+      : `<div style="color:var(--subtle);font:500 13px/1.6 var(--font-inter);padding:8px 2px">No holdings yet. <a href="/vote" style="color:var(--teal)">Cast your vote →</a></div>`;
 
     drawChart("ALL"); renderSectors();
     // Count up the hero ONCE per visit. The snapshot now refreshes on a 5-minute
@@ -287,7 +326,7 @@ export function CinematicOverview() {
     // `loaded` matters: the stage only mounts after it flips, and that render can
     // have identical value/items deps — without it the effect would never
     // initialize the freshly-mounted stage.
-  }, [loaded, value, pctTarget, itemsKey, itemsLabel, histKey, router, openStock]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [loaded, value, pctTarget, itemsKey, itemsLabel, histKey, dateKey, router, openStock]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Wait for the account + holdings fetches before choosing what to show — a
   // funded member should never flash the zero-state (or a $0 hero) while loading.
@@ -297,7 +336,7 @@ export function CinematicOverview() {
     if (failed) {
       return (
         <div className="glass shine enter mt-4 p-6 sm:p-7">
-          <div className="text-[13px] text-red">⚠ Couldn&apos;t load your account right now — refresh to try again.</div>
+          <div className="text-[13px] text-red">⚠ Couldn&apos;t load your account right now.</div>
         </div>
       );
     }
@@ -378,7 +417,7 @@ export function CinematicOverview() {
         {/* The dollars above and below are a snapshot, not a live tape — say when
             it was taken. Footnote-quiet, and only turns amber when it's old. */}
         <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-          <div className="label">Consensus basket · {session?.voters ?? 0} voter{(session?.voters ?? 0) === 1 ? "" : "s"} · by voting power</div>
+          <div className="label">Consensus basket</div>
           <Freshness asOf={accountAsOf} stale={accountStale} busy={accountRefreshing} onRefresh={refreshAccount} />
         </div>
         <div id="holdings" />

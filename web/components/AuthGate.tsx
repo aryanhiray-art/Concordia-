@@ -105,11 +105,11 @@ function BrandPane() {
               {demo ? (
                 <>
                   <HowRow n={1} title="Use the invite code: demo"
-                    body="Type demo in the invite box — the playground is open to everyone." />
+                    body="The playground is open to everyone." />
                   <HowRow n={2} title="Use your real email"
                     body="We email you a 6-digit code to confirm it, just like the club." />
                   <HowRow n={3} title="Pick any name and password"
-                    body="Demo accounts are fully separate from the real club — create and use one freely." />
+                    body="Demo accounts are fully separate from the real club." />
                 </>
               ) : (
                 <>
@@ -135,7 +135,10 @@ function BrandPane() {
   );
 }
 
-export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
+// `notice` = why the last session ended (today: the 2-hour idle logout). It
+// opens the card on the LOG IN tab and prints a quiet line above the form —
+// an expired session is a normal event, never an error.
+export function AuthGate({ onAuthed, notice }: { onAuthed: (m: Member) => void; notice?: string | null }) {
   const pathname = usePathname();
   // On admin.voteconcordia.com the same login card serves the ops console —
   // but the GIS origin isn't authorized for the admin subdomain, so Google
@@ -145,7 +148,11 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
   // demo.voteconcordia.com: fake-money playground — ".demo" branding, no
   // Google (origin unauthorized). Codes travel by REAL email, same as the club.
   const demoHost = isDemoHost();
-  const [mode, setMode] = useState<"signup" | "login">("signup");
+  const [mode, setMode] = useState<"signup" | "login">(notice ? "login" : "signup");
+  // "You were signed out after 2 hours idle" explains ONE arrival at this
+  // screen. Leaving the login tab means it has been read; without this it
+  // re-appears every time you toggle back, long after it stopped being true.
+  const [dismissedNotice, setDismissedNotice] = useState(false);
   const [invite, setInvite] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -330,7 +337,7 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
             <div>
               <div className="font-display text-[16px] font-bold">Almost in</div>
               <p className="mt-1 text-[13px] leading-relaxed text-muted">
-                Google verified you — now enter your club invite and accept the agreement.
+                Enter your club invite and accept the agreement.
               </p>
             </div>
             <div>
@@ -358,7 +365,7 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
               <div className="font-display text-[16px] font-bold">Check your email</div>
               <p className="mt-1 text-[13px] leading-relaxed text-muted">
                 We emailed a 6-digit code to{" "}
-                <span className="text-teal">{email.trim()}</span> — enter it to finish.
+                <span className="text-teal">{email.trim()}</span>.
               </p>
             </div>
             <div>
@@ -388,12 +395,7 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
           <div className="space-y-3.5">
             {forgotStep === "email" && (
               <>
-                <div>
-                  <div className="font-display text-[16px] font-bold">Reset your password</div>
-                  <p className="mt-1 text-[13px] leading-relaxed text-muted">
-                    Enter your email and we&apos;ll send you a 6-digit reset code.
-                  </p>
-                </div>
+                <div className="font-display text-[16px] font-bold">Reset your password</div>
                 <div>
                   <label className="label mb-2">Email</label>
                   <input className="input" placeholder="you@email.com" type="email" value={forgotEmail}
@@ -410,8 +412,8 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
               <>
                 <div className="font-display text-[16px] font-bold">Reset your password</div>
                 <p className="text-[13px] leading-relaxed text-muted">
-                  This club can&apos;t send email right now. Ask the club owner to reset your
-                  password — they&apos;ll give you a temporary one you can change after logging in.
+                  This club can&apos;t send email right now — ask the club owner for a
+                  temporary password.
                 </p>
               </>
             )}
@@ -454,9 +456,15 @@ export function AuthGate({ onAuthed }: { onAuthed: (m: Member) => void }) {
               <button onClick={() => { setMode("signup"); setErr(null); setNote(null); }}
                 className={mode === "signup" ? "font-semibold text-teal" : "text-subtle"}>Create account</button>
               <span className="text-subtle/50">·</span>
-              <button onClick={() => { setMode("login"); setErr(null); }}
+              <button onClick={() => { setMode("login"); setErr(null); setDismissedNotice(true); }}
                 className={mode === "login" ? "font-semibold text-teal" : "text-subtle"}>Log in</button>
             </div>
+
+            {notice && mode === "login" && !dismissedNotice && (
+              <p className="mb-4 rounded-[12px] border border-white/10 bg-white/[0.04] px-3.5 py-2.5 text-[12.5px] leading-relaxed text-muted">
+                {notice}
+              </p>
+            )}
 
             {googleEnabled && !adminHost && !demoHost && (
               <>

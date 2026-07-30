@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { PerfView } from "@/lib/types";
+import { fmtTradeDate } from "@/lib/format";
 
 // Inline SVG line chart (no chart library): the club's decision basket vs SPY
 // buy & hold, both indexed to 100 at the first decided session. All text lives
@@ -14,9 +15,7 @@ const PAD = { t: 10, r: 10, b: 10, l: 10 };
 function pct(p: number | null): string {
   return p == null ? "—" : `${p >= 0 ? "+" : ""}${p.toFixed(1)}%`;
 }
-function day(d: string): string {
-  return new Date(`${d}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
+
 // Catmull-Rom → cubic beziers, for gently smoothed lines
 function smooth(pts: number[][]): string {
   if (pts.length < 2) return "";
@@ -109,8 +108,8 @@ export function ClubPerformance() {
       </svg>
 
       <div className="mt-1 flex justify-between text-[11px] text-subtle tnum">
-        <span>{day(pts[0].d)}</span>
-        {pts.length > 1 && <span>{day(pts[pts.length - 1].d)}</span>}
+        <span>{fmtTradeDate(pts[0].d)}</span>
+        {pts.length > 1 && <span>{fmtTradeDate(pts[pts.length - 1].d)}</span>}
       </div>
       <div className="mt-1 text-[11px] text-subtle">
         Basket decisions, equal-weight, vs SPY buy &amp; hold — not your account balance.

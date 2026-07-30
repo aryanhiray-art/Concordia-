@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { fmtDate } from "@/lib/format";
 import type { ApiKey } from "@/lib/types";
 
 // Where a bot should POST: the API base when it's a separate origin (local
@@ -11,11 +12,6 @@ import type { ApiKey } from "@/lib/types";
 function publicUrl(): string {
   if (api.base) return api.base;
   return typeof window === "undefined" ? "" : window.location.origin;
-}
-
-function fmtTime(epoch?: number | null) {
-  if (!epoch) return "—";
-  return new Date(epoch * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 function SecretField({ value }: { value: string }) {
@@ -65,8 +61,7 @@ export function MemberKeys() {
         <span className="text-[11.5px] text-subtle">connect your own bot</span>
       </div>
       <p className="mt-1.5 text-[13px] text-muted">
-        Generate a key, then have your own program cast your daily vote — same voting power, same ballot, no money moved.
-        The full key is shown once.
+        Let your own program cast your daily vote — same voting power, same ballot, no money moved.
       </p>
 
       <div className="mt-4 flex flex-wrap items-end gap-2.5">
@@ -82,7 +77,7 @@ export function MemberKeys() {
         <div className="mt-4">
           <div className="label mb-2 !text-teal">New key — copy it now</div>
           <SecretField value={fresh} />
-          <p className="mt-2 text-[12px] text-subtle">Shown once and cannot be retrieved later.</p>
+          <p className="mt-2 text-[12px] text-subtle">It is never shown again.</p>
         </div>
       )}
 
@@ -93,7 +88,7 @@ export function MemberKeys() {
               <span className="font-mono text-[13px] text-ink">{k.prefix}…</span>
               <span className="text-[12.5px] text-muted">{k.name}</span>
               <span className="ml-auto text-[11.5px] text-subtle">
-                {k.last_used_at ? `used ${fmtTime(k.last_used_at)}` : `made ${fmtTime(k.created_at)}`}
+                {k.last_used_at ? `used ${fmtDate(k.last_used_at)}` : `made ${fmtDate(k.created_at)}`}
               </span>
               <button className="btn btn-ghost !px-2 !py-1 !text-[12px] hover:!text-red" onClick={() => revoke(k.id)}>Revoke</button>
             </div>

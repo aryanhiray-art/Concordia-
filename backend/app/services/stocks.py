@@ -132,17 +132,71 @@ def _fetch_fundamentals(client, symbol: str) -> dict:
     return out
 
 
-def _fetch_history(client, symbol: str) -> list[dict]:
-    """[{d: ISO date, c: close}] ascending — ONE 1-year daily-bars call; the
-    shorter ranges are sliced from it, never fetched separately."""
+# The broker's daily bars carry OHLCV; the quote endpoint carries no day range
+# at all, so the session's open/high/low/volume are read off the LAST bar of the
+# 1-year call we already make — no extra broker round-trip.
+_BAR_KEYS = {
+    "open": ("open_price", "open", "o"),
+    "high": ("high_price", "high", "h"),
+    "low": ("low_price", "low", "l"),
+    "volume": ("volume", "v"),
+}
+_EMPTY_DAY = {"d": None, "open": None, "high": None, "low": None, "volume": None}
+
+
+def _bar_results(payload) -> list:
+    """The per-symbol result rows of a historicals payload (same defensive
+    unwrapping as performance._parse_historicals)."""
+    data = payload.get("data", payload) if isinstance(payload, dict) else {}
+    if isinstance(data, dict):
+        return data.get("results") or []
+    return data if isinstance(data, list) else []
+
+
+def _last_bar(payload, symbol: str) -> dict:
+    """{d, open, high, low, volume} of the most recent daily bar for `symbol`.
+
+    Nulls (never a raise) when the payload is shaped differently or the broker
+    doesn't carry a field — the day-range strip just hides itself.
+    """
+    best: tuple[str, dict] | None = None
+    for r in _bar_results(payload):
+        if not isinstance(r, dict) or str(r.get("symbol") or "").upper() != symbol:
+            continue
+        for b in r.get("bars") or r.get("historicals") or r.get("data_points") or []:
+            if not isinstance(b, dict):
+                continue
+            d = b.get("begins_at") or b.get("timestamp") or b.get("t")
+            if not d:
+                continue
+            d = str(d)[:10]
+            if best is None or d >= best[0]:
+                best = (d, b)
+    if best is None:
+        return dict(_EMPTY_DAY)
+    day = dict(_EMPTY_DAY, d=best[0])
+    for key, spellings in _BAR_KEYS.items():
+        for s in spellings:
+            v = _num(best[1].get(s))
+            if v is not None:
+                day[key] = v
+                break
+    return day
+
+
+def _fetch_history(client, symbol: str) -> tuple[list[dict], dict]:
+    """([{d: ISO date, c: close}] ascending, last bar's {d,open,high,low,volume})
+    — ONE 1-year daily-bars call; the shorter ranges are sliced from it and the
+    day range is read off its last bar, never fetched separately."""
     start = time.strftime("%Y-%m-%dT00:00:00Z",
                           time.gmtime(time.time() - _RANGE_DAYS["1Y"] * 86400))
     try:
         payload = client.get_equity_historicals([symbol], start, interval="day")
     except Exception:  # noqa: BLE001
-        return []
+        return [], dict(_EMPTY_DAY)
     series = _parse_historicals(payload).get(symbol) or {}
-    return [{"d": d, "c": series[d]} for d in sorted(series)]
+    return ([{"d": d, "c": series[d]} for d in sorted(series)],
+            _last_bar(payload, symbol))
 
 
 def _slice_ranges(hist: list[dict]) -> dict:
@@ -157,7 +211,7 @@ def _slice_ranges(hist: list[dict]) -> dict:
 # ─── the one detail payload ──────────────────────────────────────────────────
 
 def detail(symbol: str) -> dict:
-    """The stock-detail view: quote + 1M/3M/1Y closes + normalized fundamentals.
+    """The stock-detail view: quote + day range + 1M/3M/1Y closes + fundamentals.
 
     Raises UnknownSymbol for a malformed symbol, or one that is neither in the
     universe nor priceable at the broker (the caller maps it to a clean 404).
@@ -191,11 +245,12 @@ def detail(symbol: str) -> dict:
         raise UnknownSymbol("no such symbol")
 
     hist = ent.get("hist") if hist_fresh else None
+    day = ent.get("day") if hist_fresh else None
     if hist is None and client is not None:
-        hist = _fetch_history(client, symbol)
+        hist, day = _fetch_history(client, symbol)
         # an EMPTY series retries on the quote cadence, not a full hour — a
         # transient broker miss must not blank the charts for 60 minutes
-        ent["hist"] = hist
+        ent["hist"], ent["day"] = hist, day
         ent["hist_at"] = now if hist else now - (HIST_TTL_S - QF_TTL_S)
 
     return {
@@ -204,6 +259,7 @@ def detail(symbol: str) -> dict:
         "quote": (qf or {}).get("quote") or {"price": None, "prev_close": None,
                                              "change_pct": None},
         "range": _slice_ranges(hist or []),
+        "day": day or dict(_EMPTY_DAY),
         "fundamentals": (qf or {}).get("fundamentals")
                         or {k: None for k in (*_FUND_NUM_KEYS, *_FUND_STR_KEYS)},
         "in_universe": in_universe,

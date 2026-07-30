@@ -231,10 +231,24 @@ export type StockFundamentals = {
   description: string | null;
 };
 
+/** The latest daily bar — the broker's quote carries no intraday high/low, so
+ *  the day strip reads OHLCV off the last bar of the history call. `d` is that
+ *  bar's date (the current session once it opens, otherwise the previous one);
+ *  every field is null when the broker doesn't carry it. */
+export type StockDayBar = {
+  d: string | null;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  volume: number | null;
+};
+
 export type StockDetail = {
   symbol: string;
   name: string;
   quote: { price: number | null; prev_close: number | null; change_pct: number | null };
+  /** Optional so the UI compiles (and hides the strip) against an older backend. */
+  day?: StockDayBar;
   range: Record<StockRangeKey, StockPricePoint[]>;
   fundamentals: StockFundamentals;
   in_universe: boolean;

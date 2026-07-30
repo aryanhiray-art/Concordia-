@@ -283,3 +283,84 @@ def test_status_display_marks_stale_closed_as_executed():
     assert mine[s_stale]["status"] == "closed"
     assert mine[s_stale]["status_display"] == "executed"
     assert mine[s_latest]["status_display"] == "closed"
+
+
+# ─── status_display: an abandoned open ballot is 'expired', not 'open' ────────
+
+def test_stale_open_session_displays_expired_and_genuine_open_stays_open():
+    """Prod carries vote_sessions id=4 (2026-06-22, status='open', closes_at
+    2026-06-22 12:30) — a ballot abandoned mid-cycle over a month ago. It must
+    never present as an open ballot ("results after close" for a cycle that will
+    never close); it displays as 'expired', with no basket. A ballot whose close
+    time is still ahead is the real thing and is untouched.
+
+    Trade dates are back-dated and both rows are removed at the end so this test
+    can't leave a stray 'open' session for the shared-DB modules that follow.
+    """
+    mid, tok = _mk_member("sd-stale@hclub.test")
+    now = int(time.time())
+    with db() as conn:
+        stale = conn.execute(
+            "INSERT INTO vote_sessions(trade_date,status,opened_at,closes_at,top_n) "
+            "VALUES('2026-06-25','open',?,?,3)", (now - 400_000, now - 300_000),
+        ).lastrowid
+        live = conn.execute(
+            "INSERT INTO vote_sessions(trade_date,status,opened_at,closes_at,top_n) "
+            "VALUES('2026-06-26','open',?,?,3)", (now, now + 3600),
+        ).lastrowid
+    _vote(stale, mid, [("AAPL", 100)])
+    _vote(live, mid, [("MSFT", 100)])
+    try:
+        mine = {s["id"]: s for s in
+                client.get("/api/me/votes", headers=_hdrs(tok)).json()["sessions"]}
+        # the member DID vote in the dead ballot — it stays visible, told honestly
+        assert mine[stale]["status"] == "open"
+        assert mine[stale]["status_display"] == "expired"
+        assert mine[stale]["basket"] == [] and mine[stale]["hits"] == []
+        assert [a["symbol"] for a in mine[stale]["my_allocations"]] == ["AAPL"]
+        # a ballot that hasn't hit its close time yet is the genuine open one
+        assert mine[live]["status"] == mine[live]["status_display"] == "open"
+
+        # derivation only — the trading rows keep saying 'open'
+        with db() as conn:
+            raw = conn.execute("SELECT status FROM vote_sessions WHERE id IN (?,?) "
+                               "ORDER BY id", (stale, live)).fetchall()
+        assert [x["status"] for x in raw] == ["open", "open"]
+
+        # club history never lists undecided sessions at all
+        hist = client.get("/api/club/history?limit=60", headers=_hdrs(tok)).json()["sessions"]
+        assert {stale, live}.isdisjoint({s["id"] for s in hist})
+    finally:
+        with db() as conn:
+            conn.execute("DELETE FROM votes WHERE session_id IN (?,?)", (stale, live))
+            conn.execute("DELETE FROM vote_sessions WHERE id IN (?,?)", (stale, live))
+
+
+def test_is_abandoned_open_rule_matches_the_admin_console():
+    """One staleness rule, shared: the console's _current_open_session drops the
+    same rows the history views mark 'expired' (a third copy is how they drift)."""
+    from app.services import adminview
+    from app.services.voting import is_abandoned_open
+
+    now = int(time.time())
+    assert is_abandoned_open({"status": "open", "closes_at": now - 90_000}) is True
+    assert is_abandoned_open({"status": "open", "closes_at": now - 3_600}) is False
+    assert is_abandoned_open({"status": "open", "closes_at": now + 3_600}) is False
+    # only OPEN rows can be abandoned — a decided cycle is just history
+    assert is_abandoned_open({"status": "closed", "closes_at": now - 90_000}) is False
+    assert is_abandoned_open({"status": "executed", "closes_at": now - 90_000}) is False
+    # a row with no close time recorded is not evidence of abandonment
+    assert is_abandoned_open({"status": "open", "closes_at": None}) is False
+
+    # and the console honours it: the newest open row being abandoned means
+    # there is no current ballot to judge quorum on, not "quorum met yesterday".
+    with db() as conn:
+        sid = conn.execute(
+            "INSERT INTO vote_sessions(trade_date,status,opened_at,closes_at,top_n) "
+            "VALUES('2099-01-01','open',?,?,3)", (now - 400_000, now - 300_000),
+        ).lastrowid
+    try:
+        assert adminview._current_open_session() is None
+    finally:
+        with db() as conn:
+            conn.execute("DELETE FROM vote_sessions WHERE id=?", (sid,))

@@ -2,65 +2,27 @@
 
 // /history — two tabs, one page (owner feedback: "History should show the
 // history of the fund… the unique part should show their votes"):
-//   · Club history (default) — the fund's cycle-by-cycle record, plus the
-//     existing latest-run execution detail expanded up top.
+//   · Club history (default) — the fund's cycle-by-cycle record, led by the
+//     basket it is holding right now. (The per-member execution table that used
+//     to sit here is gone — owner call; the club record is the point.)
 //   · Your votes — the caller's own ballots, hits highlighted.
 // Tab state is client-side only — no route change.
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { useAuth } from "@/lib/auth";
-import type { ClubHistorySession, ClubHistoryView, ExecutionRow, MyVoteSession, MyVotesView } from "@/lib/types";
+import type { ClubHistorySession, ClubHistoryView, MyVoteSession, MyVotesView } from "@/lib/types";
 import { Card, Dots, LoadingScreen, Pill } from "@/components/ui";
 import { StockLink } from "@/components/StockLink";
-
-// The backend returns the raw executions row (SELECT *), which carries more
-// than the shared ExecutionRow type declares — the fields we render extra:
-type ExecRow = ExecutionRow & {
-  id?: number;
-  created_at?: number;      // epoch seconds
-  place_json?: string | null;
-};
+import { fmtTradeDate } from "@/lib/format";
 
 type ResultsView = Awaited<ReturnType<typeof api.results>>;
 
-function money(n?: number | null) {
-  if (n == null) return null;
-  return n.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 });
-}
-
-// Member's local time with timezone abbreviation, e.g. "Jul 23, 9:31 AM EDT".
-function when(ts?: number | null) {
-  if (!ts) return "—";
-  return new Date(ts * 1000).toLocaleString(undefined, {
-    month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
-  });
-}
-
-// Sell orders carry no dollar_amount — the estimated share quantity lives in place_json.
-function qtyOf(r: ExecRow): string | null {
-  if (!r.place_json) return null;
-  try {
-    const q = JSON.parse(r.place_json)?._concord_est_qty;
-    if (typeof q === "number" && Number.isFinite(q)) return `${q} sh`;
-  } catch { /* ignore malformed json */ }
-  return null;
-}
-
-// placed = teal · held/reviewed/planned = muted · skipped = amber · error = red
-function statusTone(s: string): "teal" | "warn" | "danger" | "neutral" {
-  if (s === "placed") return "teal";
-  if (s === "skipped") return "warn";
-  if (s === "error") return "danger";
-  return "neutral";
-}
-
 // Session status pill: executed = teal · closed = amber (sell settled, buy
-// pending) · anything else (open / future states) = neutral.
+// pending) · expired = amber (abandoned ballot) · anything else = neutral.
 function sessionTone(s: string): "teal" | "warn" | "neutral" {
   if (s === "executed") return "teal";
-  if (s === "closed") return "warn";
+  if (s === "closed" || s === "expired") return "warn";
   return "neutral";
 }
 
@@ -101,7 +63,7 @@ function ClubCycleRow({ s }: { s: ClubHistorySession }) {
   return (
     <div className="border-t border-hair py-4 first:border-t-0 first:pt-0 last:pb-0">
       <div className="flex flex-wrap items-center gap-2.5">
-        <span className="font-display text-[13.5px] font-semibold tnum">{s.trade_date}</span>
+        <span className="font-display text-[13.5px] font-semibold tnum">{fmtTradeDate(s.trade_date)}</span>
         <Pill tone={sessionTone(shown)}>{shown}</Pill>
         {shown === "closed" && (
           <span className="text-[11px] text-amber/80">sell settled, buy pending</span>
@@ -115,7 +77,7 @@ function ClubCycleRow({ s }: { s: ClubHistorySession }) {
           {s.basket.map((sym) => <StockLink key={sym} symbol={sym} />)}
         </div>
       ) : (
-        <p className="mt-2 text-[12px] text-subtle">no basket for this cycle</p>
+        <p className="mt-2 text-[12px] text-subtle">no basket</p>
       )}
       {counts.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11.5px] text-subtle tnum">
@@ -131,32 +93,36 @@ function ClubCycleRow({ s }: { s: ClubHistorySession }) {
 }
 
 function VoteCard({ s }: { s: MyVoteSession }) {
-  const open = s.status === "open";
+  // Gate on status_display, never the raw status: a ballot abandoned mid-cycle
+  // still says 'open' in the DB forever, and promising "results after close"
+  // for a cycle that closed a month ago (or never will) is a lie.
   const shown = s.status_display ?? s.status; // same contract as ClubCycleRow
+  const open = shown === "open";
+  const expired = shown === "expired";
   const hits = new Set(s.hits ?? []);
   const allocs = [...(s.my_allocations ?? [])].sort((a, b) => (b.weight ?? 0) - (a.weight ?? 0));
   return (
     <Card>
       <div className="flex flex-wrap items-center gap-2.5">
-        <span className="font-display text-[13.5px] font-semibold tnum">{s.trade_date}</span>
-        <Pill tone={open ? "neutral" : sessionTone(shown)}>{open ? "ballot open" : shown}</Pill>
+        <span className="font-display text-[13.5px] font-semibold tnum">{fmtTradeDate(s.trade_date)}</span>
+        <Pill tone={sessionTone(shown)}>{open ? "ballot open" : shown}</Pill>
         {open && <span className="text-[11px] text-subtle">results after close</span>}
+        {expired && <span className="text-[11px] text-amber/80">never closed</span>}
       </div>
       {allocs.length > 0 ? (
         <div className="mt-3 flex flex-wrap gap-1.5">
           {allocs.map((a) => (
-            <VoteChip key={a.symbol} symbol={a.symbol} weight={a.weight} hit={!open && hits.has(a.symbol)} />
+            <VoteChip key={a.symbol} symbol={a.symbol} weight={a.weight} hit={hits.has(a.symbol)} />
           ))}
         </div>
       ) : (
-        <p className="mt-3 text-[12px] text-subtle">no picks on this ballot</p>
+        <p className="mt-3 text-[12px] text-subtle">no picks</p>
       )}
     </Card>
   );
 }
 
 export default function HistoryPage() {
-  const { member } = useAuth();
   const [tab, setTab] = useState<"club" | "mine">("club");
   const [data, setData] = useState<ResultsView | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -170,7 +136,7 @@ export default function HistoryPage() {
       setData(await api.results());
       setErr(null);
     } catch (e: any) {
-      setErr(e?.message || "could not load the execution log");
+      setErr(e?.message || "could not load the latest basket");
     }
     try {
       setHist(await api.clubHistory());
@@ -199,12 +165,7 @@ export default function HistoryPage() {
 
   if (!data && !err) return <div className="pt-10"><LoadingScreen label="loading the history" /></div>;
 
-  const session = data?.session ?? null;
-  const rows = (data?.executions ?? []) as ExecRow[];
-  const sorted = [...rows].sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0) || a.symbol.localeCompare(b.symbol));
   const picks = [...(data?.last_decided?.picks ?? [])].sort((a, b) => (b.weight ?? 0) - (a.weight ?? 0));
-  // The owner's log includes every member's rows — show whose they are.
-  const showMember = member?.role === "owner" && sorted.some((r) => r.display_name);
   const cycles = hist?.sessions ?? [];
   const ballots = mine?.sessions ?? [];
 
@@ -212,9 +173,6 @@ export default function HistoryPage() {
     <div className="stagger space-y-5">
       <header className="enter">
         <h1 className="font-display text-[34px] font-bold leading-none tracking-tight sm:text-[40px]">History</h1>
-        <p className="mt-2 max-w-[620px] text-[13px] leading-relaxed text-muted">
-          The fund&apos;s record — and your own ballots.
-        </p>
       </header>
 
       <div className="seg enter" role="tablist" aria-label="History view">
@@ -234,84 +192,28 @@ export default function HistoryPage() {
         </Card>
       )}
       {err && data && (
-        <div className="text-[12px] text-subtle">⚠ last refresh failed — showing the previous data</div>
+        <div className="text-[12px] text-subtle">⚠ refresh failed — showing older data</div>
       )}
 
       {tab === "club" && (
         <>
-          {/* ── Latest run (the expanded execution detail) ─────────────── */}
+          {/* ── The basket the club is holding right now ───────────────── */}
           {data && (
-            <>
-              <div className="enter label !text-teal">Latest run</div>
-
-              <Card>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="label !text-teal">Latest decided basket</span>
-                  {data?.last_decided && (
-                    <span className="text-[11.5px] text-subtle tnum">{data.last_decided.trade_date}</span>
-                  )}
-                </div>
-                {picks.length > 0 ? (
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {picks.map((p) => <StockLink key={p.symbol} symbol={p.symbol} />)}
-                  </div>
-                ) : (
-                  <p className="mt-4 text-[13px] text-subtle">No decided basket yet — nothing has been voted through.</p>
+            <Card>
+              <div className="flex items-center justify-between gap-3">
+                <span className="label !text-teal">Latest decided basket</span>
+                {data?.last_decided && (
+                  <span className="text-[11.5px] text-subtle tnum">{fmtTradeDate(data.last_decided.trade_date)}</span>
                 )}
-              </Card>
-
-              <Card>
-                <div className="flex items-center justify-between gap-3">
-                  <span className="label">Your executions</span>
-                  {session && <span className="text-[11.5px] text-subtle tnum">cycle {session.trade_date}</span>}
+              </div>
+              {picks.length > 0 ? (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {picks.map((p) => <StockLink key={p.symbol} symbol={p.symbol} />)}
                 </div>
-
-                {sorted.length === 0 ? (
-                  <p className="mt-4 text-[13px] text-subtle">No orders in your account yet for this basket.</p>
-                ) : (
-                  // the table scrolls inside this container on small screens — never the page
-                  <div className="mt-4 overflow-x-auto">
-                    <table className="w-full min-w-[560px] border-collapse text-left">
-                      <thead>
-                        <tr>
-                          {showMember && <th className="label whitespace-nowrap pb-3 pr-4 !text-[10.5px]">Member</th>}
-                          <th className="label whitespace-nowrap pb-3 pr-4 !text-[10.5px]">Symbol</th>
-                          <th className="label whitespace-nowrap pb-3 pr-4 !text-[10.5px]">Side</th>
-                          <th className="label whitespace-nowrap pb-3 pr-4 !text-[10.5px]">Amount</th>
-                          <th className="label whitespace-nowrap pb-3 pr-4 !text-[10.5px]">Status</th>
-                          <th className="label whitespace-nowrap pb-3 !text-[10.5px]">Time</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {sorted.map((r, i) => (
-                          <tr key={r.id ?? `${r.symbol}-${r.side}-${i}`} className="border-t border-hair align-top">
-                            {showMember && (
-                              <td className="whitespace-nowrap py-3 pr-4 text-[13px] text-muted">{r.display_name || "—"}</td>
-                            )}
-                            <td className="whitespace-nowrap py-3 pr-4 font-display text-[13.5px] font-semibold">{r.symbol}</td>
-                            <td className={`whitespace-nowrap py-3 pr-4 text-[12.5px] font-medium ${r.side === "sell" ? "text-red" : "text-green"}`}>
-                              {r.side}
-                            </td>
-                            <td className="whitespace-nowrap py-3 pr-4 text-[13px] tnum">
-                              {money(r.dollar_amount) ?? qtyOf(r) ?? "—"}
-                            </td>
-                            <td className="py-3 pr-4">
-                              <Pill tone={statusTone(r.status)}>{r.status}</Pill>
-                              {r.error && (r.status === "skipped" || r.status === "error") && (
-                                <div className={`mt-1.5 max-w-[280px] text-[11.5px] leading-snug ${r.status === "error" ? "text-red" : "text-amber"}`}>
-                                  {r.error}
-                                </div>
-                              )}
-                            </td>
-                            <td className="whitespace-nowrap py-3 text-[12.5px] text-muted tnum">{when(r.created_at)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </Card>
-            </>
+              ) : (
+                <p className="mt-4 text-[13px] text-subtle">No decided basket yet.</p>
+              )}
+            </Card>
           )}
 
           {/* ── Every past cycle, newest first ─────────────────────────── */}
@@ -324,10 +226,10 @@ export default function HistoryPage() {
             </div>
             {histErr && !hist && <div className="text-[13px] text-red">⚠ {histErr}</div>}
             {!hist && !histErr && (
-              <div className="flex items-center gap-3 text-[12px] text-subtle"><Dots /> loading the club history…</div>
+              <div className="flex items-center gap-3 text-[12px] text-subtle"><Dots /> loading…</div>
             )}
             {hist && (cycles.length === 0 ? (
-              <p className="text-[13px] text-subtle">No cycles yet — history fills in after the first vote closes.</p>
+              <p className="text-[13px] text-subtle">No cycles yet.</p>
             ) : (
               <div>
                 {cycles.map((s) => <ClubCycleRow key={s.id} s={s} />)}
@@ -344,13 +246,13 @@ export default function HistoryPage() {
           )}
           {!mine && !mineErr && (
             <Card>
-              <div className="flex items-center gap-3 text-[12px] text-subtle"><Dots /> loading your ballots…</div>
+              <div className="flex items-center gap-3 text-[12px] text-subtle"><Dots /> loading…</div>
             </Card>
           )}
           {mine && (ballots.length === 0 ? (
             <Card>
               <p className="text-[13px] text-subtle">
-                You haven&apos;t voted yet — today&apos;s ballot is on the{" "}
+                No ballots yet — today&apos;s is on the{" "}
                 <Link href="/vote" className="font-semibold text-teal hover:underline">Vote page</Link>.
               </p>
             </Card>

@@ -4,7 +4,8 @@ Contract:
 - GET /api/stocks/search?q= -> {results: [{symbol, name}]} from the votable
   universe (same matcher as /api/universe), member-only.
 - GET /api/stocks/{symbol} -> {symbol, name, quote{price,prev_close,change_pct},
-  range{1M,3M,1Y: [{d,c}]}, fundamentals{...}, in_universe, as_of}.
+  day{d,open,high,low,volume}, range{1M,3M,1Y: [{d,c}]}, fundamentals{...},
+  in_universe, as_of}.
   Garbage/unknown symbols -> clean 404. Universe symbols serve even with the
   broker unreachable (nulls, empty ranges) — search must never 500.
 - Both 401 unauthenticated.
@@ -98,10 +99,17 @@ class _FakeClient:
         ]}}
 
     def get_equity_historicals(self, symbols, start_time, interval="day"):
+        older = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 9 * 86400))
         day = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 3 * 86400))
         return {"data": {"results": [
-            {"symbol": s, "historicals": [{"begins_at": f"{day}T00:00:00Z",
-                                           "close_price": "195.50"}]}
+            {"symbol": s, "historicals": [
+                {"begins_at": f"{older}T00:00:00Z", "close_price": "180.00",
+                 "open_price": "178.00", "high_price": "181.00",
+                 "low_price": "177.00", "volume": 1_000_000},
+                {"begins_at": f"{day}T00:00:00Z", "close_price": "195.50",
+                 "open_price": "193.00", "high_price": "197.25",
+                 "low_price": "192.10", "volume": 41_000_000},
+            ]}
             for s in symbols
         ]}}
 
@@ -146,6 +154,36 @@ def test_detail_shape_from_a_mocked_broker(monkeypatch):
         assert body["range"][rng] and body["range"][rng][-1]["c"] == 195.5
 
 
+def test_day_range_comes_off_the_latest_bar(monkeypatch):
+    """The quote endpoint carries no intraday high/low, so the day strip reads
+    the LAST daily bar of the history call we already make — never an older one,
+    and never an extra broker round-trip."""
+    _mid, tok = _mk_member("stock-day@aclub.test")
+    _wire_broker(monkeypatch, _FakeClient())
+    day = client.get("/api/stocks/AAPL", headers=_hdrs(tok)).json()["day"]
+    assert day["d"] == time.strftime("%Y-%m-%d", time.gmtime(time.time() - 3 * 86400))
+    assert day["open"] == 193.0 and day["high"] == 197.25 and day["low"] == 192.1
+    assert day["volume"] == 41_000_000
+
+
+def test_day_range_is_null_when_the_broker_omits_ohlc(monkeypatch):
+    """Close-only bars (an older/partial broker payload) must still serve — the
+    day fields come back null so the UI hides the strip, never 0.0."""
+    _mid, tok = _mk_member("stock-day-null@aclub.test")
+
+    class CloseOnly(_FakeClient):
+        def get_equity_historicals(self, symbols, start_time, interval="day"):
+            d = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 2 * 86400))
+            return {"data": {"results": [
+                {"symbol": s, "historicals": [{"begins_at": d, "close_price": "12.5"}]}
+                for s in symbols]}}
+
+    _wire_broker(monkeypatch, CloseOnly())
+    day = client.get("/api/stocks/AAPL", headers=_hdrs(tok)).json()["day"]
+    assert day["high"] is None and day["low"] is None and day["volume"] is None
+    assert day["d"] == time.strftime("%Y-%m-%d", time.gmtime(time.time() - 2 * 86400))
+
+
 def test_detail_is_cached_second_hit_costs_no_broker_calls(monkeypatch):
     _mid, tok = _mk_member("stock-cache@aclub.test")
     calls = {"n": 0}
@@ -172,3 +210,5 @@ def test_garbage_symbol_404s_and_universe_survives_broker_down(monkeypatch):
     body = r.json()
     assert body["quote"]["price"] is None
     assert body["range"] == {"1M": [], "3M": [], "1Y": []}
+    assert body["day"] == {"d": None, "open": None, "high": None,
+                           "low": None, "volume": None}

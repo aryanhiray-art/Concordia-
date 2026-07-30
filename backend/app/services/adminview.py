@@ -18,7 +18,6 @@ calendar_covers guard) — with one plain-English reason per failed gate, so
 from __future__ import annotations
 
 import json
-import time
 
 from ..calendar_us import calendar_covers, today_et
 from ..config import settings
@@ -34,13 +33,10 @@ def _current_open_session() -> dict | None:
     """The open ballot, ignoring STALE rows. A session abandoned mid-cycle stays
     status='open' forever (prod carries one from 2026-06-22), and it would
     otherwise masquerade as "today's ballot" and have its quorum judged instead
-    of the session the next run actually executes. An open ballot whose close
-    time is more than a day past is cruft, not the current cycle."""
+    of the session the next run actually executes. The staleness rule itself
+    lives in voting.is_abandoned_open — the history views share it."""
     row = voting.latest_session("open")
-    if not row:
-        return None
-    closes_at = row.get("closes_at") or 0
-    if closes_at and closes_at < time.time() - 86400:
+    if not row or voting.is_abandoned_open(row):
         return None
     return row
 

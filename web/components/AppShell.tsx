@@ -11,14 +11,14 @@ import { LoadingScreen } from "@/components/ui";
 import { isAdminHost } from "@/lib/host";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const { ready, member, refreshMember, offline, accountReady } = useAuth();
+  const { ready, member, refreshMember, offline, accountReady, signedOutNote } = useAuth();
   const pathname = usePathname();
   // /terms + /privacy are documents, not app screens: they must render for a
   // half-verified member, on the admin host, and without any account data.
   const isLegal = pathname === "/terms" || pathname === "/privacy";
 
   if (!ready) return <LoadingScreen label="starting concordia" />;
-  if (!member) return <AuthGate onAuthed={() => refreshMember()} />;
+  if (!member) return <AuthGate notice={signedOutNote} onAuthed={() => refreshMember()} />;
 
   // admin.voteconcordia.com: same accounts, entirely different shell — no Nav,
   // no wizard/overview, no member banners. Ops console for owner/admin, a clean
@@ -86,12 +86,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           )}
         </div>
       )}
+      {/* No footer: the Nav already carries the wordmark, and a strapline
+          under every page was just repeating it (owner call). */}
       <main className={`mx-auto w-[min(1080px,100%)] px-4 pb-24 ${hasBanner ? "pt-4" : "pt-[88px]"} sm:px-6`}>
         {children}
       </main>
-      <p className="pb-8 text-center text-[11px] text-subtle">
-        Concordia · a trading club that votes
-      </p>
     </>
   );
 }

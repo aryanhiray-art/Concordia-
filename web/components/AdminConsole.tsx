@@ -12,6 +12,7 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { AdminPanel } from "@/lib/types";
 import { Button, Card, Logo, Pill } from "./ui";
+import { fmtTradeDate } from "@/lib/format";
 
 const POLL_MS = 60_000;
 
@@ -98,9 +99,12 @@ function fmtET(ts: number | string | null | undefined, withDate = false): string
   if (ts == null) return "—";
   const d = typeof ts === "number" ? new Date(ts * (ts > 1e12 ? 1 : 1000)) : new Date(ts);
   if (isNaN(d.getTime())) return String(ts);
+  // Deliberately NOT lib/format's helpers: the ops console must read in ET
+  // (the club's trading clock), not the viewer's zone. Date shape still
+  // MM/DD/YYYY — "en-US" + 2-digit month/day gives exactly that.
   const opts: Intl.DateTimeFormatOptions = {
     timeZone: "America/New_York", hour: "numeric", minute: "2-digit",
-    ...(withDate ? { month: "short", day: "numeric" } : {}),
+    ...(withDate ? { month: "2-digit", day: "2-digit", year: "numeric" } : {}),
   };
   return `${d.toLocaleString("en-US", opts)} ET`;
 }
@@ -310,7 +314,7 @@ export function AdminConsole() {
               {panel.cycle.open ? (
                 <div className="space-y-2 text-[13.5px]">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-display font-semibold">{panel.cycle.open.trade_date}</span>
+                    <span className="font-display font-semibold">{fmtTradeDate(panel.cycle.open.trade_date)}</span>
                     <span className="text-muted">closes {fmtET(panel.cycle.open.closes_at)}</span>
                     <Pill tone={panel.cycle.open.quorum_met ? "ok" : "warn"}>
                       {panel.cycle.open.quorum_met ? "quorum met" : "quorum not met"}
@@ -333,7 +337,7 @@ export function AdminConsole() {
                 <SectionLabel>Last run</SectionLabel>
                 {panel.cycle.last_executed ? (
                   <div className="flex flex-wrap items-center gap-2 text-[13.5px]">
-                    <span className="font-display font-semibold">{panel.cycle.last_executed.trade_date}</span>
+                    <span className="font-display font-semibold">{fmtTradeDate(panel.cycle.last_executed.trade_date)}</span>
                     <span className="flex flex-wrap gap-x-3 text-[13px] text-muted tnum">
                       {Object.entries(panel.cycle.last_executed.by_status).map(([k, v]) => (
                         <span key={k} className={k === "error" && v > 0 ? "font-semibold text-red" : ""}>

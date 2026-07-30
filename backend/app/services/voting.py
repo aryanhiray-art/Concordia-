@@ -375,6 +375,26 @@ def execution_order_counts(session_id: int) -> dict:
     return {r["status"]: r["n"] for r in rows}
 
 
+# An 'open' row whose close time is more than a day past was abandoned
+# mid-cycle — prod carries one from 2026-06-22. It is cruft, not a live ballot.
+STALE_OPEN_AFTER_SECS = 86400
+
+
+def is_abandoned_open(session) -> bool:
+    """True for a session still marked 'open' whose closes_at is over a day past.
+
+    The single source of the staleness rule: adminview (which ballot's quorum
+    counts) and the history views (which ballot may present as open) must agree,
+    or a dead 2026-06-22 row masquerades as today's cycle in one of them.
+    Accepts any row-like (dict or sqlite3.Row).
+    """
+    try:
+        status, closes_at = session["status"], session["closes_at"]
+    except (KeyError, IndexError, TypeError):
+        return False
+    return status == "open" and bool(closes_at) and closes_at < time.time() - STALE_OPEN_AFTER_SECS
+
+
 def _latest_decided_session_id() -> int | None:
     """The one decided session whose cycle can still be in flight.
 
@@ -391,10 +411,14 @@ def _latest_decided_session_id() -> int | None:
     return row["id"] if row else None
 
 
-def _status_display(status: str, session_id: int, latest_decided_id: int | None) -> str:
-    """'executed' for a STALE closed session (see _latest_decided_session_id),
-    else the raw status unchanged."""
-    if status == "closed" and session_id != latest_decided_id:
+def _status_display(session, latest_decided_id: int | None) -> str:
+    """Presentation status: 'expired' for an abandoned open ballot, 'executed'
+    for a STALE closed session (see _latest_decided_session_id), else the raw
+    status unchanged. Derivation only — vote_sessions is never mutated."""
+    if is_abandoned_open(session):
+        return "expired"
+    status = session["status"]
+    if status == "closed" and session["id"] != latest_decided_id:
         return "executed"
     return status
 
@@ -418,7 +442,7 @@ def club_history(limit: int = 30) -> list[dict]:
         "id": s["id"],
         "trade_date": s["trade_date"],
         "status": s["status"],
-        "status_display": _status_display(s["status"], s["id"], latest_decided),
+        "status_display": _status_display(s, latest_decided),
         "basket": [p["symbol"] for p in session_picks(dict(s))],
         "voters": voter_count(s["id"]),
         "human_voters": human_voter_count(s["id"]),
@@ -456,7 +480,7 @@ def member_vote_history(member_id: int, limit: int = 30) -> list[dict]:
             "id": s["id"],
             "trade_date": s["trade_date"],
             "status": s["status"],
-            "status_display": _status_display(s["status"], s["id"], latest_decided),
+            "status_display": _status_display(s, latest_decided),
             "my_allocations": mine,
             "basket": basket,
             "hits": [a["symbol"] for a in mine if a["symbol"] in chosen],

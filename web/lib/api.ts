@@ -6,6 +6,7 @@ import type { Member, SessionView, UniverseItem, ExecutionRow, PowerView, Accoun
 // Local dev sets NEXT_PUBLIC_CONCORD_API=http://localhost:8780.
 const BASE = (process.env.NEXT_PUBLIC_CONCORD_API || "").replace(/\/$/, "");
 const TOKEN_KEY = "concord_token";
+const ACTIVITY_KEY = "concord_last_activity";
 
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -13,8 +14,30 @@ export function getToken(): string | null {
 }
 export function setToken(t: string | null) {
   if (typeof window === "undefined") return;
-  if (t) window.localStorage.setItem(TOKEN_KEY, t);
-  else window.localStorage.removeItem(TOKEN_KEY);
+  if (t) { window.localStorage.setItem(TOKEN_KEY, t); markActivity(); }
+  else { window.localStorage.removeItem(TOKEN_KEY); clearActivity(); }
+}
+
+// ── idle-logout bookkeeping (the policy itself lives in lib/auth.tsx) ──────
+// The stamp is in localStorage, not a ref, for two reasons: every tab shares
+// one clock (a buried tab must not log a member out while another tab is in
+// use), and a reload can't launder away hours of inactivity. Fresh credentials
+// (setToken above) count as activity, so logging back in never inherits an old
+// stamp. Wrapped in try/catch — a blocked localStorage must not break auth.
+export function markActivity(at: number = Date.now()) {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.setItem(ACTIVITY_KEY, String(at)); } catch {}
+}
+export function readActivity(): number | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const v = Number(window.localStorage.getItem(ACTIVITY_KEY));
+    return Number.isFinite(v) && v > 0 ? v : null;
+  } catch { return null; }
+}
+export function clearActivity() {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.removeItem(ACTIVITY_KEY); } catch {}
 }
 
 // HTTP-level failure: carries the status so callers can tell a bad token (401/403)
@@ -90,6 +113,8 @@ export const api = {
     req<{ ok: boolean }>("/api/auth/logout", { method: "POST", credentials: "include" }),
   // log out EVERYWHERE — session_version bump revokes every session on every
   // device (this one included); the caller must hard-logout locally after.
+  // NO UI CALLS THIS TODAY (the "Log out everywhere" button was removed at the
+  // owner's request); the endpoint and its tests stay, ready for a future one.
   logoutAll: () =>
     req<{ ok: boolean }>("/api/me/logout-all", { method: "POST", credentials: "include" }),
   // Google sign-in — credential = the Google ID token from Identity Services.

@@ -105,7 +105,7 @@ export function AllocSliders({
 
       {rows.length === 0 ? (
         <p className="py-6 text-center text-[13px] text-subtle">
-          No picks yet — add names below and slide to set how much of your power backs each.
+          No picks yet — add names below.
         </p>
       ) : (
         <div className="mt-1">
