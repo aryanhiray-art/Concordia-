@@ -43,10 +43,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // still get the Account-page connect fallback. The reauth/offline banners
   // come right back on every other page below.
   if (pathname === "/welcome") {
-    // tighter top padding than the app pages: every wizard step must fit a
-    // laptop viewport (~700px) without scrolling
+    // Tighter than the app pages on BOTH ends: every wizard step should fit a
+    // laptop viewport without scrolling. pb-24 (96px) is right for app pages
+    // that scroll past a fixed nav, but on a self-contained step it was most of
+    // the reason step 1 spilled off a 780px viewport by 88px — the step's own
+    // escape-hatch link supplies the breathing room underneath.
     return (
-      <main className="mx-auto w-[min(1080px,100%)] px-4 pb-24 pt-6 sm:px-6 sm:pt-8">
+      <main className="mx-auto w-[min(1080px,100%)] px-4 pb-8 pt-6 sm:px-6 sm:pb-10 sm:pt-8">
         {children}
       </main>
     );

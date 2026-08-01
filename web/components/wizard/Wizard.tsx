@@ -101,8 +101,11 @@ export function Wizard() {
 
   if (!member) return null; // AppShell shows the auth gate instead
 
+  // pb-10 here stacked on the shell's own bottom padding. A wizard step is a
+  // self-contained screen that should fit a laptop viewport without scrolling,
+  // so the bottom padding lives in ONE place (AppShell's /welcome branch).
   return (
-    <div className="mx-auto w-full max-w-[640px] pb-10 pt-2">
+    <div className="mx-auto w-full max-w-[640px] pb-2 pt-2">
       <div className="flex flex-col items-center gap-4">
         <Logo size={34} />
         <Stepper step={step} unlocked={unlocked} onGo={go} />
