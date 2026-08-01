@@ -550,3 +550,17 @@ html, body { overscroll-behavior-x: none; }
 @media (prefers-reduced-motion: reduce) {
   .loadmark .lg-outer, .loadmark .lg-mid, .loadmark .lg-core { animation: none; }
 }
+
+/* The club chart standing in for a personal line the member doesn't have yet.
+   Sits inside .chartfield, above the (empty) hero svg. */
+.clubfill {
+  position: absolute;
+  left: 0; right: 0;
+  top: 50%;
+  transform: translateY(-42%);
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  padding: 0 clamp(16px, 4vw, 56px);
+}
+.clubfill > * { width: min(660px, 100%); }

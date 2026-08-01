@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { Onboarding } from "@/components/Onboarding";
 import { CinematicOverview } from "@/components/CinematicOverview";
+import { ClubPerformance } from "@/components/ClubPerformance";
 import { LoadingScreen } from "@/components/ui";
 import { WIZARD_DONE_KEY, WIZARD_SKIP_KEY, getWizardFlag, setWizardFlag } from "@/components/wizard/flags";
 
@@ -38,7 +39,17 @@ export default function Overview() {
 
   if (gate !== "app") return <LoadingScreen label="loading" />;
 
-  if (!connected) return <div className="stagger space-y-5 pt-2"><Onboarding /></div>;
+  // No brokerage connected ⇒ no trades of your own to plot. Rather than an
+  // empty page (or the old invented curve), show what the CLUB has actually
+  // done — the one real thing there is to show at this stage.
+  if (!connected) {
+    return (
+      <div className="stagger space-y-5 pt-2">
+        <Onboarding />
+        <ClubPerformance />
+      </div>
+    );
+  }
   // Connected: Onboarding is now a slim resume banner that self-hides once
   // every step is done. z-10 keeps it above (and clickable over) the
   // full-bleed stage, whose -88px top margin tucks under whatever sits above

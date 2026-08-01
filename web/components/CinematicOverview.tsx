@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Freshness } from "@/components/ui";
+import { ClubPerformance } from "@/components/ClubPerformance";
 import { useStockPanel } from "@/components/StockPanel";
 import { sectorOf, sectorColor } from "@/lib/sectors";
 import { fmtDate, fmtTradeDate } from "@/lib/format";
@@ -61,6 +62,10 @@ export function CinematicOverview() {
   // (a made-up date on a money chart is worse than no date).
   const histPoints = (acc?.power?.history || []).filter((h) => h.equity != null && h.equity > 0);
   const equityHist = histPoints.map((h) => h.equity as number);
+  // One real observation plus the live value = two anchors = a line worth
+  // drawing. Below that the member has no history of their own, and the honest
+  // thing in that space is the club's record, not a synthesised personal curve.
+  const hasOwnHistory = equityHist.length >= 1;
   const histKey = equityHist.join(",");
   const dateKey = histPoints.map((h) => h.week_start).join(",");
   // donut + holdings reflect what you actually HOLD; fall back to today's forming
@@ -98,14 +103,13 @@ export function CinematicOverview() {
         FUSD.push(anchors[lo] * (1 - f) + anchors[lo + 1] * f);
       }
     } else {
-      // fallback (no history yet): a representative market shape scaled to the real
-      // current value + return, so at least the endpoints are exact.
-      const spyTot = SPY[N - 1] / SPY[0] - 1;
-      const k = spyTot !== 0 ? (pctTarget / 100) / spyTot : 0;
-      const fund = [1];
-      for (let i = 1; i < N; i++) fund.push(fund[i - 1] * (1 + (SPY[i] / SPY[i - 1] - 1) * (k || 0.18)));
-      const fsc = value / fund[N - 1];
-      FUSD = fund.map((v) => v * fsc);
+      // No weekly observations yet ⇒ this member HAS no line. The old fallback
+      // drew one anyway: a market shape scaled to their balance, i.e. a
+      // plausible-looking equity curve that was never theirs, with only the
+      // endpoints real. Nothing is drawn now — the JSX renders the CLUB's real
+      // record in this space instead (owner: "just show the graph of the club
+      // ... because no trades are being made").
+      FUSD = new Array(N).fill(value);
     }
     // Scrub-tooltip dates, interpolated across the SAME anchors as the values —
     // so a point on the line is dated by the week it actually came from. No real
@@ -164,9 +168,14 @@ export function CinematicOverview() {
       const X = (i: number) => i / (m - 1) * W, Y = (v: number) => H - 14 - ((v - mn) / (mx - mn)) * (H - 28);
       fundPts = fu.map((v, i) => [X(i), Y(v)]);
       const fp = fundPts.map((p) => p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
-      $("#fundpath")?.setAttribute("points", fp);
-      $("#area")?.setAttribute("points", fp + " " + W + "," + H + " 0," + H);
-      $("#axis").innerHTML = axisFor(s).map((l) => "<span>" + l + "</span>").join("");
+      // No observations ⇒ draw NOTHING rather than a flat or invented line, and
+      // print no axis: the club chart rendered in this space carries the story.
+      $("#fundpath")?.setAttribute("points", hasOwnHistory ? fp : "");
+      $("#area")?.setAttribute("points", hasOwnHistory ? fp + " " + W + "," + H + " 0," + H : "");
+      const ax = $("#axis");
+      if (ax) ax.innerHTML = hasOwnHistory
+        ? axisFor(s).map((l) => "<span>" + l + "</span>").join("")
+        : "";
       r!.querySelectorAll(".tf").forEach((b: any) => b.classList.toggle("on", b.dataset.tf === tf));
       readout(m - 1);
     }
@@ -356,6 +365,11 @@ export function CinematicOverview() {
         {/* "nothing invested" is itself a money claim — date it. */}
         <Freshness asOf={accountAsOf} stale={accountStale} busy={accountRefreshing}
           onRefresh={refreshAccount} className="mt-3" />
+        {/* Nothing of yours has traded yet, so the club's real record is what
+            there is to show. */}
+        <div className="mt-5 border-t border-white/10 pt-5">
+          <ClubPerformance />
+        </div>
       </div>
     );
   }
@@ -376,6 +390,15 @@ export function CinematicOverview() {
             <polyline id="fundpath" points="" fill="none" stroke="#2DD4BF" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" filter="url(#g)" />
           </svg>
         </div>
+        {/* Nothing of your own has happened yet — so this space shows what the
+            CLUB has actually done, rather than a curve invented to fill it.
+            Sibling of .chartfield, NOT inside it: the stage dims .chartfield to
+            20% during the opening beat, which would all but hide this. */}
+        {!hasOwnHistory && (
+          <div className="clubfill">
+            <ClubPerformance />
+          </div>
+        )}
         <div className="sdot" id="sdot" /><div className="stip" id="stip" />
 
         <div className="value">
@@ -395,9 +418,12 @@ export function CinematicOverview() {
 
         <div className="perfx">
           <div className="axis" id="axis" />
-          <div className="tfs" id="tfs">
-            {["1D","1W","1M","3M","1Y","ALL"].map((t) => <button key={t} className={`tf ${t === "ALL" ? "on" : ""}`} data-tf={t}>{t}</button>)}
-          </div>
+          {/* Timeframe tabs only mean something over a line of your own. */}
+          {hasOwnHistory && (
+            <div className="tfs" id="tfs">
+              {["1M","3M","1Y","ALL"].map((t) => <button key={t} className={`tf ${t === "ALL" ? "on" : ""}`} data-tf={t}>{t}</button>)}
+            </div>
+          )}
         </div>
 
         <div className="alloc">
