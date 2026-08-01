@@ -42,18 +42,40 @@ def demo_robinhood():
     from fastapi.responses import HTMLResponse
     if not settings.demo_mode:
         raise HTTPException(status_code=404)
+    # The URL is the ONLY thing the member has to carry back, so it gets a
+    # one-tap copy button — selecting a long query string by hand (especially on
+    # a phone, where the address bar truncates it) was the step people stalled
+    # on. Falls back to selecting the text when the Clipboard API is unavailable
+    # (it needs a secure context, so plain-http local sandboxes land here).
     return HTMLResponse("""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Robinhood (demo)</title>
 <style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#000;
-color:#fff;font-family:-apple-system,system-ui,sans-serif}.c{max-width:420px;padding:40px;text-align:center}
-h1{color:#00C805;font-size:22px}p{color:#9aa;line-height:1.6;font-size:14px}
-code{background:#111;border:1px solid #222;padding:8px 12px;border-radius:8px;display:block;
-margin-top:14px;color:#0f8;font-size:12px;word-break:break-all}</style></head><body><div class="c">
+color:#fff;font-family:-apple-system,system-ui,sans-serif}.c{max-width:460px;padding:32px 24px;text-align:center}
+h1{color:#00C805;font-size:22px;margin:0 0 14px}p{color:#9aa;line-height:1.6;font-size:14px;margin:0 0 16px}
+.row{display:flex;gap:8px;align-items:stretch;margin-top:6px}
+code{flex:1;min-width:0;background:#111;border:1px solid #222;padding:11px 12px;border-radius:8px;
+text-align:left;color:#0f8;font-size:12px;word-break:break-all;user-select:all}
+button{flex:none;padding:0 16px;border-radius:8px;border:1px solid #00C805;background:#00C805;
+color:#012; font:700 13px/1 -apple-system,system-ui,sans-serif;cursor:pointer}
+button:active{transform:translateY(1px)}
+.ok{background:#012;color:#00C805}
+@media (max-width:420px){.row{flex-direction:column}button{padding:11px 16px}}</style></head><body><div class="c">
 <h1>Robinhood — demo approval</h1>
 <p>Pretend you just logged in and tapped <b style="color:#fff">Approve</b>.<br><br>
-In the real flow you would now land on a &ldquo;can&rsquo;t connect&rdquo; localhost page.
-Copy THIS page&rsquo;s URL from the address bar (or the one below) and paste it back into Concordia.</p>
-<code>http://localhost:8917/callback?code=demo&amp;state=demo</code>
+In the real flow you would now land on a &ldquo;can&rsquo;t connect&rdquo; page.
+Copy the URL below and paste it back into Concordia.</p>
+<div class="row"><code id="u">http://localhost:8917/callback?code=demo&amp;state=demo</code>
+<button id="b" type="button">Copy</button></div>
+<script>
+(function(){var b=document.getElementById('b'),u=document.getElementById('u');
+function done(){b.textContent='Copied';b.className='ok';setTimeout(function(){b.textContent='Copy';b.className='';},1600);}
+b.addEventListener('click',function(){var t=u.textContent.trim();
+if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(t).then(done,select);}else{select();}
+function select(){var r=document.createRange();r.selectNodeContents(u);
+var s=getSelection();s.removeAllRanges();s.addRange(r);
+try{document.execCommand('copy');done();}catch(e){b.textContent='Select + copy';}}});})();
+</script>
 </div></body></html>""")
 
 
