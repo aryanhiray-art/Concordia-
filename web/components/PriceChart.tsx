@@ -22,21 +22,46 @@ import type { StockPricePoint } from "@/lib/types";
 import { fmtTradeDate } from "@/lib/format";
 import { fmtPrice } from "@/lib/stocknum";
 
+/** Epoch seconds for a point, from `t` (intraday) or `d` (daily, parsed as a
+ *  PLAIN local date — `new Date("2026-07-28")` is UTC midnight and lands on the
+ *  previous day for US viewers). NaN when neither is usable, which makes the
+ *  caller fall back to index spacing. */
+function tsOf(p: StockPricePoint): number {
+  if (typeof p.t === "number" && Number.isFinite(p.t)) return p.t;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(p.d || "");
+  return m ? new Date(+m[1], +m[2] - 1, +m[3]).getTime() / 1000 : NaN;
+}
+
+/** Axis/readout label for a point: time-of-day for intraday, date for daily. */
+function labelOf(p: StockPricePoint, intraday: boolean): string {
+  if (intraday && typeof p.t === "number") {
+    return new Date(p.t * 1000).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  }
+  return fmtTradeDate(p.d);
+}
+
 const UP = "#2dd4bf";      // --teal
 const DOWN = "#ff6b6b";    // --red
 
-/** Catmull-Rom → cubic beziers: a smooth line through every close. */
-function smoothPath(pts: [number, number][]): string {
+/** Straight segments through every close — the only shape that cannot lie.
+ *
+ *  This was Catmull-Rom → cubic beziers (control points at ±(p2−p0)/6). That
+ *  curve OVERSHOOTS: measured against a series bounded 0..100 its control
+ *  points reached 116.7, and replayed against real payloads the drawn path
+ *  exceeded the data's true high/low on 13 of 15 symbol/range pairs — XOM 3M
+ *  data [131.08, 148.67] rendered as [130.08, 149.24], a $0.57 high that never
+ *  traded. Worse, this chart pins its high/low guide lines and their gutter
+ *  labels to the data's min/max, so the curve visibly crossed the very numbers
+ *  it was labelled with.
+ *
+ *  A price chart must never draw a price that did not happen, so there is no
+ *  smoothing at all — the vertices ARE the closes. (Robinhood and Yahoo draw
+ *  it this way for the same reason.) If softening is ever wanted, it must be
+ *  monotone/shape-preserving, never Catmull-Rom.
+ */
+function linePath(pts: [number, number][]): string {
   if (pts.length < 2) return "";
-  let d = `M${pts[0][0].toFixed(2)},${pts[0][1].toFixed(2)}`;
-  for (let i = 0; i < pts.length - 1; i++) {
-    const p0 = pts[Math.max(0, i - 1)], p1 = pts[i], p2 = pts[i + 1],
-      p3 = pts[Math.min(pts.length - 1, i + 2)];
-    const c1x = p1[0] + (p2[0] - p0[0]) / 6, c1y = p1[1] + (p2[1] - p0[1]) / 6;
-    const c2x = p2[0] - (p3[0] - p1[0]) / 6, c2y = p2[1] - (p3[1] - p1[1]) / 6;
-    d += ` C${c1x.toFixed(2)},${c1y.toFixed(2)} ${c2x.toFixed(2)},${c2y.toFixed(2)} ${p2[0].toFixed(2)},${p2[1].toFixed(2)}`;
-  }
-  return d;
+  return pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(2)},${p[1].toFixed(2)}`).join(" ");
 }
 
 export function PriceChart({
@@ -51,12 +76,6 @@ export function PriceChart({
   const [hover, setHover] = useState<number | null>(null);
   const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
 
-  // A CALLBACK ref, not useRef + useEffect([]): the "no history" placeholder
-  // below returns a DIFFERENT element that never carried the ref, so on the
-  // normal path (mount empty while loading → data arrives) a mount-once effect
-  // saw wrap.current === null, bailed, and never re-ran — leaving every chart
-  // pinned to the 480px default and mis-drawn at real width. A callback ref
-  // fires on whichever node actually mounts, so measuring can't be skipped.
   // Width is measured, not assumed — the SVG is drawn in real pixel coordinates,
   // so a stale `w` letterboxes the whole chart (viewBox 982 inside a 301px box
   // shrinks it to a third of its height and centres it in dead space).
@@ -109,6 +128,9 @@ export function PriceChart({
     );
   }
 
+  // Intraday when the series carries epoch timestamps (5-minute bars); daily
+  // ranges carry only `d`. Drives whether labels read as times or dates.
+  const intraday = typeof points[0]?.t === "number";
   const cs = points.map((p) => p.c);
   const mn = Math.min(...cs), mx = Math.max(...cs);
   const span = mx - mn;
@@ -128,13 +150,22 @@ export function PriceChart({
   const plotB = PAD_T + plotH;
   const gx = PAD_L + plotW + 8;           // gutter text origin
 
-  const X = (i: number) => PAD_L + (i / (points.length - 1)) * plotW;
+  // x is positioned by TIME, not array index. Index spacing draws a Friday→Monday
+  // step the same width as Monday→Tuesday, and an overnight gap the same width as
+  // five minutes — the market's closed hours silently vanish and the line implies
+  // trading that never happened. Falling back to index only when timestamps are
+  // absent or degenerate (all-equal), where even spacing is the honest default.
+  const ts = points.map(tsOf);
+  const t0 = ts[0], t1 = ts[ts.length - 1];
+  const tSpan = t1 - t0;
+  const byTime = Number.isFinite(tSpan) && tSpan > 0;
+  const X = (i: number) => PAD_L + (byTime ? (ts[i] - t0) / tSpan : i / (points.length - 1)) * plotW;
   const Y = (c: number) => (flat ? PAD_T + plotH / 2 : PAD_T + (1 - (c - mn) / span) * plotH);
 
   const pts: [number, number][] = cs.map((c, i) => [X(i), Y(c)]);
   const up = cs[cs.length - 1] >= cs[0];
   const color = up ? UP : DOWN;
-  const line = smoothPath(pts);
+  const line = linePath(pts);
   const area = `${line} L${(PAD_L + plotW).toFixed(2)},${plotB} L${PAD_L},${plotB} Z`;
   const hiIdx = cs.indexOf(mx), loIdx = cs.indexOf(mn);
 
@@ -157,7 +188,7 @@ export function PriceChart({
   return (
     <div ref={attach} className="w-full">
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} className="block touch-pan-y"
-        role="img" aria-label={`price history, ${fmtTradeDate(points[0].d)} to ${fmtTradeDate(points[points.length - 1].d)}`}
+        role="img" aria-label={`price history, ${labelOf(points[0], intraday)} to ${labelOf(points[points.length - 1], intraday)}`}
         onPointerMove={onMove} onPointerLeave={() => setHover(null)}>
         <defs>
           <linearGradient id={`pcf-${uid}`} x1="0" y1="0" x2="0" y2="1">
@@ -200,7 +231,7 @@ export function PriceChart({
           <text key={i} x={X(i)} y={H - 6}
             textAnchor={k === 0 ? "start" : k === ticks.length - 1 ? "end" : "middle"}
             className="tnum" fill="rgba(255,255,255,0.38)" fontSize="10.5">
-            {fmtTradeDate(points[i].d)}
+            {labelOf(points[i], intraday)}
           </text>
         ))}
 
@@ -212,7 +243,7 @@ export function PriceChart({
             <circle cx={X(hover!)} cy={Y(hi.c)} r="3.5" fill={color} stroke="#0b0f14" strokeWidth="1.5" />
             <text x={PAD_L} y={10} dominantBaseline="middle" textAnchor="start" className="tnum"
               fill="rgba(255,255,255,0.72)" fontSize="11">
-              {fmtTradeDate(hi.d)} · {fmtPrice(hi.c)}
+              {labelOf(hi, intraday)} · {fmtPrice(hi.c)}
             </text>
           </>
         )}

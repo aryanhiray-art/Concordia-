@@ -14,6 +14,20 @@ from __future__ import annotations
 import datetime
 import hashlib
 import time
+from zoneinfo import ZoneInfo
+
+_ET = ZoneInfo("America/New_York")
+
+# The upstream's intraday interval vocabulary -> bar width in seconds. Anything
+# not listed here (day/week/month/…) takes the daily generator below. NOTE the
+# 1-minute bar is spelled "minute", not "1minute" — same as the real tool.
+_INTRADAY_STEP_S = {
+    "15second": 15, "30second": 30, "minute": 60, "5minute": 300,
+    "10minute": 600, "30minute": 1800, "hour": 3600,
+}
+
+_RTH_OPEN = (9, 30)     # ET
+_RTH_CLOSE = (16, 0)    # ET
 
 
 def _price(symbol: str) -> float:
@@ -30,6 +44,103 @@ def _seed(symbol: str) -> int:
 
 _SECTORS = ["Information Technology", "Health Care", "Financials", "Industrials",
             "Consumer Discretionary", "Energy", "Utilities", "Communication Services"]
+
+
+def _wig(*parts) -> int:
+    return int(hashlib.sha256(":".join(str(p) for p in parts).encode()).hexdigest()[:8], 16)
+
+
+def _parse_ts(v, default: float) -> int:
+    """RFC3339 (or bare YYYY-MM-DD, or an epoch) -> epoch seconds; `default` on
+    anything unparseable, so a malformed window degrades instead of raising."""
+    if v is None:
+        return int(default)
+    if isinstance(v, (int, float)):
+        return int(v)
+    s = str(v).strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.datetime.fromisoformat(s)
+    except ValueError:
+        try:
+            dt = datetime.datetime.fromisoformat(s[:10])
+        except ValueError:
+            return int(default)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return int(dt.timestamp())
+
+
+def _rfc3339(ts: int) -> str:
+    return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ")
+
+
+def _session_bounds(d: datetime.date) -> tuple[int, int]:
+    """(epoch open, epoch close) of d's regular ET session — DST-correct."""
+    op = datetime.datetime(d.year, d.month, d.day, *_RTH_OPEN, tzinfo=_ET)
+    cl = datetime.datetime(d.year, d.month, d.day, *_RTH_CLOSE, tzinfo=_ET)
+    return int(op.timestamp()), int(cl.timestamp())
+
+
+def _intraday_bars(sym: str, start_ts: int, end_ts: int, step_s: int) -> list[dict]:
+    """Regular-hours bars of width `step_s` covering [start_ts, end_ts].
+
+    A pure function of (symbol, bar timestamp): a slow per-session drift plus a
+    small per-bar wiggle around the symbol's pseudo-price, so the demo 1D/1W
+    charts show a believable intraday path that is stable across refreshes.
+    Bars stop at `end_ts` — the demo never invents the future — and the final
+    bar of TODAY's session is pinned to the live demo quote so the chart, the
+    day range and the quote can never disagree.
+    """
+    import math
+
+    p = _price(sym)
+    today = datetime.datetime.now(_ET).date()
+    first = datetime.datetime.fromtimestamp(start_ts, _ET).date()
+    last = datetime.datetime.fromtimestamp(end_ts, _ET).date()
+    bars: list[dict] = []
+    d = first
+    while d <= last:
+        if d.weekday() >= 5:                       # weekends never trade
+            d += datetime.timedelta(days=1)
+            continue
+        op, cl = _session_bounds(d)
+        dayw = _wig(sym, d, "day")
+        # older sessions sit slightly below today's level → a week trends
+        base = p * (1 - 0.004 * max((today - d).days, 0))
+        amp = (dayw % 220) / 10000                 # 0–2.2% intraday swing
+        waves = 1 + dayw % 3
+        prev_close = None
+        day_start = len(bars)
+        ts = op
+        while ts < cl:
+            if start_ts <= ts <= end_ts:
+                frac = (ts - op) / max(cl - op, 1)
+                w = _wig(sym, ts)
+                close = base * (1 + amp * math.sin(frac * math.pi * waves)) \
+                             * (1 + (w % 400 - 200) / 20000)      # ±1% noise
+                open_ = prev_close if prev_close is not None else close * (
+                    1 + ((w >> 9) % 40 - 20) / 20000)
+                lo = min(open_, close) * (1 - ((w >> 3) % 30 + 2) / 20000)
+                hi = max(open_, close) * (1 + ((w >> 7) % 30 + 2) / 20000)
+                bars.append({
+                    "begins_at": _rfc3339(ts),
+                    "open_price": round(open_, 2), "close_price": round(close, 2),
+                    "high_price": round(hi, 2), "low_price": round(lo, 2),
+                    "volume": 5_000 + (w % 900) * max(step_s // 60, 1) * 40,
+                })
+                prev_close = close
+            ts += step_s
+        if d == today and len(bars) > day_start:
+            # the live demo quote IS _price(sym) and drifts on the hour; today's
+            # last bar must close there (and contain it) or the demo would show
+            # a chart that ends somewhere the quote never was
+            b = bars[-1]
+            b["close_price"] = round(p, 2)
+            b["high_price"] = round(max(b["high_price"], p * 1.0005), 2)
+            b["low_price"] = round(min(b["low_price"], p * 0.9995), 2)
+        d += datetime.timedelta(days=1)
+    return bars
 
 
 class DemoClient:
@@ -70,7 +181,27 @@ class DemoClient:
         return {"data": {"orders": [], "next": None}}
 
     def get_equity_historicals(self, symbols: list[str], start_time: str,
-                               interval: str = "day") -> dict:
+                               interval: str = "day", bounds: str | None = None,
+                               end_time: str | None = None) -> dict:
+        """Deterministic bars from start_time to now, HONOURING `interval`.
+
+        An intraday interval (minute/5minute/30minute/hour/…) produces real
+        regular-hours intraday bars via _intraday_bars, so DEMO_MODE renders a
+        genuine 1D/1W chart instead of a step function of daily closes. Any
+        other interval takes the daily generator below. `bounds` is accepted
+        and ignored — the demo only ever models the regular session.
+        """
+        step = _INTRADAY_STEP_S.get(str(interval))
+        if step:
+            start_ts = _parse_ts(start_time, default=time.time() - 86400)
+            end_ts = min(_parse_ts(end_time, default=time.time()), int(time.time()))
+            return {"data": {"results": [
+                {"symbol": s.upper(),
+                 "bars": _intraday_bars(s.upper(), start_ts, end_ts, step)}
+                for s in symbols]}}
+        return self._daily_historicals(symbols, start_time)
+
+    def _daily_historicals(self, symbols: list[str], start_time: str) -> dict:
         """Deterministic daily closes from start_time to today (weekdays only).
 
         Each bar is a pure function of (symbol, date): a gentle drift from ~80%

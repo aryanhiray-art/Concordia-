@@ -11,14 +11,14 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api, ApiError } from "@/lib/api";
-import type { StockDetail, StockRangeKey } from "@/lib/types";
+import type { StockDetail, StockHistory, StockPricePoint, StockRangeKey } from "@/lib/types";
 import { fmtBig, fmtPrice, fmtRatio, pctInRange } from "@/lib/stocknum";
 import { fmtTradeDate } from "@/lib/format";
 import { AddToBallot } from "@/components/AddToBallot";
 import { PriceChart } from "@/components/PriceChart";
 import { Card, Freshness, Pill } from "@/components/ui";
 
-const RANGES: StockRangeKey[] = ["1M", "3M", "1Y"];
+const RANGES: StockRangeKey[] = ["1D", "1W", "1M", "3M", "1Y"];
 
 /** Where the current price sits between two bounds. Renders nothing but a dash
  *  when either bound is missing or the span is degenerate (pctInRange → null). */
@@ -70,10 +70,18 @@ export default function StockPage({ params }: { params: { symbol: string } }) {
   const [state, setState] = useState<"loading" | "ready" | "missing" | "error">("loading");
   const [err, setErr] = useState<string | null>(null);
   const [range, setRange] = useState<StockRangeKey>("3M");
+  // Ranges are fetched ON DEMAND and remembered per symbol: 1D/1W are real
+  // intraday calls (5-minute / 30-minute bars), so shipping them with every
+  // page view would spend broker calls nobody asked for. Re-clicking a tab you
+  // have already opened costs nothing.
+  const [series, setSeries] = useState<Partial<Record<StockRangeKey, StockPricePoint[]>>>({});
+  const [rangeDay, setRangeDay] = useState<StockHistory["day"] | null>(null);
+  const [rangeBusy, setRangeBusy] = useState(false);
 
   useEffect(() => {
     let alive = true;
     setData(null); setState("loading"); setErr(null); setRange("3M");
+    setSeries({}); setRangeDay(null); setRangeBusy(false);
     api.stockDetail(symbol)
       .then((d) => { if (alive) { setData(d); setState("ready"); } })
       .catch((e) => {
@@ -84,9 +92,35 @@ export default function StockPage({ params }: { params: { symbol: string } }) {
     return () => { alive = false; };
   }, [symbol]);
 
+  // Fetch the selected range unless the detail payload already carried it (the
+  // daily ranges ride along) or we've fetched it before.
+  useEffect(() => {
+    if (state !== "ready") return;
+    const shipped = data?.range?.[range as keyof typeof data.range];
+    if ((shipped && shipped.length) || series[range]) return;
+    let alive = true;
+    setRangeBusy(true);
+    api.stockHistory(symbol, range)
+      .then((h) => {
+        if (!alive) return;
+        setSeries((s) => ({ ...s, [range]: h.points || [] }));
+        if (h.day) setRangeDay(h.day);
+      })
+      .catch(() => { if (alive) setSeries((s) => ({ ...s, [range]: [] })); })
+      .finally(() => { if (alive) setRangeBusy(false); });
+    return () => { alive = false; };
+  }, [symbol, range, state, data, series]);
+
+  // The points actually plotted: a fetched range wins, else whatever shipped.
+  const points: StockPricePoint[] =
+    series[range] ?? (data?.range?.[range as keyof typeof data.range] as StockPricePoint[]) ?? [];
+
   const q = data?.quote;
   const f = data?.fundamentals;
-  const day = data?.day;
+  // 1D fetches real intraday bars and reports WHICH session they are; prefer
+  // that over the last daily bar, which pre-open/weekend is a prior session.
+  const day = rangeDay ?? data?.day;
+  const dayIsToday = rangeDay ? rangeDay.is_today !== false : undefined;
   const up = (q?.change_pct ?? 0) >= 0;
   const price = q?.price ?? null;
   const vol = f?.volume ?? day?.volume ?? null;
@@ -163,13 +197,18 @@ export default function StockPage({ params }: { params: { symbol: string } }) {
               </div>
             </div>
             <div className="mt-4">
-              <PriceChart points={data.range?.[range] ?? []} height={300} interactive />
+              <PriceChart points={points} height={300} interactive />
             </div>
           </Card>
 
           <div className="grid gap-5 lg:grid-cols-2">
             <Card className="space-y-5">
-              <RangeBar label="Day range" lo={day?.low ?? null} hi={day?.high ?? null} value={price}
+              {/* Named for the session it actually shows. Pre-open, at a weekend
+                  or on a holiday the bars are the PREVIOUS session, and calling
+                  that "Day range" invites reading a stale high as today's. */}
+              <RangeBar
+                label={dayIsToday === false ? "Last session" : "Day range"}
+                lo={day?.low ?? null} hi={day?.high ?? null} value={price}
                 note={day?.d ? fmtTradeDate(day.d) : undefined} />
               <RangeBar label="52-week range" lo={f?.low_52w ?? null} hi={f?.high_52w ?? null} value={price} />
               <div>

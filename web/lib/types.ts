@@ -214,8 +214,25 @@ export type MyVotesView = { sessions: MyVoteSession[] };
 // GET /api/stocks/search — universe matcher, each hit {symbol, name}.
 export type StockSearchResult = { symbol: string; name: string };
 
-export type StockRangeKey = "1M" | "3M" | "1Y";
-export type StockPricePoint = { d: string; c: number };  // ISO date, close
+export type StockRangeKey = "1D" | "1W" | "1M" | "3M" | "1Y";
+
+/** GET /api/stocks/{SYM}/history?range=… — one range's real bars, fetched on
+ *  demand. 1D/1W are genuine intraday series (5-minute / 30-minute) whose
+ *  points carry `t`; 1M/3M/1Y are daily and carry `d`. 1D also reports WHICH
+ *  session it drew, so the UI never implies a stale bar is today's. */
+export type StockHistory = {
+  symbol: string;
+  range: StockRangeKey;
+  points: StockPricePoint[];
+  intraday: boolean;
+  as_of: number;
+  day?: StockDayBar & { session_date?: string | null; is_today?: boolean };
+};
+/** One plotted close. Daily ranges carry `d` ("YYYY-MM-DD"); intraday ranges
+ *  carry `t` (epoch seconds) because a date alone can't place a 5-minute bar.
+ *  The chart positions x by whichever is present — never by array index, which
+ *  would erase weekends and overnight gaps. */
+export type StockPricePoint = { d?: string; t?: number; c: number };
 
 /** GET /api/stocks/{SYM} fundamentals — every field nullable: the backend
  *  serves nulls when the broker is unreachable or doesn't know. */

@@ -1,6 +1,6 @@
 "use client";
 
-import type { Member, SessionView, UniverseItem, ExecutionRow, PowerView, Account, HoldingsView, ApiKey, ResearchResult, PerfView, AdminPanel, ClubHistoryView, MyVotesView, StockDetail, StockSearchResult } from "./types";
+import type { Member, SessionView, UniverseItem, ExecutionRow, PowerView, Account, HoldingsView, ApiKey, ResearchResult, PerfView, AdminPanel, ClubHistoryView, MyVotesView, StockDetail, StockHistory, StockRangeKey, StockSearchResult } from "./types";
 
 // Empty base = same-origin (Vercel rewrites /api + /oauth to the forge backend).
 // Local dev sets NEXT_PUBLIC_CONCORD_API=http://localhost:8780.
@@ -202,6 +202,11 @@ export const api = {
       `/api/stocks/search?q=${encodeURIComponent(q)}&limit=${limit}`),
   stockDetail: (symbol: string) =>
     req<StockDetail>(`/api/stocks/${encodeURIComponent(symbol.trim().toUpperCase())}`),
+  // One range's real bars, fetched only when that tab is opened — 1D/1W are
+  // genuine intraday series, so they are NOT shipped with the detail payload.
+  stockHistory: (symbol: string, range: StockRangeKey) =>
+    req<StockHistory>(
+      `/api/stocks/${encodeURIComponent(symbol.trim().toUpperCase())}/history?range=${range}`),
 
   // voting
   searchUniverse: (q: string, limit = 40) =>

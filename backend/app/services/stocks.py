@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import re
 import time
+from datetime import datetime
 
+from ..calendar_us import ET
 from ..db import db
 from ..robinhood import vault
 from . import market
@@ -28,6 +30,27 @@ HIST_TTL_S = 3600     # daily closes move once a day; an hour is generous
 NEG_TTL_S = 300       # confirmed-unknown memo, so garbage symbols can't hammer RH
 
 _RANGE_DAYS = {"1M": 31, "3M": 92, "1Y": 366}
+
+# Each range gets a REAL interval and window. Before this, ONE 1-year daily call
+# served everything and "1D" did not exist — a day's worth of daily bars is a
+# single point, so the shortest honest view the old code could draw was a month.
+#
+# Bar counts are kept a few hundred at most: the upstream REJECTS a call whose
+# (interval, window) would blow its cap. 1D over 5-minute RTH bars is ~78; 1W
+# over 30-minute is ~65; the daily ranges are 22 / 65 / 252.
+#
+# `intraday` decides the point shape: intraday points carry `t` (epoch seconds,
+# a date alone cannot place a 5-minute bar), daily points carry `d`.
+_RANGES: dict[str, dict] = {
+    "1D": {"days": 1,   "interval": "5minute",  "bounds": "regular", "intraday": True},
+    "1W": {"days": 7,   "interval": "30minute", "bounds": "regular", "intraday": True},
+    "1M": {"days": 31,  "interval": "day",      "bounds": None,      "intraday": False},
+    "3M": {"days": 92,  "interval": "day",      "bounds": None,      "intraday": False},
+    "1Y": {"days": 366, "interval": "day",      "bounds": None,      "intraday": False},
+}
+DEFAULT_RANGE = "3M"          # what the detail payload ships with, so first
+                              # paint never spends an intraday call
+RANGE_TTL_S = {"1D": 60, "1W": 300}   # intraday moves; daily falls back to HIST_TTL_S
 
 # symbol -> {"qf": {...}, "qf_at": epoch, "hist": [{d, c}], "hist_at": epoch,
 #            "missing_at": epoch}
@@ -182,6 +205,135 @@ def _last_bar(payload, symbol: str) -> dict:
                 day[key] = v
                 break
     return day
+
+
+def _bar_ts(raw) -> int | None:
+    """RFC3339 bar stamp ("2026-07-30T13:30:00Z") → epoch seconds."""
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    try:
+        return int(datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return None
+
+
+def _parse_intraday(payload, symbol: str) -> list[dict]:
+    """[{t: epoch seconds, c: close}] ascending, full timestamps preserved.
+
+    performance._parse_historicals cannot be reused here: it keys bars by
+    str(date)[:10], which collapses every 5-minute bar of a day onto ONE entry —
+    fine for daily closes, fatal for an intraday chart.
+    """
+    data = payload.get("data", payload) if isinstance(payload, dict) else {}
+    results = (data.get("results") if isinstance(data, dict) else data) or []
+    out: list[dict] = []
+    for r in results:
+        if not isinstance(r, dict) or str(r.get("symbol") or "").upper() != symbol:
+            continue
+        for b in r.get("bars") or r.get("historicals") or r.get("data_points") or []:
+            if not isinstance(b, dict):
+                continue
+            close = _num(b.get("close_price"))
+            if close is None:
+                close = _num(b.get("close"))
+            if close is None:
+                close = _num(b.get("c"))
+            ts = _bar_ts(b.get("begins_at") or b.get("timestamp") or b.get("t"))
+            if close is None or ts is None:
+                continue
+            out.append({"t": ts, "c": close})
+    out.sort(key=lambda p: p["t"])
+    return out
+
+
+def _et_date(ts: float) -> str:
+    return datetime.fromtimestamp(ts, ET).strftime("%Y-%m-%d")
+
+
+def _last_session_only(pts: list[dict]) -> list[dict]:
+    """Trim an intraday series to its most recent SESSION.
+
+    1D asks for a few days of bars on purpose — a 1-day window returns nothing
+    on a Monday morning, a weekend, or a holiday. Keeping only the last ET date
+    present makes "1D" mean the last session that actually traded, whenever it
+    was, instead of an empty chart.
+    """
+    if not pts:
+        return []
+    last = _et_date(pts[-1]["t"])
+    return [p for p in pts if _et_date(p["t"]) == last]
+
+
+def _day_from_intraday(pts: list[dict]) -> dict:
+    """Session OHLC from real intraday bars, tagged with WHICH session it is.
+
+    The old day-range strip read the last DAILY bar and displayed it as "Day
+    range" — pre-open, on a weekend or a holiday that is the PREVIOUS session
+    being passed off as today. is_today lets the UI say which it is.
+    """
+    if not pts:
+        return dict(_EMPTY_DAY)
+    cs = [p["c"] for p in pts]
+    session = _et_date(pts[-1]["t"])
+    return {
+        "d": session,
+        "session_date": session,
+        "is_today": session == _et_date(time.time()),
+        "open": cs[0],
+        "high": max(cs),
+        "low": min(cs),
+        "volume": None,
+    }
+
+
+def _fetch_range(client, symbol: str, rng: str) -> list[dict]:
+    """One range's real bars, at that range's own interval."""
+    spec = _RANGES[rng]
+    start = time.strftime("%Y-%m-%dT00:00:00Z",
+                          time.gmtime(time.time() - spec["days"] * 86400))
+    try:
+        payload = client.get_equity_historicals(
+            [symbol], start, interval=spec["interval"], bounds=spec["bounds"])
+    except Exception:  # noqa: BLE001
+        return []
+    if spec["intraday"]:
+        pts = _parse_intraday(payload, symbol)
+        return _last_session_only(pts) if rng == "1D" else pts
+    series = _parse_historicals(payload).get(symbol) or {}
+    return [{"d": d, "c": series[d]} for d in sorted(series)]
+
+
+def history(symbol: str, rng: str) -> dict:
+    """A single range on demand, cached per (symbol, range).
+
+    Intraday ranges carry a short TTL because they move; daily ranges reuse the
+    hourly one. Flipping tabs therefore costs the broker nothing after the first
+    look at each range.
+    """
+    symbol = (symbol or "").strip().upper()
+    if not SYMBOL_RE.fullmatch(symbol):
+        raise UnknownSymbol("no such symbol")
+    if rng not in _RANGES:
+        raise UnknownSymbol("no such range")
+    now = time.time()
+    ent = _cache.setdefault(symbol, {})
+    key, at_key = f"r:{rng}", f"r_at:{rng}"
+    ttl = RANGE_TTL_S.get(rng, HIST_TTL_S)
+    if ent.get(at_key, 0) > now - ttl:
+        pts = ent.get(key) or []
+    else:
+        client = _client()
+        pts = _fetch_range(client, symbol, rng) if client is not None else []
+        ent[key] = pts
+        # An empty series retries on the short cadence — a transient broker miss
+        # must not blank a chart for the full hour.
+        ent[at_key] = now if pts else now - (ttl - 60)
+    out = {"symbol": symbol, "range": rng, "points": pts,
+           "intraday": bool(_RANGES[rng]["intraday"]), "as_of": int(now)}
+    if rng == "1D":
+        out["day"] = _day_from_intraday(pts)
+    return out
 
 
 def _fetch_history(client, symbol: str) -> tuple[list[dict], dict]:

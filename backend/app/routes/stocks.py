@@ -20,6 +20,24 @@ def search_stocks(q: str = "", limit: int = 20, member: dict = Depends(require_m
     return {"results": voting_svc.universe_search(q, limit)}
 
 
+# Also before /{symbol}: "/AAPL/history" must not be read as a symbol.
+@router.get("/{symbol}/history")
+def stock_history(symbol: str, range: str = svc.DEFAULT_RANGE,
+                  member: dict = Depends(require_member)):
+    """One range's real bars, on demand — the detail payload ships only the
+    default range so a first visit never spends an intraday call.
+
+    1D/1W are genuine intraday series (5-minute / 30-minute bars) and return
+    points as {t: epoch_seconds, c}; 1M/3M/1Y are daily and return {d, c}.
+    1D also carries `day` (session OHLC + session_date + is_today) so the UI can
+    say WHICH session it is showing rather than implying it is today's.
+    """
+    try:
+        return svc.history(symbol, (range or "").strip().upper())
+    except svc.UnknownSymbol as e:
+        raise HTTPException(status_code=404, detail=str(e) or "no such symbol")
+
+
 @router.get("/{symbol}")
 def stock_detail(symbol: str, member: dict = Depends(require_member)):
     """One payload for the stock-detail view: quote, the latest session's
