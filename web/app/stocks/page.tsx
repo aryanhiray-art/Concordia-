@@ -29,7 +29,18 @@ export default function StocksPage() {
   // debounced universe search
   useEffect(() => {
     const query = q.trim();
-    if (!query) { setResults([]); setSearching(false); setSearched(false); return; }
+    // Empty box = BROWSE the votable universe rather than show a blank page.
+    // universe_search already returns the universe in sort order for an empty
+    // query, so this is the same endpoint, no new backend surface.
+    if (!query) {
+      let alive = true;
+      setSearching(true);
+      api.stockSearch("", 500)
+        .then((r) => { if (alive) { setResults(r.results); setActive(0); } })
+        .catch(() => { if (alive) setResults([]); })
+        .finally(() => { if (alive) { setSearching(false); setSearched(false); } });
+      return () => { alive = false; };
+    }
     setSearching(true);
     let alive = true;
     const id = setTimeout(async () => {
@@ -87,8 +98,12 @@ export default function StocksPage() {
           {searching && <span className="absolute right-4 top-1/2 -translate-y-1/2"><Dots /></span>}
         </div>
 
+        {!query && results.length > 0 && (
+          <p className="mt-4 px-1 label">All votable names · {results.length}</p>
+        )}
+
         <div id="stock-results" role="listbox" aria-label="Search results" className="mt-2">
-          {query && results.map((r, i) => (
+          {results.map((r, i) => (
             <Link key={r.symbol} href={`/stocks/${r.symbol}`} role="option" aria-selected={i === active}
               onMouseEnter={() => setActive(i)}
               className={`${row} ${i === active ? "bg-white/[0.06]" : ""}`}>
