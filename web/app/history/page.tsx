@@ -165,8 +165,15 @@ export default function HistoryPage() {
 
   if (!data && !err) return <div className="pt-10"><LoadingScreen label="loading the history" /></div>;
 
-  const picks = [...(data?.last_decided?.picks ?? [])].sort((a, b) => (b.weight ?? 0) - (a.weight ?? 0));
   const cycles = hist?.sessions ?? [];
+  // The latest decided basket comes from CLUB HISTORY, not /vote/results'
+  // last_decided. On the demo instance the club record is mirrored from the
+  // real club while the local database holds no decided sessions at all, so
+  // last_decided was null there and this card rendered empty under a list of
+  // real cycles. Club history is the same source as the cycles below it, so the
+  // two can no longer disagree.
+  const latest = cycles.find((c) => (c.basket?.length ?? 0) > 0) ?? null;
+  const picks = (latest?.basket ?? []).map((symbol) => ({ symbol, name: symbol, weight: undefined as number | undefined }));
   const ballots = mine?.sessions ?? [];
 
   return (
@@ -202,8 +209,8 @@ export default function HistoryPage() {
             <Card>
               <div className="flex items-center justify-between gap-3">
                 <span className="label !text-teal">Latest decided basket</span>
-                {data?.last_decided && (
-                  <span className="text-[11.5px] text-subtle tnum">{fmtTradeDate(data.last_decided.trade_date)}</span>
+                {latest && (
+                  <span className="text-[11.5px] text-subtle tnum">{fmtTradeDate(latest.trade_date)}</span>
                 )}
               </div>
               {picks.length > 0 ? (

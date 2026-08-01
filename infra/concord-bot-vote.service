@@ -12,7 +12,15 @@ Nice=10
 CPUWeight=30
 IOWeight=30
 ExecStart=/opt/concord/backend/.venv/bin/python jobs/bot_vote.py
-TimeoutStartSec=1800
+# The bots start at 07:30 ET and the ballot closes at 08:30 — a 60-minute
+# window, so 1800s was killing the run at the HALFWAY point. It showed up as
+# wildly uneven turnout: 20 bots voted on 07-14, but only 5 on 07-10 and 2 on
+# 07-28, because systemd terminated the job mid-loop and whichever bots had not
+# been reached simply never voted. Since the basket is decided by whoever voted,
+# a timeout was silently changing what the club bought.
+# 3300s runs the full useful window; votes cast after the close would not count
+# anyway, so the ballot itself is the real bound.
+TimeoutStartSec=3300
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
