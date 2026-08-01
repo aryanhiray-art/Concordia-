@@ -182,6 +182,17 @@ class Settings:
     # can never place a real order no matter what else is misconfigured.
     demo_mode: bool = _bool("DEMO_MODE", False)
 
+    # DEMO ONLY: a JSON file holding the REAL club's shared record (history +
+    # performance), refreshed by jobs/mirror_club.py running against the live
+    # database. The demo's own trades stay simulated; only the club-level story
+    # is real, so people trying it see the actual fund rather than fixtures.
+    #
+    # The demo process NEVER reads the live database — it reads this file, which
+    # contains only the two payloads every member is already allowed to see and
+    # which carry no member identity by construction. Ignored outside demo_mode,
+    # so setting it on the real instance does nothing.
+    club_mirror_path: str = os.environ.get("CLUB_MIRROR_PATH", "")
+
     @property
     def is_live(self) -> bool:
         return self.execution_mode == "live" and not self.demo_mode

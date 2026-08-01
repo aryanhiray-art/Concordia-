@@ -1,0 +1,9 @@
+[Unit]
+Description=Concord — refresh the demo's copy of the real club record every 30 minutes
+
+[Timer]
+OnCalendar=*-*-* *:00/30 America/New_York
+Persistent=false
+
+[Install]
+WantedBy=timers.target

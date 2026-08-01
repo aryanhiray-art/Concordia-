@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from ..services import performance
+from ..services import clubmirror, performance
 from ..services import voting as voting_svc
 from .deps import require_member
 
@@ -17,7 +17,15 @@ router = APIRouter(prefix="/api/club", tags=["club"])
 @router.get("/performance")
 def club_performance(force: bool = False, member: dict = Depends(require_member)):
     """Decided-trades index vs SPY buy-and-hold. `force` recompute is honored
-    for the owner only — a member hammering it must not bust the shared cache."""
+    for the owner only — a member hammering it must not bust the shared cache.
+
+    On the DEMO instance this serves the REAL club's series from the mirror file
+    (services/clubmirror): demo accounts trade fake money, but the club's record
+    is the actual one. Falls through to local data when no mirror is present.
+    """
+    mirrored = clubmirror.performance()
+    if mirrored is not None:
+        return mirrored
     return performance.club_performance(force=force and member.get("role") == "owner")
 
 
@@ -27,5 +35,12 @@ def club_history(limit: int = 30, member: dict = Depends(require_member)):
 
     Identical for every member (nothing member-identifying); a member's own
     ballots live at GET /api/me/votes instead.
+
+    On the DEMO instance this serves the REAL club's cycles from the mirror file
+    — the fund's record is shared and non-identifying, so the demo shows the
+    actual one instead of fixtures. Member-level views stay simulated.
     """
+    mirrored = clubmirror.history(limit)
+    if mirrored is not None:
+        return {"sessions": mirrored, "mirrored_at": clubmirror.mirrored_at()}
     return {"sessions": voting_svc.club_history(limit)}

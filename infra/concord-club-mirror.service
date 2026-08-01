@@ -1,0 +1,17 @@
+[Unit]
+Description=Concord — publish the real club's shared record (history + performance) for the demo instance to read
+
+[Service]
+Type=oneshot
+User=concord
+Group=concord-demo
+WorkingDirectory=/opt/concord/backend
+EnvironmentFile=/opt/concord/.env
+ExecStart=/opt/concord/backend/.venv/bin/python -m jobs.mirror_club --out /var/lib/concord-mirror/club.json
+TimeoutStartSec=300
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/concord /var/lib/concord-mirror
+# 0640 with group concord-demo: written by concord, readable by the demo, nobody else.
+UMask=027
