@@ -430,9 +430,6 @@ body { background: transparent; }
    <svg> to 100%x100%, which fights PriceChart's MEASURED pixel viewBox — so the
    account line is now an inline-styled layer in CinematicOverview instead, and
    its per-slide opacity is driven from React's `slide` state.) */
-.cine .sdot { position: absolute; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 0 14px rgba(255,255,255,.7), 0 0 0 4px rgba(45,212,191,.18); transform: translate(-50%,-50%); z-index: 3; opacity: 0; pointer-events: none; transition: opacity .18s; }
-.cine .stip { position: absolute; transform: translate(-50%,-100%); z-index: 3; font: 600 13px/1 var(--font-inter); color: var(--ink); background: rgba(12,16,22,.82); border: 1px solid var(--glassbd); padding: 7px 11px; border-radius: 8px; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity .18s; backdrop-filter: blur(8px); }
-.cine #stage.scrubbing .sdot, .cine #stage.scrubbing .stip { opacity: 1; }
 .cine .value { position: absolute; top: 0; left: 0; z-index: 2; transform-origin: top left; will-change: transform,opacity; transition: transform .62s var(--ease), opacity .4s var(--ease); }
 .cine .value .num { font: 800 clamp(54px,8.6vw,118px)/1 var(--font-outfit); letter-spacing: -.02em; background: linear-gradient(180deg,#fff,#bfeee6); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .cine .value .chg { margin-top: 14px; font: 600 22px/1 var(--font-inter); color: var(--green); }
@@ -490,9 +487,22 @@ html, body { overflow-x: hidden; }
 .cine .holdrow:first-of-type { border-top: none; }
 .cine .holdrow:hover { background: rgba(255,255,255,.03); }
 .cine .htk { width: 56px; height: 40px; border-radius: 11px; background: rgba(255,255,255,.04); border: 1px solid var(--hair); display: grid; place-items: center; font: 600 12px/1 var(--font-outfit); color: var(--muted); flex: none; }
-.cine .hn { flex: none; min-width: 150px; } .cine .hn b { font: 600 15px/1.2 var(--font-inter); } .cine .hn s { display: block; font: 400 12px/1 var(--font-inter); color: var(--subtle); text-decoration: none; margin-top: 3px; }
+.cine .hn { flex: 1 1 auto; min-width: 0; } .cine .hn b { font: 600 15px/1.2 var(--font-inter); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .cine .hn s { display: block; font: 400 12px/1 var(--font-inter); color: var(--subtle); text-decoration: none; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cine .hspark { flex: 1; height: 42px; }
 .cine .hwt { font: 600 14px/1 var(--font-outfit); color: var(--muted); flex: none; width: 84px; text-align: right; }
+/* Phones: the row was flex-none 56 + gap 20 + min-width:150 + gap 20 + spark +
+   gap 20 + 84 = wider than a 375px content box, so the dollar amounts were
+   visually clipped. html{overflow-x:hidden} hid the symptom (documentElement
+   .scrollWidth still read 375) which is why it survived earlier sweeps — the
+   name column now flexes and truncates instead of forcing the row wide, and
+   the sparkline yields its space on small screens. */
+@media (max-width: 460px) {
+  .cine .holdrow { gap: 12px; padding: 14px 10px; margin: 0 -10px; }
+  .cine .htk { width: 46px; height: 36px; }
+  .cine .hspark { display: none; }
+  .cine .hwt { width: auto; min-width: 64px; }
+}
+
 @media (prefers-reduced-motion: reduce) { .cine * { transition: none !important; animation: none !important; } }
 
 /* cinematic fixes: trackpad swipe (no browser back/fwd), no focus-box, legend subtitle */

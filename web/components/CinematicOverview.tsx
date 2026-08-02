@@ -34,15 +34,24 @@ const RANGES: EquityRangeKey[] = ["1D", "1W", "1M", "3M", "1Y", "ALL"];
 
 type Cache = Partial<Record<EquityRangeKey, EquityPoint[]>>;
 
-/** Defensive read of the equity payload: anything malformed, partially typed or
- *  non-positive is dropped rather than plotted. Sorted, because the chart's
- *  x-axis is time-positioned and assumes monotonic timestamps. */
+/** Defensive read of the equity payload: anything malformed or partially typed
+ *  is dropped rather than plotted. Sorted, because the chart's x-axis is
+ *  time-positioned and assumes monotonic timestamps.
+ *
+ *  $0.00 IS A REAL OBSERVATION and must survive. The backend only ever records
+ *  a value it actually read — a failed read writes nothing, and never writes 0
+ *  (services/equity_history.py). So a zero means the account really was empty.
+ *  Filtering `v > 0` here silently deleted exactly the moment a member would
+ *  most want to see: a liquidation recorded as [1000, 900, 0, 0, 0] drew only
+ *  two vertices, the low label read $900, and the line simply stopped — a wiped
+ *  account rendered as though nothing had happened. Only negatives (impossible)
+ *  and non-finite values are rejected. */
 function normalizeEquity(r: EquityHistory | null | undefined): EquityPoint[] {
   const raw: unknown = r?.points;
   if (!Array.isArray(raw)) return [];
   return raw
     .map((p: any) => ({ t: Number(p?.t), v: Number(p?.v) }))
-    .filter((p) => Number.isFinite(p.t) && p.t > 0 && Number.isFinite(p.v) && p.v > 0)
+    .filter((p) => Number.isFinite(p.t) && p.t > 0 && Number.isFinite(p.v) && p.v >= 0)
     .sort((a, b) => a.t - b.t);
 }
 
