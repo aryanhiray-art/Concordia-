@@ -1,7 +1,8 @@
 "use client";
 
+import { useEffect } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { AuthGate } from "@/components/AuthGate";
 import { ConfirmEmail } from "@/components/ConfirmEmail";
@@ -9,13 +10,31 @@ import { Nav } from "@/components/Nav";
 import { AdminConsole, AdminDenied } from "@/components/AdminConsole";
 import { LoadingScreen } from "@/components/ui";
 import { isAdminHost } from "@/lib/host";
+import { WIZARD_DONE_KEY, WIZARD_SKIP_KEY, getWizardFlag } from "@/components/wizard/flags";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const { ready, member, refreshMember, offline, accountReady, signedOutNote } = useAuth();
   const pathname = usePathname();
+  const router = useRouter();
   // /terms + /privacy are documents, not app screens: they must render for a
   // half-verified member, on the admin host, and without any account data.
   const isLegal = pathname === "/terms" || pathname === "/privacy";
+
+  // A brand-new member belongs in /welcome no matter WHERE they signed in.
+  // The redirect used to live only on the Overview route, so someone who
+  // authenticated while sitting on /account (an idle-logged-out tab, a
+  // bookmark) landed straight in the app with no onboarding — the owner hit
+  // exactly this with a fresh Google signup. Flags are per-member now, so
+  // another account's "skip" in the same browser no longer suppresses it.
+  // Hook lives ABOVE every conditional return (rules of hooks); all its
+  // conditions are checked inside.
+  const connectedRH = !!(member?.robinhood?.status === "connected" && member?.robinhood?.account_number);
+  useEffect(() => {
+    if (!member || connectedRH || isLegal || pathname === "/welcome") return;
+    if (isAdminHost() || member.needs_email_verification) return;
+    if (getWizardFlag(WIZARD_SKIP_KEY, member.id) || getWizardFlag(WIZARD_DONE_KEY, member.id)) return;
+    router.replace("/welcome");
+  }, [member, connectedRH, isLegal, pathname, router]);
 
   if (!ready) return <LoadingScreen label="starting concordia" />;
   if (!member) return <AuthGate notice={signedOutNote} onAuthed={() => refreshMember()} />;

@@ -95,9 +95,9 @@ export function Wizard() {
   // not-set-up members to /welcome unless it's set, so this is what makes
   // leaving mid-setup (or finishing) stick instead of bouncing straight back.
   const leaveToApp = useCallback(() => {
-    setWizardFlag(WIZARD_SKIP_KEY);
+    setWizardFlag(WIZARD_SKIP_KEY, member?.id);
     router.push("/");
-  }, [router]);
+  }, [router, member?.id]);
 
   if (!member) return null; // AppShell shows the auth gate instead
 

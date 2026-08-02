@@ -22,7 +22,7 @@ export default function Overview() {
     // Members who skipped the wizard (or were already verified fully set up)
     // go straight to the app — every wizard exit sets the skip flag first, so
     // /welcome and this redirect can never loop.
-    if (getWizardFlag(WIZARD_SKIP_KEY) || getWizardFlag(WIZARD_DONE_KEY)) { setGate("app"); return; }
+    if (getWizardFlag(WIZARD_SKIP_KEY, member.id) || getWizardFlag(WIZARD_DONE_KEY, member.id)) { setGate("app"); return; }
     if (!connected) { router.replace("/welcome"); return; }
     // Decide from the member payload we ALREADY have — never block the page on
     // a network call. The old version awaited /api/me/account, which does live
@@ -33,7 +33,7 @@ export default function Overview() {
     // resume banner below does the precise check and surfaces anything missing.
     const optedIn = Number(member.settings?.opted_in) === 1;
     const staked = Number(member.settings?.alloc_value ?? 0) > 0;
-    if (optedIn && staked) { setWizardFlag(WIZARD_DONE_KEY); setGate("app"); return; }
+    if (optedIn && staked) { setWizardFlag(WIZARD_DONE_KEY, member.id); setGate("app"); return; }
     router.replace("/welcome");
   }, [member, connected, router]);
 
