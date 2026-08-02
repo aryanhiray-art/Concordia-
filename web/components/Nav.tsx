@@ -5,10 +5,12 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { Logo } from "./ui";
 
+// No "Stocks" tab: research is not a destination you browse, it's something you
+// do while voting. The search lives inside the ballot (/vote) and the research
+// surfaces — the slide-over and /stocks/[symbol] — open from any symbol chip.
 const TABS = [
   { href: "/", label: "Overview" },
   { href: "/vote", label: "Vote" },
-  { href: "/stocks", label: "Stocks" },
   { href: "/history", label: "History" },
   { href: "/account", label: "Account" },
 ];

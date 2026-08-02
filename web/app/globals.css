@@ -426,11 +426,10 @@ body { background: transparent; }
 .cine { position: relative; width: 100vw; margin-left: calc(50% - 50vw); margin-top: -88px; }
 .cine #stage { position: relative; height: 100vh; min-height: 600px; overflow: hidden; z-index: 1; cursor: grab; user-select: none; touch-action: pan-y; }
 .cine #stage.grab { cursor: grabbing; }
-.cine .chartfield { position: absolute; inset: 0; z-index: 0; transition: opacity .34s var(--ease); will-change: opacity; }
-.cine #stage[data-s="0"] .chartfield { opacity: .20; }
-.cine #stage[data-s="1"] .chartfield { opacity: 1; }
-.cine #stage[data-s="2"] .chartfield { opacity: 0; }
-.cine .chartfield svg { width: 100%; height: 100%; display: block; overflow: visible; }
+/* (the old `.chartfield` wrapper lived here. It force-stretched any descendant
+   <svg> to 100%x100%, which fights PriceChart's MEASURED pixel viewBox — so the
+   account line is now an inline-styled layer in CinematicOverview instead, and
+   its per-slide opacity is driven from React's `slide` state.) */
 .cine .sdot { position: absolute; width: 14px; height: 14px; border-radius: 50%; background: #fff; box-shadow: 0 0 14px rgba(255,255,255,.7), 0 0 0 4px rgba(45,212,191,.18); transform: translate(-50%,-50%); z-index: 3; opacity: 0; pointer-events: none; transition: opacity .18s; }
 .cine .stip { position: absolute; transform: translate(-50%,-100%); z-index: 3; font: 600 13px/1 var(--font-inter); color: var(--ink); background: rgba(12,16,22,.82); border: 1px solid var(--glassbd); padding: 7px 11px; border-radius: 8px; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity .18s; backdrop-filter: blur(8px); }
 .cine #stage.scrubbing .sdot, .cine #stage.scrubbing .stip { opacity: 1; }
@@ -551,8 +550,9 @@ html, body { overscroll-behavior-x: none; }
   .loadmark .lg-outer, .loadmark .lg-mid, .loadmark .lg-core { animation: none; }
 }
 
-/* The club chart standing in for a personal line the member doesn't have yet.
-   Sits inside .chartfield, above the (empty) hero svg. */
+/* The club chart standing in for a personal line the member doesn't have yet
+   (fewer than 2 recorded points anywhere). A direct child of #stage, centred
+   over the empty chart layer. */
 .clubfill {
   position: absolute;
   left: 0; right: 0;

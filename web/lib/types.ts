@@ -26,6 +26,25 @@ export type Holding = { symbol: string; quantity: number; value: number; pnl: nu
 /** GET /api/me/holdings — same snapshot contract as Account. */
 export type HoldingsView = { holdings: Holding[]; as_of?: number | null; stale?: boolean };
 
+// ── the member's own recorded account-value history ────────────────────────
+// GET /api/me/equity?range=… — REAL observations, one row per time the club
+// read the balance off the broker (~10 minutes for recent windows, thinned to
+// daily further back). NOTHING is interpolated: if the club didn't record it,
+// it isn't in here, which is why a young account legitimately returns 0 or 1
+// point. The broker has no account-value history endpoint, so this can only
+// ever be recorded going forward — never backfilled.
+export type EquityRangeKey = "1D" | "1W" | "1M" | "3M" | "1Y" | "ALL";
+export type EquityPoint = { t: number; v: number };   // epoch seconds, $ total value
+export type EquityHistory = {
+  range: EquityRangeKey;
+  points: EquityPoint[];
+  /** e.g. "10m" / "1d" — informational; the chart reads the timestamps. */
+  resolution?: string | null;
+  /** epoch seconds of the oldest observation on record, any range. */
+  first_ts?: number | null;
+  ok?: boolean;
+};
+
 export type PowerPoint = { week_start: string; power: number; equity: number | null; delta: number | null };
 export type PowerView = {
   power: number;

@@ -1,11 +1,17 @@
 "use client";
 
+// /vote — the one screen where a member does something: find a name, put power
+// on it, watch the club's consensus form next to it. The standalone /stocks tab
+// folded in here (the search sits inside the ballot card, see StockSearch); the
+// research surfaces themselves — the slide-over and /stocks/[symbol] — are
+// unchanged and every symbol on this page still opens one.
+
 import { useState } from "react";
 import { useAuth } from "@/lib/auth";
 import type { SessionView } from "@/lib/types";
 import { AllocSliders } from "@/components/AllocSliders";
 import { MemberKeys } from "@/components/MemberKeys";
-import { Button, Card, Countdown, LoadingScreen } from "@/components/ui";
+import { Button, Card, Countdown, LoadingScreen, Pill } from "@/components/ui";
 import { StockLink } from "@/components/StockLink";
 import { fmtTime, fmtTradeDate } from "@/lib/format";
 
@@ -21,20 +27,18 @@ function ClosedBallot({ session }: { session: SessionView }) {
   const names: Record<string, string> = {};
   session.tally.forEach((t) => { names[t.symbol] = t.name; });
   const picks = session.my_picks || [];
-  const lockedAt = fmtTime(session.closes_at);
+  const total = picks.reduce((a, p) => a + (p.weight || 0), 0);
   return (
-    <div className="glass rise p-5 sm:p-6">
-      <div className="flex items-center justify-between border-b border-hair pb-3">
+    <div className="glass rise p-4 sm:p-5">
+      <div className="flex items-baseline justify-between gap-3">
         <span className="label">Your ballot</span>
-        <span className="text-[11.5px] text-subtle">read-only</span>
+        <span className="text-[11.5px] text-subtle">read-only · locked {fmtTime(session.closes_at)}</span>
       </div>
-      <p className="mt-3 text-[13px] text-muted">
-        Locked at <b className="text-ink">{lockedAt}</b>.
-      </p>
+      <div className="bar mt-2.5"><i style={{ width: `${Math.min(100, Math.round(total))}%` }} /></div>
       {picks.length === 0 ? (
-        <p className="mt-3 text-[13px] text-subtle">You didn&apos;t cast a vote this cycle.</p>
+        <p className="py-7 text-center text-[13px] text-subtle">You didn&apos;t cast a vote this cycle.</p>
       ) : (
-        <div className="mt-3">
+        <div className="mt-1 max-h-[min(44vh,380px)] overflow-y-auto">
           {picks.map((p) => (
             <div key={p.symbol} className="vrow">
               <div className="vtk">
@@ -43,7 +47,8 @@ function ClosedBallot({ session }: { session: SessionView }) {
                 </StockLink>
                 <s>{names[p.symbol] || p.symbol}</s>
               </div>
-              <span className="ml-auto text-[13px] font-semibold tnum">{Math.round(p.weight)}%</span>
+              <div className="bar min-w-0 flex-1"><i style={{ width: `${Math.min(100, p.weight)}%` }} /></div>
+              <span className="w-11 flex-none text-right text-[13px] font-semibold tnum">{Math.round(p.weight)}%</span>
             </div>
           ))}
         </div>
@@ -56,6 +61,7 @@ export default function VotePage() {
   const { member, power, session, sessionError, refreshSession } = useAuth();
   const participating = Number(member?.settings?.opted_in) === 1;
   const [retrying, setRetrying] = useState(false);
+  const [showKeys, setShowKeys] = useState(false);
 
   // Ballot fetch failed — show an error + retry instead of spinning forever.
   if (!session && sessionError) {
@@ -78,60 +84,81 @@ export default function VotePage() {
   const open = session.status === "open";
   const basket = ((session.picks?.length ? session.picks : session.tally) || []).slice(0, session.top_n);
   const maxW = Math.max(1, ...basket.map((b) => b.weight || 0));
+  const mine = new Set((session.my_picks || []).map((p) => p.symbol));
+  const anyMine = basket.some((b) => mine.has(b.symbol));
 
   return (
-    <div className="space-y-7">
-      <header className="enter flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="font-display text-[34px] font-bold leading-none tracking-tight sm:text-[40px]">Cast your vote</h1>
-          <div className="mt-2.5 text-[13.5px] text-muted">
-            {fmtTradeDate(session.trade_date)} ·{" "}
-            {open ? <>voting <b className="text-teal">closes in <Countdown to={session.closes_at} /></b></>
-              : <span className="text-red">voting closed</span>}
+    <div className="stagger space-y-5">
+      <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+        <div className="min-w-0">
+          <h1 className="font-display text-[28px] font-bold leading-none tracking-tight sm:text-[34px]">Vote</h1>
+          <div className="mt-2.5 flex flex-wrap items-center gap-2 text-[12.5px] text-muted">
+            <span>{fmtTradeDate(session.trade_date)}</span>
+            {open
+              ? <Pill tone="teal">closes in <b><Countdown to={session.closes_at} /></b></Pill>
+              : <Pill tone="danger">voting closed</Pill>}
           </div>
         </div>
-        <div className="text-right">
+        {/* wraps under the title on a phone, so it left-aligns there and only
+            hugs the right edge once it shares the row with the title */}
+        <div className="text-left sm:text-right">
           <div className="label !text-[10px]">Your voting power</div>
-          <div className="hero-num sm mt-1.5 tnum">{money(power?.power)}</div>
+          <div className="mt-1.5 font-display text-[27px] font-bold leading-none tnum sm:text-[31px]">{money(power?.power)}</div>
         </div>
       </header>
 
-      <div className="grid items-start gap-7 lg:grid-cols-[1.55fr_1fr]">
+      {/* [&>*]:min-w-0 is load-bearing, and the sibling of the min-width:0 note
+          on .slider in globals.css: a grid item's automatic minimum size is its
+          MIN-CONTENT, and a range input's is ~129px, so on a 375px phone the
+          ballot card grew 33px past the column and only html{overflow-x:hidden}
+          hid it. Zeroing the items' minimum lets the slider shrink instead. */}
+      <div className="grid items-start gap-5 [&>*]:min-w-0 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
         {/* three distinct states: participation actually OFF → AllocSliders'
             turn-it-on-in-Account message; ON but the ballot closed → the
-            read-only locked ballot; ON and open → the live sliders. */}
+            read-only locked ballot; ON and open → the live ballot. */}
         {participating && !open
           ? <ClosedBallot session={session} />
           : <AllocSliders session={session} participating={participating} onVoted={() => refreshSession()} />}
 
-        <div className="space-y-7">
-          {/* generate your own API key here — let a bot cast this vote for you */}
-          <MemberKeys />
-
+        <div className="space-y-3">
           {/* forming basket — power-weighted consensus */}
-          <div className="glass shine rise p-5 sm:p-6">
-            <div className="flex items-center justify-between">
-              <span className="label !text-teal">Forming basket</span>
-              <span className="text-[11.5px] text-subtle">{session.voters} voter{session.voters === 1 ? "" : "s"}</span>
+          <div className="glass shine rise p-4 sm:p-5">
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="label !text-teal">Club consensus</span>
+              <span className="text-[11.5px] text-subtle">
+                {session.voters} voter{session.voters === 1 ? "" : "s"} · top {session.top_n}
+              </span>
             </div>
-            <p className="mt-1 text-[12px] text-subtle">top {session.top_n} by voting power</p>
             {basket.length === 0 ? (
-              <p className="mt-5 text-[13px] text-subtle">No votes yet.</p>
+              <p className="py-7 text-center text-[13px] text-subtle">No votes yet.</p>
             ) : (
-              <div className="mt-4 flex flex-col gap-2.5">
+              <div className="mt-3.5 flex max-h-[min(46vh,400px)] flex-col gap-2.5 overflow-y-auto">
                 {basket.map((b) => (
                   <div key={b.symbol} className="flex items-center gap-2.5">
                     <StockLink symbol={b.symbol} unstyled
-                      className="w-14 flex-none text-left font-display text-[13px] font-semibold transition hover:text-teal">
+                      className={`w-14 flex-none text-left font-display text-[13px] font-semibold transition hover:text-teal ${mine.has(b.symbol) ? "text-teal" : ""}`}>
                       {b.symbol}
                     </StockLink>
-                    <div className="bar flex-1"><i style={{ width: `${((b.weight || 0) / maxW) * 100}%` }} /></div>
-                    <span className="w-16 flex-none text-right text-[12px] tnum text-muted">{money(b.weight)}</span>
+                    <div className="bar min-w-0 flex-1"><i style={{ width: `${((b.weight || 0) / maxW) * 100}%` }} /></div>
+                    <span className="w-14 flex-none text-right text-[12px] tnum text-muted">{money(b.weight)}</span>
                   </div>
                 ))}
               </div>
             )}
+            {anyMine && <p className="mt-3 text-[11px] text-subtle"><span className="text-teal">teal</span> = on your ballot</p>}
           </div>
+
+          {/* power-user surface, one click away instead of a card-sized block */}
+          {showKeys ? <MemberKeys /> : (
+            <button onClick={() => setShowKeys(true)}
+              className="flex w-full items-center gap-2 rounded-[14px] border border-hair bg-white/[0.03] px-4 py-3 text-left text-[12.5px] text-muted transition hover:border-teal/30 hover:text-ink">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-none text-teal">
+                <circle cx="8" cy="15" r="4" /><path d="m10.8 12.2 6.2-6.2M15 8l2 2M18 5l2 2" />
+              </svg>
+              Vote via API — let your own bot cast this vote
+              <span className="ml-auto flex-none text-subtle">+</span>
+            </button>
+          )}
         </div>
       </div>
     </div>

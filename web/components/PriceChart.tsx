@@ -32,8 +32,33 @@ function tsOf(p: StockPricePoint): number {
   return m ? new Date(+m[1], +m[2] - 1, +m[3]).getTime() / 1000 : NaN;
 }
 
+/** How the axis / readout labels a point.
+ *
+ *  "auto" = the stock behaviour (time-of-day for intraday series, MM/DD/YYYY for
+ *  daily ones). The explicit modes exist because the ACCOUNT chart plots one
+ *  continuous recorded series across every window — 10-minute observations near
+ *  the present, thinned to daily further back — so the right label is a property
+ *  of the RANGE the member picked, not of the sample spacing. */
+export type ChartLabelMode = "auto" | "time" | "weekday" | "monthday" | "monthyear";
+
+const p2 = (n: number) => String(n).padStart(2, "0");
+
+/** The point's instant, or null when it carries no usable date at all. */
+function dateOf(p: StockPricePoint): Date | null {
+  const s = tsOf(p);
+  return Number.isFinite(s) ? new Date(s * 1000) : null;
+}
+
 /** Axis/readout label for a point: time-of-day for intraday, date for daily. */
-function labelOf(p: StockPricePoint, intraday: boolean): string {
+function labelOf(p: StockPricePoint, intraday: boolean, mode: ChartLabelMode = "auto"): string {
+  if (mode !== "auto") {
+    const d = dateOf(p);
+    if (!d) return "—";
+    if (mode === "time") return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    if (mode === "weekday") return `${d.toLocaleDateString(undefined, { weekday: "short" })} ${p2(d.getMonth() + 1)}/${p2(d.getDate())}`;
+    if (mode === "monthday") return `${p2(d.getMonth() + 1)}/${p2(d.getDate())}`;
+    return `${p2(d.getMonth() + 1)}/${d.getFullYear()}`;   // "monthyear"
+  }
   if (intraday && typeof p.t === "number") {
     return new Date(p.t * 1000).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   }
@@ -65,12 +90,20 @@ function linePath(pts: [number, number][]): string {
 }
 
 export function PriceChart({
-  points, height = 160, interactive = false,
+  points, height = 160, interactive = false, labelMode = "auto", onHover, ariaLabel,
 }: {
   points: StockPricePoint[];
   height?: number;
   /** Full-page variant: hover crosshair + a readout in its own band above the plot. */
   interactive?: boolean;
+  /** Axis/readout label format. Default "auto" = infer from the series shape. */
+  labelMode?: ChartLabelMode;
+  /** Delegate the readout: when given, the hovered index is reported to the
+   *  parent and this chart draws NO readout text of its own (the account
+   *  overview shows it in the hero, at hero size). null = pointer left. */
+  onHover?: (i: number | null) => void;
+  /** Overrides the screen-reader description (default describes a price series). */
+  ariaLabel?: string;
 }) {
   const [w, setW] = useState(480);          // replaced on mount by the real width
   const [hover, setHover] = useState<number | null>(null);
@@ -137,7 +170,8 @@ export function PriceChart({
   const flat = !(span > 1e-9);            // also catches NaN → treated as flat
 
   // ── the box: plot rectangle + the bands that keep labels off the curve ────
-  const HEAD = interactive ? 18 : 0;      // hover readout band
+  const delegated = typeof onHover === "function";   // parent draws the readout
+  const HEAD = interactive && !delegated ? 18 : 0;   // hover readout band
   const PAD_T = 12 + HEAD;
   const PAD_B = 22;                       // date band
   const PAD_L = 4;
@@ -169,27 +203,60 @@ export function PriceChart({
   const area = `${line} L${(PAD_L + plotW).toFixed(2)},${plotB} L${PAD_L},${plotB} Z`;
   const hiIdx = cs.indexOf(mx), loIdx = cs.indexOf(mn);
 
-  // date ticks: as many as the width can hold without crowding
+  // Date ticks: as many as the width can hold without crowding, chosen by TIME
+  // and then snapped to the nearest real point.
+  //
+  // Evenly-spaced INDICES look identical on a uniformly-sampled series and are
+  // wrong the moment the sampling isn't uniform — the account series is
+  // 10-minute near the present and daily further back, so index-spaced ticks
+  // pile up in the recent sliver ("07/27 07/3008/01" printed on top of each
+  // other) while months of chart carry no label at all. x is time-positioned,
+  // so the ticks have to be too.
   const nTicks = Math.max(2, Math.min(5, Math.floor(plotW / 108)));
-  const ticks = Array.from({ length: nTicks }, (_, k) =>
-    Math.round((k / (nTicks - 1)) * (points.length - 1)));
+  const nearestTo = (target: number) => {
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < ts.length; i++) {
+      const d = Math.abs(ts[i] - target);
+      if (d < bd) { bd = d; best = i; }
+    }
+    return best;
+  };
+  const ticks = Array.from({ length: nTicks }, (_, k) => {
+    const f = k / (nTicks - 1);
+    return byTime ? nearestTo(t0 + f * tSpan) : Math.round(f * (points.length - 1));
+  }).filter((idx, k, arr) => k === 0 || idx !== arr[k - 1]);   // a short series can snap two ticks together
 
-  const hi = hover != null ? points[hover] : null;
+  // Clamped: a range switch can leave a hover index pointing past the new,
+  // shorter series (state survives, `points` does not).
+  const hi = hover != null && hover >= 0 && hover < points.length ? points[hover] : null;
+
+  function moveTo(i: number | null) {
+    setHover(i);
+    onHover?.(i);
+  }
 
   function onMove(e: React.PointerEvent<SVGSVGElement>) {
     if (!interactive) return;
     const r = e.currentTarget.getBoundingClientRect();
     if (!r.width) return;
     const px = (e.clientX - r.left) * (W / r.width);
-    const t = (px - PAD_L) / plotW;
-    setHover(Math.max(0, Math.min(points.length - 1, Math.round(t * (points.length - 1)))));
+    // x is TIME-positioned, so the nearest point is the nearest in x — not
+    // `round(t * (n-1))`, which is index arithmetic and lands on the wrong
+    // observation the moment the samples aren't evenly spaced (they aren't:
+    // 10-minute near the present, daily further back).
+    let best = 0, bestD = Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      const d = Math.abs(pts[i][0] - px);
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    moveTo(best);
   }
 
   return (
     <div ref={attach} className="w-full">
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} className="block touch-pan-y"
-        role="img" aria-label={`price history, ${labelOf(points[0], intraday)} to ${labelOf(points[points.length - 1], intraday)}`}
-        onPointerMove={onMove} onPointerLeave={() => setHover(null)}>
+        role="img" aria-label={ariaLabel ?? `price history, ${labelOf(points[0], intraday, labelMode)} to ${labelOf(points[points.length - 1], intraday, labelMode)}`}
+        onPointerMove={onMove} onPointerLeave={() => moveTo(null)}>
         <defs>
           <linearGradient id={`pcf-${uid}`} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0" stopColor={color} stopOpacity="0.22" />
@@ -231,7 +298,7 @@ export function PriceChart({
           <text key={i} x={X(i)} y={H - 6}
             textAnchor={k === 0 ? "start" : k === ticks.length - 1 ? "end" : "middle"}
             className="tnum" fill="rgba(255,255,255,0.38)" fontSize="10.5">
-            {labelOf(points[i], intraday)}
+            {labelOf(points[i], intraday, labelMode)}
           </text>
         ))}
 
@@ -241,10 +308,12 @@ export function PriceChart({
             <line x1={X(hover!)} x2={X(hover!)} y1={PAD_T} y2={plotB}
               stroke="rgba(255,255,255,0.22)" strokeWidth="1" />
             <circle cx={X(hover!)} cy={Y(hi.c)} r="3.5" fill={color} stroke="#0b0f14" strokeWidth="1.5" />
-            <text x={PAD_L} y={10} dominantBaseline="middle" textAnchor="start" className="tnum"
-              fill="rgba(255,255,255,0.72)" fontSize="11">
-              {labelOf(hi, intraday)} · {fmtPrice(hi.c)}
-            </text>
+            {!delegated && (
+              <text x={PAD_L} y={10} dominantBaseline="middle" textAnchor="start" className="tnum"
+                fill="rgba(255,255,255,0.72)" fontSize="11">
+                {labelOf(hi, intraday, labelMode)} · {fmtPrice(hi.c)}
+              </text>
+            )}
           </>
         )}
       </svg>

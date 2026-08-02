@@ -41,7 +41,13 @@ export function mergePick(mine: Alloc[], symbol: string): { next: Alloc[]; weigh
   // power it had, and no pick can round to 0.
   const room = 100 - share;
   const exact = mine.map((p) => ((p.weight || 0) * room) / (used || 1));
-  const w = exact.map((v) => Math.max(1, Math.floor(v)));
+  // The 1% floor applies ONLY to picks that actually carry weight. Applying it
+  // to every row invented power the member never allocated: a pick they had
+  // deliberately dragged to 0% got pushed back to 1%, and with enough 0% rows
+  // the ballot broke its own ceiling — measured 101% at nine zero-weight picks,
+  // rising to 114% at eighteen. A 0% pick means "I don't back this", so it
+  // stays 0 and only real weight is protected from rounding to nothing.
+  const w = exact.map((v, i) => ((mine[i].weight || 0) > 0 ? Math.max(1, Math.floor(v)) : 0));
   let left = room - w.reduce((a, b) => a + b, 0);
   const byFraction = exact
     .map((v, i) => [v - Math.floor(v), i] as [number, number])

@@ -1,6 +1,6 @@
 "use client";
 
-import type { Member, SessionView, UniverseItem, ExecutionRow, PowerView, Account, HoldingsView, ApiKey, ResearchResult, PerfView, AdminPanel, ClubHistoryView, MyVotesView, StockDetail, StockHistory, StockRangeKey, StockSearchResult } from "./types";
+import type { Member, SessionView, UniverseItem, ExecutionRow, PowerView, Account, HoldingsView, ApiKey, ResearchResult, PerfView, AdminPanel, ClubHistoryView, MyVotesView, StockDetail, StockHistory, StockRangeKey, StockSearchResult, EquityHistory, EquityRangeKey } from "./types";
 
 // Empty base = same-origin (Vercel rewrites /api + /oauth to the forge backend).
 // Local dev sets NEXT_PUBLIC_CONCORD_API=http://localhost:8780.
@@ -179,6 +179,13 @@ export const api = {
   // the member's positions (for the overview donut + holdings list) — same
   // cached-snapshot contract as account().
   holdings: () => req<HoldingsView>("/api/me/holdings"),
+  // The member's own RECORDED account-value curve for one window. Cheap: it
+  // reads rows the 10-minute account refresher already wrote, and costs the
+  // broker nothing. Callers must treat a 404 / a malformed body as "no history
+  // yet" rather than an error — this endpoint post-dates some deployments, and
+  // an account that started recording this morning genuinely has ~no rows.
+  myEquity: (range: EquityRangeKey) =>
+    req<EquityHistory>(`/api/me/equity?range=${encodeURIComponent(range)}`),
   setAllocation: (type: "percent" | "dollar", value: number) =>
     req<Account>("/api/me/allocation", { method: "PUT", body: JSON.stringify({ type, value }) }),
   // club decisions vs SPY, both indexed to 100 — club-level, identical for every member

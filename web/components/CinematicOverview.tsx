@@ -1,19 +1,76 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Freshness } from "@/components/ui";
 import { ClubPerformance } from "@/components/ClubPerformance";
+import { PriceChart, type ChartLabelMode } from "@/components/PriceChart";
 import { useStockPanel } from "@/components/StockPanel";
 import { sectorOf, sectorColor } from "@/lib/sectors";
-import { fmtDate, fmtTradeDate } from "@/lib/format";
+import { fmtDateTime } from "@/lib/format";
+import type { EquityHistory, EquityPoint, EquityRangeKey } from "@/lib/types";
 
-// A representative market shape; we compress its daily returns to the member's
-// real club P&L and scale it to end at their real club value.
-const SPY = [680.73,678.87,671.40,676.47,680.59,684.83,687.96,690.38,690.31,687.85,687.01,681.92,683.17,687.72,691.81,689.58,689.51,694.07,695.16,693.77,690.36,692.24,691.66,677.58,685.40,688.98,689.23,692.73,695.49,695.42,694.04,691.97,695.41,689.53,686.19,677.62,690.62,693.95,692.12,691.96,681.27,681.75,682.85,686.29,684.48,689.43,682.39,687.35,693.15,689.30,685.99,686.38,680.33,685.13,681.31,672.38,678.27,677.18,676.33,666.06,662.29,669.03,670.79,661.43,659.80,648.57,655.38,653.18,656.82,645.09,650.34,655.24,655.83,658.93,659.22,676.01,679.91,679.46,686.10,694.46,699.94,701.66,710.14,708.72,711.21,713.94,715.17,718.66,720.65,723.77,733.83,737.62,739.30,742.31,748.17,738.65,741.25,745.64,750.59,754.60,756.48,759.57,757.09,737.55,741.75];
+// ── the account line ────────────────────────────────────────────────────────
+// Every point on it is an observation the club actually recorded (the 10-minute
+// account refresher writes one each time it reads the balance). There is NO
+// interpolation and no smoothing.
+//
+// It used to be both. The only account history that existed was one row a WEEK
+// (voting_power_history.equity), and this component fanned ~6 of those weekly
+// anchors out into ~105 evenly-spaced points by linear blending — so all but six
+// of the values on a money chart were invented, which is exactly why it read as
+// "straight segments between a handful of dots". Real curves need MORE REAL
+// POINTS, not a prettier interpolation, so the fix is the recorded series and
+// nothing else. A window with fewer than two recorded points draws no line at
+// all and says so.
+//
+// (Backfill is impossible, not merely unimplemented: Robinhood exposes equity /
+// option / index historicals but no account-value history, so the only way this
+// gets denser is time passing.)
+const RANGES: EquityRangeKey[] = ["1D", "1W", "1M", "3M", "1Y", "ALL"];
+
+type Cache = Partial<Record<EquityRangeKey, EquityPoint[]>>;
+
+/** Defensive read of the equity payload: anything malformed, partially typed or
+ *  non-positive is dropped rather than plotted. Sorted, because the chart's
+ *  x-axis is time-positioned and assumes monotonic timestamps. */
+function normalizeEquity(r: EquityHistory | null | undefined): EquityPoint[] {
+  const raw: unknown = r?.points;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((p: any) => ({ t: Number(p?.t), v: Number(p?.v) }))
+    .filter((p) => Number.isFinite(p.t) && p.t > 0 && Number.isFinite(p.v) && p.v > 0)
+    .sort((a, b) => a.t - b.t);
+}
+
+/** Axis label format for a window. 1Y/ALL are adaptive because "ALL" is only as
+ *  long as the club has been recording — MM/YYYY across a three-day record
+ *  prints the same label at every tick. */
+function labelModeFor(range: EquityRangeKey, series: EquityPoint[]): ChartLabelMode {
+  if (range === "1D") return "time";
+  if (range === "1W") return "weekday";
+  if (range === "1M" || range === "3M") return "monthday";
+  const span = series.length >= 2 ? series[series.length - 1].t - series[0].t : 0;
+  if (span < 3 * 86400) return "time";
+  if (span < 14 * 86400) return "weekday";
+  // Past ~6 months MM/DD stops being unique across the window (two "08/01"
+  // ticks a year apart), so the year has to be on the tick.
+  if (span < 180 * 86400) return "monthday";
+  return "monthyear";
+}
+
+const usd = (v: number) =>
+  "$" + v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// The chart layer is inset from both ends of the stage so PriceChart's own
+// labels land in clear air: the range tabs live at bottom: 92px (.perfx), and
+// the floating nav pill covers the top ~65px — a peak drawn at the plot's top
+// edge would otherwise disappear behind it.
+const CHART_TOP = 76;
+const CHART_BOTTOM = 148;
 
 // lighten/darken a hex by index so the stocks inside one sector stay visually
 // related (same hue) but distinguishable.
@@ -54,20 +111,6 @@ export function CinematicOverview() {
     ?? (hold.length ? hold.reduce((a, h) => a + h.value, 0) : null)
     ?? (pnl && pnl.invested > 0 ? pnl.value : null)
     ?? acc?.allocation?.resolved_usd ?? 0;
-  const pctTarget = (pnl && pnl.invested > 0 && pnl.profit_pct != null) ? pnl.profit_pct : 0;
-  // Real weekly account-value history (voting_power_history.equity) → the line
-  // plots ACTUAL values, not a canned market shape, once there are ≥2 points.
-  // week_start rides along so the axis/scrub can label REAL dates; when this is
-  // empty the line is the synthetic fallback shape and gets no dates at all
-  // (a made-up date on a money chart is worse than no date).
-  const histPoints = (acc?.power?.history || []).filter((h) => h.equity != null && h.equity > 0);
-  const equityHist = histPoints.map((h) => h.equity as number);
-  // One real observation plus the live value = two anchors = a line worth
-  // drawing. Below that the member has no history of their own, and the honest
-  // thing in that space is the club's record, not a synthesised personal curve.
-  const hasOwnHistory = equityHist.length >= 1;
-  const histKey = equityHist.join(",");
-  const dateKey = histPoints.map((h) => h.week_start).join(",");
   // donut + holdings reflect what you actually HOLD; fall back to today's forming
   // basket, then to the LAST DECIDED basket (early morning / post-liquidation the
   // active ballot is empty — never show a bare dash).
@@ -80,120 +123,102 @@ export function CinematicOverview() {
   const itemsKey = items.map((i) => `${i.sym}:${i.val}:${i.pnl ?? ""}`).join(",");
   const closesAt = session?.closes_at ?? 0;
   const open = session?.status === "open";
+  const showStage = loaded && value > 0;
+
+  // ── recorded equity history, one window at a time ─────────────────────────
+  const [cache, setCache] = useState<Cache>({});
+  const [range, setRange] = useState<EquityRangeKey>("1D");
+  const [autoRange, setAutoRange] = useState(true);   // the 1D → ALL fallback may still fire
+  const [hover, setHover] = useState<number | null>(null);
+  const [slide, setSlide] = useState(0);
+  const [chartH, setChartH] = useState(0);
+  const [countUp, setCountUp] = useState(0);          // 0→1 entrance multiplier
+
+  // Fetch the selected window once and keep it. A failure caches an EMPTY
+  // series on purpose: a 404 (older backend), a 500 and "you have no rows yet"
+  // are the same thing from here — no history to draw — and the honest empty
+  // state is better than a spinner that never resolves.
+  useEffect(() => {
+    if (!showStage || cache[range] !== undefined) return;
+    let alive = true;
+    api.myEquity(range)
+      .then((r) => { if (alive) setCache((c) => ({ ...c, [range]: normalizeEquity(r) })); })
+      .catch(() => { if (alive) setCache((c) => ({ ...c, [range]: [] })); });
+    return () => { alive = false; };
+  }, [showStage, range, cache]);
+
+  // Recording started recently, so 1D is legitimately empty outside market
+  // hours / on a fresh account. Fall back ONCE to the widest window rather than
+  // greeting a member who DOES have a record with an empty chart.
+  useEffect(() => {
+    if (!autoRange) return;
+    const day = cache["1D"];
+    if (day === undefined) return;
+    if (day.length >= 2) { setAutoRange(false); return; }
+    const all = cache["ALL"];
+    if (all === undefined) { setRange("ALL"); return; }   // the fetch effect picks it up
+    setAutoRange(false);
+    if (all.length < 2) setRange("1D");                   // nothing anywhere: sit on the default
+  }, [autoRange, cache]);
+
+  // A window switch invalidates the hovered index.
+  useEffect(() => { setHover(null); }, [range]);
+
+  const series = useMemo(() => cache[range] ?? [], [cache, range]);
+  const chartPoints = useMemo(() => series.map((p) => ({ t: p.t, c: p.v })), [series]);
+  const anyHistory = RANGES.some((k) => (cache[k]?.length ?? 0) >= 2);
+  // Don't judge a member historyless until 1D has answered AND (if it was thin)
+  // ALL has too — otherwise the club-chart fallback flashes on every load.
+  const probeDone = cache["1D"] !== undefined && (anyHistory || cache["ALL"] !== undefined);
+  const noHistory = probeDone && !anyHistory;
+  const thisWindowEmpty = anyHistory && cache[range] !== undefined && series.length < 2;
+
+  // Measure the chart layer: PriceChart draws in real pixels, so it needs a
+  // height, and the stage is a viewport-sized hero that changes with the window.
+  const chartBox = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = chartBox.current;
+    if (!el) return;
+    const m = () => setChartH(Math.round(el.getBoundingClientRect().height));
+    m();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(m) : null;
+    ro?.observe(el);
+    window.addEventListener("resize", m);
+    return () => { ro?.disconnect(); window.removeEventListener("resize", m); };
+  }, [showStage, anyHistory]);
+
+  // Count the hero up ONCE per visit. The snapshot refreshes on a 5-minute
+  // poll, and replaying a 0→$23,567 count-up every five minutes reads as a glitch.
+  useEffect(() => {
+    if (!showStage) return;
+    const RM = typeof window !== "undefined" && window.matchMedia
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (RM || counted.current) { setCountUp(1); return; }
+    counted.current = true;
+    let raf = 0, t0 = 0;
+    const step = (ts: number) => {
+      if (!t0) t0 = ts;
+      const p = Math.min((ts - t0) / 950, 1);
+      setCountUp(1 - Math.pow(1 - p, 3));
+      if (p < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [showStage]);
+
+  // ── the readout above the line ────────────────────────────────────────────
+  const hoverPt = hover != null && hover >= 0 && hover < series.length ? series[hover] : null;
+  const shownV = hoverPt ? hoverPt.v : value;
+  const baseV = series.length >= 2 ? series[0].v : null;
+  const dV = baseV != null ? shownV - baseV : null;
+  const pV = baseV ? (shownV / baseV - 1) * 100 : null;
+  const upRange = (dV ?? 0) >= 0;
+  const heroV = hoverPt ? hoverPt.v : value * countUp;
 
   useEffect(() => {
     const r = root.current;
-    if (!r || value <= 0) return;
-    const RM = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!r) return;
     const $ = (sel: string) => r.querySelector(sel) as any;
-    const W = 1000, H = 600;
-
-    // ── build the value series ──
-    const N = SPY.length;
-    let FUSD: number[];
-    const anchors = equityHist.length ? [...equityHist, value] : [];
-    if (anchors.length >= 2) {
-      // REAL: interpolate the member's ACTUAL weekly account values to N smooth
-      // points, ending exactly at the live current value.
-      FUSD = [];
-      const segs = anchors.length - 1;
-      for (let i = 0; i < N; i++) {
-        const t = (i / (N - 1)) * segs;
-        const lo = Math.min(segs - 1, Math.floor(t)), f = t - lo;
-        FUSD.push(anchors[lo] * (1 - f) + anchors[lo + 1] * f);
-      }
-    } else {
-      // No weekly observations yet ⇒ this member HAS no line. The old fallback
-      // drew one anyway: a market shape scaled to their balance, i.e. a
-      // plausible-looking equity curve that was never theirs, with only the
-      // endpoints real. Nothing is drawn now — the JSX renders the CLUB's real
-      // record in this space instead (owner: "just show the graph of the club
-      // ... because no trades are being made").
-      FUSD = new Array(N).fill(value);
-    }
-    // Scrub-tooltip dates, interpolated across the SAME anchors as the values —
-    // so a point on the line is dated by the week it actually came from. No real
-    // history ⇒ no dates (the tooltip renders empty rather than inventing one).
-    const DATES: string[] = [];
-    const nowSec = Math.floor(Date.now() / 1000);
-    const anchorSecs = anchors.length >= 2
-      ? [...histPoints.map((h) => {
-          const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(h.week_start || "");
-          return m ? new Date(+m[1], +m[2] - 1, +m[3]).getTime() / 1000 : nowSec;
-        }), nowSec]
-      : [];
-    if (anchorSecs.length >= 2) {
-      const segs = anchorSecs.length - 1;
-      for (let i = 0; i < N; i++) {
-        const t = (i / (N - 1)) * segs;
-        const lo = Math.min(segs - 1, Math.floor(t)), f = t - lo;
-        DATES.push(fmtDate(anchorSecs[lo] * (1 - f) + anchorSecs[lo + 1] * f));
-      }
-    }
-    const TF: Record<string, number> = { "1D": 6, "1W": 9, "1M": 22, "3M": 64, "1Y": N, ALL: N };
-    // Every timeframe labels the span it ACTUALLY plots, read out of DATES (the
-    // per-point dates interpolated from real weekly anchors). These used to be
-    // hard-coded decoration — "10AM/12PM/2PM/4PM", "Mon/Wed/Fri", "Wk1..Wk4",
-    // "Q1/Q2/Q3/now" — invented labels bearing no relation to the plotted data,
-    // which on a money chart reads as fact. Owner call, now applied to ALL
-    // ranges, not just ALL: real dates or nothing.
-    const axisFor = (sliceFrom: number, ticks = 3): string[] => {
-      if (DATES.length < 2) return [];
-      const last = N - 1;
-      const from = Math.max(0, Math.min(sliceFrom, last));
-      if (last - from < 1) return [];
-      const out: string[] = [];
-      for (let k = 0; k < ticks; k++) {
-        const idx = Math.round(from + ((last - from) * k) / (ticks - 1));
-        out.push(DATES[Math.min(last, Math.max(0, idx))]);
-      }
-      // Short spans can land two ticks on the same day — show it once.
-      return out.filter((d, i) => i === 0 || d !== out[i - 1]);
-    };
-    let fundPts: number[][] = [], usd: number[] = [], sliceStart = 0;
-    const fmt = (v: number) => "$" + v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const setColor = (up: boolean) => { const c = up ? "#2DD4BF" : "#8A94A6"; $("#fundpath")?.setAttribute("stroke", c); $("#fc0")?.setAttribute("stop-color", c); $("#fc1")?.setAttribute("stop-color", c); };
-    function readout(i: number) {
-      const v = usd[i], base = usd[0], dv = v - base, pct = (v / base - 1) * 100, up = v >= base;
-      $("#val").textContent = fmt(v);
-      const c = $("#chg");
-      c.innerHTML = (up ? "▲ " : "▼ ") + (dv >= 0 ? "" : "-") + "$" + Math.abs(dv).toLocaleString(undefined, { maximumFractionDigits: 2 }) + " · " + (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%";
-      c.classList.toggle("dn", !up); setColor(up);
-    }
-    function drawChart(tf: string) {
-      const n = TF[tf], s = Math.max(0, N - n); sliceStart = s;
-      const fu = FUSD.slice(s); usd = fu;
-      let mn = Math.min(...fu), mx = Math.max(...fu); const pad = (mx - mn) * 0.16 || 1; mn -= pad; mx += pad;
-      const m = fu.length;
-      const X = (i: number) => i / (m - 1) * W, Y = (v: number) => H - 14 - ((v - mn) / (mx - mn)) * (H - 28);
-      fundPts = fu.map((v, i) => [X(i), Y(v)]);
-      const fp = fundPts.map((p) => p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
-      // No observations ⇒ draw NOTHING rather than a flat or invented line, and
-      // print no axis: the club chart rendered in this space carries the story.
-      $("#fundpath")?.setAttribute("points", hasOwnHistory ? fp : "");
-      $("#area")?.setAttribute("points", hasOwnHistory ? fp + " " + W + "," + H + " 0," + H : "");
-      const ax = $("#axis");
-      if (ax) ax.innerHTML = hasOwnHistory
-        ? axisFor(s).map((l) => "<span>" + l + "</span>").join("")
-        : "";
-      r!.querySelectorAll(".tf").forEach((b: any) => b.classList.toggle("on", b.dataset.tf === tf));
-      readout(m - 1);
-    }
-    const tfs = $("#tfs");
-    const onTf = (e: any) => { const b = e.target.closest(".tf"); if (b) { e.stopPropagation(); drawChart(b.dataset.tf); } };
-    tfs?.addEventListener("click", onTf);
-
-    // ── scrub ──
-    const stage = $("#stage"), sdot = $("#sdot"), stip = $("#stip");
-    function scrub(cx: number) {
-      const fr = $(".chartfield").getBoundingClientRect();
-      const t = Math.min(1, Math.max(0, (cx - fr.left) / fr.width)), i = Math.round(t * (fundPts.length - 1)), p = fundPts[i];
-      const px = p[0] / W * fr.width, py = p[1] / H * fr.height;
-      sdot.style.left = px + "px"; sdot.style.top = py + "px";
-      stip.style.left = Math.min(fr.width - 60, Math.max(60, px)) + "px"; stip.style.top = (py - 26) + "px";
-      stip.textContent = DATES[sliceStart + i] || ""; stage.classList.add("scrubbing"); readout(i);
-    }
-    const unscrub = () => { stage.classList.remove("scrubbing"); if (usd.length) readout(usd.length - 1); };
 
     // ── donut: holdings grouped by SECTOR; click a sector to morph into the
     //    individual stocks within it, "‹ All sectors" to morph back ──
@@ -285,21 +310,21 @@ export function CinematicOverview() {
       ? items.map((h) => `<div class="holdrow" data-stock="${h.sym}"><span class="htk">${h.sym}</span><div class="hn"><b>${h.name || h.sym}</b><s>${h.sym}</s></div>${hold.length ? pnlCell(h.pnl) : `<span style="flex:1"></span>`}${hold.length ? `<span class="hwt tnum">$${Math.round(h.val || 0).toLocaleString()}</span>` : ""}</div>`).join("")
       : `<div style="color:var(--subtle);font:500 13px/1.6 var(--font-inter);padding:8px 2px">No holdings yet. <a href="/vote" style="color:var(--teal)">Cast your vote →</a></div>`;
 
-    drawChart("ALL"); renderSectors();
-    // Count up the hero ONCE per visit. The snapshot now refreshes on a 5-minute
-    // poll, and replaying a 0→$23,567 count-up every five minutes would read as a
-    // glitch — drawChart() already wrote the new value, so later updates just land.
-    if (!RM && !counted.current) {
-      counted.current = true;
-      const el = $("#val"); let t0: number | null = null;
-      const cu = (ts: number) => { if (!t0) t0 = ts; const p = Math.min((ts - t0) / 950, 1), e = 1 - Math.pow(1 - p, 3); el.textContent = fmt(value * e); if (p < 1) requestAnimationFrame(cu); };
-      requestAnimationFrame(cu);
-    }
+    renderSectors();
 
     // ── carousel ──
+    const stage = $("#stage");
     const dots = [...r.querySelectorAll(".dots button")] as any[];
-    let cur = 0;
-    const go = (i: number) => { cur = (i + 3) % 3; stage.dataset.s = String(cur); dots.forEach((d, kk) => d.classList.toggle("on", kk === cur)); if (cur !== 1) unscrub(); };
+    // Read the slide back off the DOM: this effect re-runs when holdings change,
+    // and restarting at 0 would desync `cur` (and now React's `slide`) from the
+    // slide the member is actually looking at.
+    let cur = Number(stage.dataset.s) || 0;
+    const go = (i: number) => {
+      cur = (i + 3) % 3;
+      stage.dataset.s = String(cur);
+      setSlide(cur);
+      dots.forEach((d, kk) => d.classList.toggle("on", kk === cur));
+    };
     const next = () => go(cur + 1), prev = () => go(cur - 1);
     $("#next").addEventListener("click", (e: any) => { e.stopPropagation(); next(); });
     $("#prev").addEventListener("click", (e: any) => { e.stopPropagation(); prev(); });
@@ -319,7 +344,7 @@ export function CinematicOverview() {
     // drag / wheel / touch
     let down = false, x0 = 0, moved = 0;
     const pd = (e: PointerEvent) => { if ((e.target as HTMLElement).closest(".arw,.dots,.strip a,.tf,.donutring,.leg,.scrolldn,a,button")) return; down = true; x0 = e.clientX; moved = 0; stage.classList.add("grab"); };
-    const pm = (e: PointerEvent) => { if (down) { moved = e.clientX - x0; return; } if (cur === 1) { const fr = stage.getBoundingClientRect(); if (e.clientX >= fr.left && e.clientX <= fr.right && e.clientY >= fr.top && e.clientY <= fr.bottom) scrub(e.clientX); } };
+    const pm = (e: PointerEvent) => { if (down) moved = e.clientX - x0; };
     const pu = () => { if (!down) return; down = false; stage.classList.remove("grab"); if (Math.abs(moved) > 45) go(cur + (moved < 0 ? 1 : -1)); };
     stage.addEventListener("pointerdown", pd); window.addEventListener("pointermove", pm); window.addEventListener("pointerup", pu);
     const wlock = { v: false };
@@ -327,15 +352,16 @@ export function CinematicOverview() {
     stage.addEventListener("wheel", onWheel, { passive: false });
 
     return () => {
-      tfs?.removeEventListener("click", onTf);
       document.removeEventListener("keydown", onKey);
+      r.removeEventListener("click", onNav);
       window.removeEventListener("pointermove", pm); window.removeEventListener("pointerup", pu);
+      stage.removeEventListener("pointerdown", pd);
       stage.removeEventListener("wheel", onWheel as any);
     };
-    // `loaded` matters: the stage only mounts after it flips, and that render can
-    // have identical value/items deps — without it the effect would never
+    // `showStage` matters: the stage only mounts after it flips, and that render
+    // can have identical item deps — without it the effect would never
     // initialize the freshly-mounted stage.
-  }, [loaded, value, pctTarget, itemsKey, itemsLabel, histKey, dateKey, router, openStock]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [showStage, itemsKey, itemsLabel, router, openStock]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Wait for the account + holdings fetches before choosing what to show — a
   // funded member should never flash the zero-state (or a $0 hero) while loading.
@@ -350,7 +376,7 @@ export function CinematicOverview() {
       );
     }
     // Connected but nothing invested yet: a quiet zero-state instead of a dead
-    // $0 cinematic stage (the effect above already bails when value <= 0).
+    // $0 cinematic stage.
     return (
       <div className="glass shine enter mt-4 p-6 sm:p-7">
         <div className="flex items-center gap-2.5">
@@ -374,36 +400,82 @@ export function CinematicOverview() {
     );
   }
 
+  const labelMode = labelModeFor(range, series);
+  const layer = (extra: React.CSSProperties = {}): React.CSSProperties => ({
+    position: "absolute", left: 0, right: 0, top: CHART_TOP, bottom: CHART_BOTTOM,
+    transition: "opacity .34s var(--ease)", ...extra,
+  });
+
   return (
     <div className="cine" ref={root}>
       <section id="stage" data-s="0">
-        <div className="chartfield">
-          <svg id="chart" viewBox="0 0 1000 600" preserveAspectRatio="none">
-            <defs>
-              <linearGradient id="fill" x1="0" y1="0" x2="0" y2="1">
-                <stop id="fc0" offset="0" stopColor="#2DD4BF" stopOpacity=".26" />
-                <stop id="fc1" offset="1" stopColor="#2DD4BF" stopOpacity="0" />
-              </linearGradient>
-              <filter id="g" x="-4%" y="-20%" width="108%" height="140%"><feGaussianBlur stdDeviation="3" result="b" /><feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge></filter>
-            </defs>
-            <polygon id="area" points="" fill="url(#fill)" />
-            <polyline id="fundpath" points="" fill="none" stroke="#2DD4BF" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" filter="url(#g)" />
-          </svg>
+        {/* The account line. Deliberately NOT inside the old `.chartfield`
+            wrapper: that CSS force-stretches any descendant <svg> to 100%×100%,
+            which fights PriceChart's measured pixel viewBox. */}
+        <div ref={chartBox} style={layer({
+          zIndex: 0,
+          opacity: slide === 1 ? 1 : slide === 0 ? 0.2 : 0,
+          pointerEvents: slide === 1 ? "auto" : "none",
+        })}>
+          {chartH > 80 && series.length >= 2 && (
+            <PriceChart
+              key={range}
+              points={chartPoints}
+              height={chartH}
+              interactive={slide === 1}
+              labelMode={labelMode}
+              onHover={setHover}
+              ariaLabel={`account value, ${fmtDateTime(series[0].t)} to ${fmtDateTime(series[series.length - 1].t)}`}
+            />
+          )}
         </div>
-        {/* Nothing of your own has happened yet — so this space shows what the
-            CLUB has actually done, rather than a curve invented to fill it.
-            Sibling of .chartfield, NOT inside it: the stage dims .chartfield to
-            20% during the opening beat, which would all but hide this. */}
-        {!hasOwnHistory && (
+
+        {/* You have a record, just not inside THIS window. */}
+        {thisWindowEmpty && (
+          <div style={layer({
+            zIndex: 2, display: "grid", placeItems: "center", padding: "0 24px",
+            textAlign: "center", pointerEvents: "none", opacity: slide === 1 ? 1 : 0,
+          })}>
+            <div style={{ maxWidth: "44ch", font: "500 13px/1.6 var(--font-inter)", color: "var(--subtle)" }}>
+              Not enough history yet in this window — this fills in as the club records your balance.
+            </div>
+          </div>
+        )}
+
+        {/* No record anywhere yet. Not an error: the club can only record your
+            balance going forward, so this is simply what a young account looks
+            like. The club's own real chart stands in the empty space. */}
+        {noHistory && (
           <div className="clubfill">
+            <div className="mb-3 text-[12.5px] leading-relaxed text-subtle">
+              Not enough history yet — this fills in as the club records your balance.
+            </div>
             <ClubPerformance />
           </div>
         )}
-        <div className="sdot" id="sdot" /><div className="stip" id="stip" />
 
-        <div className="value">
-          <div className="num tnum" id="val">{"$0.00"}</div>
-          <div className="chg tnum" id="chg">▲ $0 · +0.00%</div>
+        {/* The line now runs BEHIND this block at full opacity (it used to be a
+            dim backdrop), and a red change on top of a red area fill is close
+            to unreadable — hence the scrim-shadow on the text itself. */}
+        <div className="value" style={{ textShadow: "0 2px 14px rgba(4,7,11,0.9)" }}>
+          <div className="num tnum" id="val">{usd(heroV)}</div>
+          <div className={`chg tnum${upRange ? "" : " dn"}`}>
+            {dV != null && pV != null ? (
+              <>
+                {upRange ? "▲ " : "▼ "}
+                {dV >= 0 ? "" : "-"}${Math.abs(dV).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {" · "}{pV >= 0 ? "+" : ""}{pV.toFixed(2)}%
+              </>
+            ) : " "}
+          </div>
+          {hoverPt && (
+            // 20px, not 13: `.value` is scale(.5) on the chart slide, so this
+            // is the size the scrub date actually renders at next to a 22px
+            // change line.
+            <div className="tnum" style={{ marginTop: 10, font: "500 20px/1 var(--font-inter)", color: "var(--subtle)" }}>
+              {fmtDateTime(hoverPt.t)}
+            </div>
+          )}
         </div>
 
         <div className="strip">
@@ -417,11 +489,15 @@ export function CinematicOverview() {
         </div>
 
         <div className="perfx">
-          <div className="axis" id="axis" />
-          {/* Timeframe tabs only mean something over a line of your own. */}
-          {hasOwnHistory && (
-            <div className="tfs" id="tfs">
-              {["1M","3M","1Y","ALL"].map((t) => <button key={t} className={`tf ${t === "ALL" ? "on" : ""}`} data-tf={t}>{t}</button>)}
+          {/* Windows only mean something over a line of your own. */}
+          {anyHistory && (
+            <div className="tfs" id="tfs" style={{ flexWrap: "wrap" }}>
+              {RANGES.map((t) => (
+                <button key={t} type="button" className={`tf ${t === range ? "on" : ""}`}
+                  onClick={(e) => { e.stopPropagation(); setAutoRange(false); setRange(t); }}>
+                  {t}
+                </button>
+              ))}
             </div>
           )}
         </div>

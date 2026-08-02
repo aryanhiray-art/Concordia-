@@ -5,11 +5,11 @@
 // call useStockPanel().openStock("NVDA") (usually via <StockLink>) and this
 // provider renders the single instance.
 //
-// This is the surface for symbols encountered OUTSIDE research — a history
-// chip, a tally row, an overview holding: you want a look without losing your
-// place. Research itself (/stocks) navigates to the full page at
-// /stocks/[symbol] instead, which serves the same payload with the deeper
-// analytics. One data source (GET /api/stocks/{sym}), two presentations.
+// This is the surface for a symbol met in passing — a history chip, a tally
+// row, an overview holding, a ballot search hit: you want a look without losing
+// your place. When you want the real thing, /stocks/[symbol] serves the same
+// payload with the deeper analytics (this panel links to it, and so does the
+// ballot search). One data source (GET /api/stocks/{sym}), two presentations.
 //
 // The overlay is createPortal'd to document.body ON PURPOSE: in-page fixed
 // overlays break under ancestor transforms (the app's animations create

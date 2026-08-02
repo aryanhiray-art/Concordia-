@@ -142,9 +142,10 @@ export default function StockPage({ params }: { params: { symbol: string } }) {
 
   return (
     <div className="space-y-6">
-      <Link href="/stocks" className="enter inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-muted transition hover:text-teal">
+      {/* research is reached FROM the ballot now — so that's where back goes */}
+      <Link href="/vote" className="enter inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-muted transition hover:text-teal">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
-        Stocks
+        Vote
       </Link>
 
       <header className="enter flex flex-wrap items-start justify-between gap-4">
