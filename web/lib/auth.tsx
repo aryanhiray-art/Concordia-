@@ -119,7 +119,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const lastFetchRef = useRef(0);      // ms epoch of the last attempt (any outcome)
   const inFlightRef = useRef(false);   // one account fetch at a time
 
+  // In-flight dedupe for the two most-called fetchers: several components ask
+  // for the member/ballot at the same instant (mount + focus + poll), and each
+  // used to become its own HTTP request — the demo walk-through watched bursts
+  // of identical calls per second. Callers awaiting the same tick now share
+  // one promise.
+  const memberFlight = useRef<Promise<void> | null>(null);
+  const sessionFlight = useRef<Promise<void> | null>(null);
+
   const refreshMember = useCallback(async () => {
+    if (memberFlight.current) return memberFlight.current;
+    const run = (async () => {
     try {
       const res = await api.me();
       setMember(res.member);
@@ -135,9 +145,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setOffline(true); // keep the session — backend blip, not a logout
       }
     }
+    })();
+    memberFlight.current = run.finally(() => { memberFlight.current = null; });
+    return memberFlight.current;
   }, []);
 
   const refreshSession = useCallback(async () => {
+    if (sessionFlight.current) return sessionFlight.current;
+    const run = (async () => {
     try {
       setSession(await api.voteToday());
       setSessionError(null);
@@ -152,6 +167,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (isBlip(e)) setOffline(true);
       }
     }
+    })();
+    sessionFlight.current = run.finally(() => { sessionFlight.current = null; });
+    return sessionFlight.current;
   }, []);
 
   // The one place account money is fetched. `force` swaps the cheap cached GET
@@ -203,8 +221,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!member) { setSession(null); setSessionError(null); return; }
     refreshSession();
-    const id = setInterval(refreshSession, 6000);
-    return () => clearInterval(id);
+    // 60s, not 6s: the ballot changes on votes and closes — rarely — while the
+    // countdown ticks client-side. Six-second always-on polling was the single
+    // biggest source of the request bursts the demo walk-through flagged, and
+    // it kept firing in HIDDEN tabs. Backgrounded tabs now pause and catch up
+    // the moment they return.
+    const id = setInterval(() => { if (!document.hidden) refreshSession(); }, 60_000);
+    const onVis = () => { if (!document.hidden) refreshSession(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVis); };
   }, [member, refreshSession]);
 
   // ── the once-per-member account fetch ──────────────────────────────────

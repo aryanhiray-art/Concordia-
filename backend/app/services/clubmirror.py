@@ -83,6 +83,15 @@ def performance() -> dict | None:
     return perf if isinstance(perf, dict) else None
 
 
+def today() -> dict | None:
+    """The live club's current aggregate ballot (tally/voters), or None."""
+    data = payload()
+    if not data:
+        return None
+    t = data.get("today")
+    return t if isinstance(t, dict) and t.get("tally") else None
+
+
 def mirrored_at() -> int | None:
     data = payload()
     return int(data.get("mirrored_at") or 0) or None if data else None

@@ -50,7 +50,20 @@ def build(limit: int = 60) -> dict:
     history = voting.club_history(limit)
     _assert_clean(history)
     perf = performance.club_performance()
-    return {"mirrored_at": int(time.time()), "history": history, "performance": perf}
+    # The LIVE ballot's aggregate tally (symbol/name/votes/weight + counts) —
+    # no member identity, same numbers every real member already sees on their
+    # own Vote page. The demo overlays it so its consensus reflects the club
+    # actually deciding (owner: "show the votes coming from the live, since
+    # all decisions are actually coming from there").
+    today = None
+    open_row = voting.latest_session("open")
+    if open_row and (open_row.get("closes_at") or 0) > time.time():
+        pub = voting.session_public(open_row, member_id=None)
+        today = {"trade_date": pub.get("trade_date"),
+                 "tally": pub.get("tally") or [],
+                 "voters": pub.get("voters") or 0}
+    return {"mirrored_at": int(time.time()), "history": history,
+            "performance": perf, "today": today}
 
 
 def write(path: str, payload: dict) -> None:

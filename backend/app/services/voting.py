@@ -527,16 +527,49 @@ def member_vote_history(member_id: int, limit: int = 30) -> list[dict]:
     return out
 
 
+def _merge_tallies(base: list[dict], extra: list[dict]) -> list[dict]:
+    """Sum two aggregate tallies by symbol (votes + weight), sorted like tally().
+    base=[] -> extra unchanged, so every non-demo path is byte-identical."""
+    if not base:
+        return extra
+    by: dict[str, dict] = {}
+    for row in list(base) + list(extra):
+        sym = row.get("symbol")
+        if not sym:
+            continue
+        hit = by.setdefault(sym, {"symbol": sym, "name": row.get("name") or sym,
+                                  "votes": 0, "weight": 0.0})
+        hit["votes"] += int(row.get("votes") or 0)
+        hit["weight"] = round(hit["weight"] + float(row.get("weight") or 0.0), 2)
+    return sorted(by.values(), key=lambda r: (-r["weight"], -r["votes"], r["symbol"]))
+
+
 def session_public(session: dict, member_id: int | None) -> dict:
     """API view of a session, including the caller's own picks + the live tally."""
+    # DEMO ONLY: overlay the LIVE club's forming tally so a fresh demo ballot
+    # never reads "0 voters" (the real decisions come from the live club; the
+    # demo's local votes are merged on top so a demo voter still sees their
+    # own mark land). No-op outside demo_mode or when no mirror is present.
+    live_tally: list[dict] = []
+    live_voters = 0
+    try:
+        from ..config import settings as _settings
+        if _settings.demo_mode:
+            from . import clubmirror as _cm
+            t = _cm.today()
+            if t:
+                live_tally = list(t.get("tally") or [])
+                live_voters = int(t.get("voters") or 0)
+    except Exception:  # noqa: BLE001
+        pass
     return {
         "id": session["id"],
         "trade_date": session["trade_date"],
         "status": session["status"],
         "closes_at": session["closes_at"],
         "top_n": session["top_n"],
-        "voters": voter_count(session["id"]),
-        "tally": tally(session["id"]),
+        "voters": voter_count(session["id"]) + live_voters,
+        "tally": _merge_tallies(live_tally, tally(session["id"])),
         "my_picks": member_picks(session["id"], member_id) if member_id else [],
         "picks": session_picks(session),
     }
