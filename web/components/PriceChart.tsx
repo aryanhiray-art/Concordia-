@@ -9,9 +9,9 @@
 //     box with preserveAspectRatio="none", which stretches everything — text
 //     included — differently at panel width vs full-page width, so nothing could
 //     be positioned reliably.
-//   • The high/low price labels live in a RIGHT GUTTER that is carved out of the
-//     box before the path is plotted. The line is never drawn there, so a label
-//     physically cannot sit on top of the curve, at any width.
+//   • The high/low price labels sit INSIDE the plot, right-aligned just above/
+//     below their dashed guide lines (Robinhood-style) — the old reserved right
+//     gutter kept ~70px of every chart permanently empty.
 //   • Dates get their own bottom band (also outside the plot), first anchored to
 //     the start, last to the end, so they can't spill past either edge.
 //   • A flat series (min === max) centres the line and prints ONE label — no
@@ -174,15 +174,17 @@ export function PriceChart({
   const HEAD = interactive && !delegated ? 18 : 0;   // hover readout band
   const PAD_T = 12 + HEAD;
   const PAD_B = 22;                       // date band
-  const PAD_L = 4;
+  const PAD_L = 0;
   const hiTxt = fmtPrice(mx), loTxt = fmtPrice(mn);
-  const GUT = Math.max(46, Math.max(hiTxt.length, loTxt.length) * 6.3 + 14);
+  // Labels are drawn INSIDE the plot (right-aligned above/below their guide
+  // lines, Robinhood-style) instead of in a reserved right gutter — the gutter
+  // left ~70px of dead space and the owner wants the line edge to edge.
+  const GUT = 0;
   const W = Math.max(220, w);
   const H = height;
   const plotW = Math.max(40, W - PAD_L - GUT);
   const plotH = Math.max(40, H - PAD_T - PAD_B);
   const plotB = PAD_T + plotH;
-  const gx = PAD_L + plotW + 8;           // gutter text origin
 
   // x is positioned by TIME, not array index. Index spacing draws a Friday→Monday
   // step the same width as Monday→Tuesday, and an overnight gap the same width as
@@ -256,7 +258,12 @@ export function PriceChart({
     <div ref={attach} className="w-full">
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} className="block touch-pan-y"
         role="img" aria-label={ariaLabel ?? `price history, ${labelOf(points[0], intraday, labelMode)} to ${labelOf(points[points.length - 1], intraday, labelMode)}`}
-        onPointerMove={onMove} onPointerLeave={() => moveTo(null)}>
+        onPointerMove={onMove} onPointerLeave={() => moveTo(null)}
+        // A TAP sets the crosshair but fires no pointerleave when the finger
+        // lifts, so the grey line sat pinned on whatever point was touched
+        // (the owner found it parked on a Sunday). Release/cancel clear it;
+        // mouse users get it straight back on the next move.
+        onPointerUp={() => moveTo(null)} onPointerCancel={() => moveTo(null)}>
         <defs>
           <linearGradient id={`pcf-${uid}`} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0" stopColor={color} stopOpacity="0.22" />
@@ -282,14 +289,14 @@ export function PriceChart({
           <>
             <circle cx={X(hiIdx)} cy={Y(mx)} r="2.5" fill={color} />
             <circle cx={X(loIdx)} cy={Y(mn)} r="2.5" fill={color} />
-            <text x={gx} y={PAD_T} dominantBaseline="middle" textAnchor="start"
+            <text x={W - 6} y={PAD_T - 5} textAnchor="end"
               className="tnum" fill="rgba(255,255,255,0.52)" fontSize="10.5">{hiTxt}</text>
-            <text x={gx} y={plotB} dominantBaseline="middle" textAnchor="start"
+            <text x={W - 6} y={plotB - 6} textAnchor="end"
               className="tnum" fill="rgba(255,255,255,0.52)" fontSize="10.5">{loTxt}</text>
           </>
         )}
         {flat && (
-          <text x={gx} y={PAD_T + plotH / 2} dominantBaseline="middle" textAnchor="start"
+          <text x={W - 6} y={PAD_T + plotH / 2 - 6} textAnchor="end"
             className="tnum" fill="rgba(255,255,255,0.52)" fontSize="10.5">{hiTxt}</text>
         )}
 
