@@ -7,14 +7,10 @@
 // POST /api/vote/today replaces the ballot rather than appending to it. So the
 // existing allocations are merged in, never dropped and never zeroed.
 //
-// Weight the new pick gets (see mergePick):
-//   • unallocated power ≥ an equal share → it takes that equal share,
-//     100/(n+1) rounded, and NOTHING else on the ballot moves. A member holding
-//     4 picks at 40% total keeps all four and abstains the rest.
-//   • otherwise (the ballot is at/near 100%) → the new pick still gets the
-//     equal share and the existing picks are scaled DOWN proportionally to fit,
-//     each floored at 1% so no pick is ever silently renormalised to zero.
-// The weight is always stated in the UI, and /vote stays the place to tune it.
+// Weight the new pick gets (see mergePick): the unallocated remainder, and
+// nothing else — existing picks never move. 70% allocated → the new name gets
+// 30%; already at 100% → it joins at 0% and the member slides weight over on
+// /vote. The weight is always stated in the UI before the click.
 
 import { useState } from "react";
 import Link from "next/link";
@@ -26,37 +22,17 @@ import type { Alloc } from "@/lib/types";
 const MAX_PICKS = 20;
 
 export function mergePick(mine: Alloc[], symbol: string): { next: Alloc[]; weight: number } {
-  const n = mine.length;
-  const share = Math.max(1, Math.round(100 / (n + 1)));
+  // The new pick takes ONLY the unallocated remainder — existing picks are
+  // never touched (owner rule). A ballot at 70% gains the new name at 30%; a
+  // ballot already at 100% gains it at 0%, and the member slides weight over
+  // themselves if they want it funded. The earlier version scaled everyone
+  // down to make room, which re-weighted picks the member had set on purpose.
   const used = mine.reduce((a, p) => a + (p.weight || 0), 0);
-  if (100 - used >= share) {
-    return {
-      next: [...mine.map((p) => ({ symbol: p.symbol, weight: p.weight })), { symbol, weight: share }],
-      weight: share,
-    };
-  }
-  // Scale the existing picks into what's left, in whole percent. Floors alone
-  // would quietly leak the rounding dust (19 picks → an 82% ballot), so the
-  // remainder is handed back largest-fraction-first — the ballot keeps the
-  // power it had, and no pick can round to 0.
-  const room = 100 - share;
-  const exact = mine.map((p) => ((p.weight || 0) * room) / (used || 1));
-  // The 1% floor applies ONLY to picks that actually carry weight. Applying it
-  // to every row invented power the member never allocated: a pick they had
-  // deliberately dragged to 0% got pushed back to 1%, and with enough 0% rows
-  // the ballot broke its own ceiling — measured 101% at nine zero-weight picks,
-  // rising to 114% at eighteen. A 0% pick means "I don't back this", so it
-  // stays 0 and only real weight is protected from rounding to nothing.
-  const w = exact.map((v, i) => ((mine[i].weight || 0) > 0 ? Math.max(1, Math.floor(v)) : 0));
-  let left = room - w.reduce((a, b) => a + b, 0);
-  const byFraction = exact
-    .map((v, i) => [v - Math.floor(v), i] as [number, number])
-    .sort((a, b) => b[0] - a[0]);
-  for (let k = 0; left > 0 && k < byFraction.length; k++, left--) w[byFraction[k][1]] += 1;
-  const scaled = mine.map((p, i) => ({ symbol: p.symbol, weight: w[i] }));
-  const taken = scaled.reduce((a, p) => a + p.weight, 0);
-  const weight = Math.max(1, Math.min(share, 100 - taken));
-  return { next: [...scaled, { symbol, weight }], weight };
+  const weight = Math.max(0, Math.min(100, Math.round(100 - used)));
+  return {
+    next: [...mine.map((p) => ({ symbol: p.symbol, weight: p.weight })), { symbol, weight }],
+    weight,
+  };
 }
 
 const BTN = "inline-flex flex-none items-center gap-2 rounded-[11px] border px-4 py-2.5 " +
