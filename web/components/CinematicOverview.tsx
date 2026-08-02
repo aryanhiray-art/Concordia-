@@ -470,10 +470,15 @@ export function CinematicOverview() {
           </div>
         )}
 
-        {/* The line now runs BEHIND this block at full opacity (it used to be a
-            dim backdrop), and a red change on top of a red area fill is close
-            to unreadable — hence the scrim-shadow on the text itself. */}
-        <div className="value" style={{ textShadow: "0 2px 14px rgba(4,7,11,0.9)" }}>
+        {/* The line now runs BEHIND this block at full opacity, and a red
+            change on a red area fill is close to unreadable — hence a scrim
+            behind the text. drop-shadow, NOT text-shadow: the hero digits are
+            background-clip:text with color:transparent, and a text-shadow
+            paints THROUGH transparent glyphs — it sat on top of the white→teal
+            gradient and turned the number smoky grey (the owner read it as a
+            font/color change). drop-shadow works on the rendered pixels, so
+            the gradient stays exactly as designed. */}
+        <div className="value" style={{ filter: "drop-shadow(0 2px 14px rgba(4,7,11,0.9))" }}>
           <div className="num tnum" id="val">{usd(heroV)}</div>
           <div className={`chg tnum${upRange ? "" : " dn"}`}>
             {dV != null && pV != null ? (

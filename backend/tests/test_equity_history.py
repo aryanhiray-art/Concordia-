@@ -271,7 +271,10 @@ def test_each_range_returns_only_points_inside_its_window():
     for i, ts in enumerate(sorted(ages.values())):
         _put(mid, ts, 500.0 + i)
 
-    expected = {"1D": 1, "1W": 2, "1M": 3, "3M": 4, "1Y": 5, "ALL": 6}
+    # 1D is deliberately NOT a trailing-24h window any more — it serves the
+    # last ET trading session that has points (see the dedicated weekend
+    # tests below), so it is excluded from the fixed-window sweep.
+    expected = {"1W": 2, "1M": 3, "3M": 4, "1Y": 5, "ALL": 6}
     for rng, count in expected.items():
         r = client.get(f"/api/me/equity?range={rng}", headers=_hdrs(tok))
         assert r.status_code == 200, rng
@@ -334,3 +337,41 @@ def test_member_with_no_history_gets_an_honest_empty_payload():
 
 def test_equity_endpoint_requires_a_member():
     assert client.get("/api/me/equity", headers=_hdrs()).status_code in (401, 403)
+
+
+def test_1d_on_a_weekend_serves_the_last_trading_session():
+    """Asked on a Saturday, 1D must return FRIDAY's session — not the trailing
+    24 hours, which hold only after-hours samples of an unmoving balance."""
+    import datetime as _dt
+
+    from app.calendar_us import ET
+
+    mid, _ = _mk_member("weekend-1d@aclub.test")
+    # Saturday 2026-08-01 22:00 ET; Friday 07-31 was a trading day.
+    sat = int(_dt.datetime(2026, 8, 1, 22, 0, tzinfo=ET).timestamp())
+    fri_1030 = int(_dt.datetime(2026, 7, 31, 10, 30, tzinfo=ET).timestamp())
+    fri_1500 = int(_dt.datetime(2026, 7, 31, 15, 0, tzinfo=ET).timestamp())
+    sat_am = int(_dt.datetime(2026, 8, 1, 9, 0, tzinfo=ET).timestamp())
+    for ts, v in ((fri_1030, 101.0), (fri_1500, 105.0), (sat_am, 105.0)):
+        equity_history.record(mid, v, ts=ts)
+
+    out = equity_history.series(mid, "1D", now=sat)
+    got = {p["t"] for p in out["points"]}
+    assert fri_1030 in got and fri_1500 in got, "Friday's session points must be served"
+    assert sat_am not in got, "Saturday after-hours samples are not part of Friday's session"
+    assert out["ok"] is True
+
+
+def test_1d_falls_back_to_trailing_24h_when_recording_is_brand_new():
+    """No trading-day points exist yet (recorder deployed on a weekend) — serve
+    whatever there is rather than an empty chart."""
+    import datetime as _dt
+
+    from app.calendar_us import ET
+
+    mid, _ = _mk_member("weekend-fresh@aclub.test")
+    sat = int(_dt.datetime(2026, 8, 1, 22, 0, tzinfo=ET).timestamp())
+    for h, v in ((21, 106.9), (20, 106.9)):
+        equity_history.record(mid, v, ts=sat - h * 360)
+    out = equity_history.series(mid, "1D", now=sat)
+    assert len(out["points"]) == 2

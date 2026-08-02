@@ -226,6 +226,34 @@ def _downsample(rows: list[tuple[int, float]]) -> tuple[list[tuple[int, float]],
     return [kept[k] for k in sorted(kept)[-MAX_POINTS:]], label
 
 
+def _last_session_rows(member_id: int, at: int) -> list[tuple[int, float]]:
+    """1D = the most recent ET TRADING DAY that has observations — not the
+    trailing 24 hours.
+
+    A trailing-24h window asked on a weekend holds only after-hours samples of
+    an unmoving balance: a flat line ending "now", which the owner read (fairly)
+    as a broken chart. Robinhood's own 1D does what this does — on Saturday it
+    shows Friday's session. Implementation: walk back day by day (up to ~2
+    weeks, covering holidays) until an ET calendar day that (a) was a trading
+    day and (b) actually has points; serve that whole ET day. Falls back to the
+    trailing 24h when no such day exists yet — recording may simply be younger
+    than one session.
+    """
+    from datetime import datetime, timedelta
+
+    from ..calendar_us import ET, is_trading_day
+    day = datetime.fromtimestamp(at, ET).date()
+    for _ in range(14):
+        if is_trading_day(day):
+            start = int(datetime(day.year, day.month, day.day, tzinfo=ET).timestamp())
+            end = start + 86_400
+            rows = [r for r in _rows(member_id, start) if r[0] < end]
+            if rows:
+                return rows
+        day -= timedelta(days=1)
+    return _rows(member_id, at - 86_400)
+
+
 def series(member_id: int, rng: str = DEFAULT_RANGE, now: int | None = None) -> dict:
     """{range, points:[{t,v}], resolution, first_ts, ok} for one range.
 
@@ -241,7 +269,10 @@ def series(member_id: int, rng: str = DEFAULT_RANGE, now: int | None = None) -> 
         raise UnknownRange("no such range")
     days = RANGE_DAYS[rng]
     at = int(now if now is not None else time.time())
-    rows = _rows(member_id, None if days is None else at - days * 86_400)
+    if rng == "1D":
+        rows = _last_session_rows(member_id, at)
+    else:
+        rows = _rows(member_id, None if days is None else at - days * 86_400)
     pts, resolution = _downsample(rows)
     return {
         "range": rng,
