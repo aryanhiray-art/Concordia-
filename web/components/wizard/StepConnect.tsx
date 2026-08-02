@@ -11,6 +11,7 @@ import { useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui";
+import { ConnectExplainer } from "@/components/ConnectExplainer";
 
 export function StepConnect({ onOpened, onConnected }: { onOpened: () => void; onConnected: () => void }) {
   const { member } = useAuth();
@@ -65,17 +66,15 @@ export function StepConnect({ onOpened, onConnected }: { onOpened: () => void; o
         )}
       </p>
 
-      {/* The what-happens-next warning must come BEFORE the member leaves:
-          the "can't connect page is expected" line used to live only on the
-          paste step, which a member first sees AFTER they are already stranded
-          on that page — and never sees at all if a blocked popup navigated
-          this tab away (owner report: "the step that mentions you will be
-          redirected ... is missing"). */}
-      <ol className="mt-3 space-y-1.5 text-[12.5px] leading-relaxed text-muted">
-        <li><b className="text-ink">1.</b> Approve on Robinhood (opens in a new tab).</li>
-        <li><b className="text-ink">2.</b> You&apos;ll land on a <b className="text-ink">&ldquo;can&rsquo;t connect&rdquo;</b> page — that&apos;s expected.</li>
-        <li><b className="text-ink">3.</b> Copy that page&apos;s URL and paste it back here.</li>
-      </ol>
+      {/* The what-happens-next story must come BEFORE the member leaves: the
+          "can't connect page is expected" warning used to live only on the
+          paste step, first seen AFTER the member was already stranded there.
+          The animated three-step explainer (chips + browser scenes) sells the
+          dead-end page as expected rather than broken; it freezes to a static
+          list under prefers-reduced-motion. */}
+      <div className="mt-4">
+        <ConnectExplainer />
+      </div>
 
       <Button variant="go" className="mt-4 w-full" onClick={connect} busy={busy}>
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
