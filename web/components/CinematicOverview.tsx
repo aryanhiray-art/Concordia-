@@ -30,7 +30,11 @@ import type { EquityHistory, EquityPoint, EquityRangeKey } from "@/lib/types";
 // (Backfill is impossible, not merely unimplemented: Robinhood exposes equity /
 // option / index historicals but no account-value history, so the only way this
 // gets denser is time passing.)
-const RANGES: EquityRangeKey[] = ["1D", "1W", "1M", "3M", "1Y", "ALL"];
+// 1D is deliberately absent: recording began 2026-08-01, so no full trading
+// session exists yet and a 1D tab could only disappoint. The 10-minute
+// recorder keeps accumulating precisely so it can return with real intraday
+// shape.
+const RANGES: EquityRangeKey[] = ["1W", "1M", "3M", "1Y", "ALL"];
 
 type Cache = Partial<Record<EquityRangeKey, EquityPoint[]>>;
 
@@ -59,7 +63,6 @@ function normalizeEquity(r: EquityHistory | null | undefined): EquityPoint[] {
  *  long as the club has been recording — MM/YYYY across a three-day record
  *  prints the same label at every tick. */
 function labelModeFor(range: EquityRangeKey, series: EquityPoint[]): ChartLabelMode {
-  if (range === "1D") return "time";
   if (range === "1W") return "weekday";
   if (range === "1M" || range === "3M") return "monthday";
   const span = series.length >= 2 ? series[series.length - 1].t - series[0].t : 0;
@@ -85,7 +88,7 @@ const CHART_BOTTOM = 148;        // clearance for the axis + range controls
 // fill with the line lost at the top (owner: "graph looks even worse").
 // Robinhood's own account chart is a modest horizontal band under the hero
 // number; 40vh capped at 380px reads the same at every window size.
-const CHART_BAND = "clamp(220px, 40vh, 380px)";
+const CHART_BAND = "clamp(260px, 52vh, 560px)";
 
 // lighten/darken a hex by index so the stocks inside one sector stay visually
 // related (same hue) but distinguishable.
@@ -142,8 +145,8 @@ export function CinematicOverview() {
 
   // ── recorded equity history, one window at a time ─────────────────────────
   const [cache, setCache] = useState<Cache>({});
-  const [range, setRange] = useState<EquityRangeKey>("1D");
-  const [autoRange, setAutoRange] = useState(true);   // the 1D → ALL fallback may still fire
+  const [range, setRange] = useState<EquityRangeKey>("1W");
+  const [autoRange, setAutoRange] = useState(true);   // the thin-default → ALL fallback
   const [hover, setHover] = useState<number | null>(null);
   const [slide, setSlide] = useState(0);
   const [chartH, setChartH] = useState(0);
@@ -162,18 +165,18 @@ export function CinematicOverview() {
     return () => { alive = false; };
   }, [showStage, range, cache]);
 
-  // Recording started recently, so 1D is legitimately empty outside market
-  // hours / on a fresh account. Fall back ONCE to the widest window rather than
+  // Recording started recently, so the default window can be legitimately
+  // thin on a fresh account. Fall back ONCE to the widest window rather than
   // greeting a member who DOES have a record with an empty chart.
   useEffect(() => {
     if (!autoRange) return;
-    const day = cache["1D"];
+    const day = cache["1W"];
     if (day === undefined) return;
     if (day.length >= 2) { setAutoRange(false); return; }
     const all = cache["ALL"];
     if (all === undefined) { setRange("ALL"); return; }   // the fetch effect picks it up
     setAutoRange(false);
-    if (all.length < 2) setRange("1D");                   // nothing anywhere: sit on the default
+    if (all.length < 2) setRange("1W");                   // nothing anywhere: sit on the default
   }, [autoRange, cache]);
 
   // A window switch invalidates the hovered index.
@@ -182,9 +185,9 @@ export function CinematicOverview() {
   const series = useMemo(() => cache[range] ?? [], [cache, range]);
   const chartPoints = useMemo(() => series.map((p) => ({ t: p.t, c: p.v })), [series]);
   const anyHistory = RANGES.some((k) => (cache[k]?.length ?? 0) >= 2);
-  // Don't judge a member historyless until 1D has answered AND (if it was thin)
-  // ALL has too — otherwise the club-chart fallback flashes on every load.
-  const probeDone = cache["1D"] !== undefined && (anyHistory || cache["ALL"] !== undefined);
+  // Don't judge a member historyless until the default window has answered AND
+  // (if it was thin) ALL has too — else the club fallback flashes on load.
+  const probeDone = cache["1W"] !== undefined && (anyHistory || cache["ALL"] !== undefined);
   const noHistory = probeDone && !anyHistory;
   const thisWindowEmpty = anyHistory && cache[range] !== undefined && series.length < 2;
 

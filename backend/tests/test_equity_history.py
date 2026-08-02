@@ -302,7 +302,7 @@ def test_long_range_is_downsampled_to_real_points_only():
     for ts, v in recorded.items():
         _put(mid, ts, v)
 
-    body = client.get("/api/me/equity?range=1D", headers=_hdrs(tok)).json()
+    body = client.get("/api/me/equity?range=1W", headers=_hdrs(tok)).json()
     pts = body["points"]
     assert 2 < len(pts) <= equity_history.MAX_POINTS
     assert len(pts) < 1000 and body["resolution"] != "raw"
@@ -314,7 +314,7 @@ def test_long_range_is_downsampled_to_real_points_only():
     small, tok2 = _mk_member("eq-raw@aclub.test")
     for i in range(5):
         _put(small, now - i * 600, 300.0 + i)
-    raw = client.get("/api/me/equity?range=1D", headers=_hdrs(tok2)).json()
+    raw = client.get("/api/me/equity?range=1W", headers=_hdrs(tok2)).json()
     assert raw["resolution"] == "raw" and len(raw["points"]) == 5 and raw["ok"] is True
 
 
@@ -330,7 +330,7 @@ def test_member_with_no_history_gets_an_honest_empty_payload():
     mid2, tok2 = _mk_member("eq-onepoint@aclub.test")
     ts = int(time.time()) - 120
     _put(mid2, ts, 42.0)
-    body2 = client.get("/api/me/equity?range=1D", headers=_hdrs(tok2)).json()
+    body2 = client.get("/api/me/equity?range=1W", headers=_hdrs(tok2)).json()
     assert body2["points"] == [{"t": ts, "v": 42.0}]
     assert body2["ok"] is False and body2["first_ts"] == ts
 
@@ -339,39 +339,116 @@ def test_equity_endpoint_requires_a_member():
     assert client.get("/api/me/equity", headers=_hdrs()).status_code in (401, 403)
 
 
-def test_1d_on_a_weekend_serves_the_last_trading_session():
-    """Asked on a Saturday, 1D must return FRIDAY's session — not the trailing
-    24 hours, which hold only after-hours samples of an unmoving balance."""
+def _shape(monkeypatch, day_index: dict):
+    """Pin the club shape the densifier sees."""
+    monkeypatch.setattr(equity_history, "_club_shape", lambda: dict(day_index))
+
+
+def test_owner_example_110_backfills_along_the_club_curve(monkeypatch):
+    """One real $110 observation after a +10% club run must draw 100 -> 110
+    along the club's path — not appear out of nowhere."""
     import datetime as _dt
 
     from app.calendar_us import ET
 
-    mid, _ = _mk_member("weekend-1d@aclub.test")
-    # Saturday 2026-08-01 22:00 ET; Friday 07-31 was a trading day.
-    sat = int(_dt.datetime(2026, 8, 1, 22, 0, tzinfo=ET).timestamp())
-    fri_1030 = int(_dt.datetime(2026, 7, 31, 10, 30, tzinfo=ET).timestamp())
-    fri_1500 = int(_dt.datetime(2026, 7, 31, 15, 0, tzinfo=ET).timestamp())
-    sat_am = int(_dt.datetime(2026, 8, 1, 9, 0, tzinfo=ET).timestamp())
-    for ts, v in ((fri_1030, 101.0), (fri_1500, 105.0), (sat_am, 105.0)):
-        equity_history.record(mid, v, ts=ts)
+    mid, tok = _mk_member("densify-110@aclub.test")
+    _shape(monkeypatch, {"2026-07-20": 100.0, "2026-07-21": 104.0,
+                         "2026-07-22": 107.0, "2026-07-23": 110.0})
+    obs = int(_dt.datetime(2026, 7, 23, 16, 0, tzinfo=ET).timestamp())
+    equity_history.record(mid, 110.0, ts=obs)
 
-    out = equity_history.series(mid, "1D", now=sat)
-    got = {p["t"] for p in out["points"]}
-    assert fri_1030 in got and fri_1500 in got, "Friday's session points must be served"
-    assert sat_am not in got, "Saturday after-hours samples are not part of Friday's session"
+    now = int(_dt.datetime(2026, 7, 24, 12, 0, tzinfo=ET).timestamp())
+    out = equity_history.series(mid, "1W", now=now)
+    pts = out["points"]
+    assert [round(p["v"], 2) for p in pts] == [100.0, 104.0, 107.0, 110.0]
+    assert [bool(p.get("est")) for p in pts] == [True, True, True, False]
     assert out["ok"] is True
 
 
-def test_1d_falls_back_to_trailing_24h_when_recording_is_brand_new():
-    """No trading-day points exist yet (recorder deployed on a weekend) — serve
-    whatever there is rather than an empty chart."""
+def test_gaps_between_anchors_follow_the_club_and_land_on_the_real_value(monkeypatch):
+    """Estimates take the club's shape but must end EXACTLY on the next real
+    observation — anchors are the truth, the shape is only the path."""
     import datetime as _dt
 
     from app.calendar_us import ET
 
-    mid, _ = _mk_member("weekend-fresh@aclub.test")
-    sat = int(_dt.datetime(2026, 8, 1, 22, 0, tzinfo=ET).timestamp())
-    for h, v in ((21, 106.9), (20, 106.9)):
-        equity_history.record(mid, v, ts=sat - h * 360)
-    out = equity_history.series(mid, "1D", now=sat)
-    assert len(out["points"]) == 2
+    mid, tok = _mk_member("densify-gap@aclub.test")
+    _shape(monkeypatch, {"2026-07-20": 100.0, "2026-07-21": 110.0,
+                         "2026-07-22": 120.0, "2026-07-23": 130.0})
+    t0 = int(_dt.datetime(2026, 7, 20, 16, 0, tzinfo=ET).timestamp())
+    t1 = int(_dt.datetime(2026, 7, 23, 16, 0, tzinfo=ET).timestamp())
+    equity_history.record(mid, 200.0, ts=t0)
+    # the member's balance did NOT track the club exactly: ends at 250, not 260
+    equity_history.record(mid, 250.0, ts=t1)
+
+    now = t1 + 3600
+    pts = equity_history.series(mid, "1W", now=now)["points"]
+    assert pts[0]["v"] == 200.0 and not pts[0].get("est")
+    assert pts[-1]["v"] == 250.0 and not pts[-1].get("est")
+    mids = [p for p in pts if p.get("est")]
+    assert len(mids) == 2
+    # club rose monotonically, so the estimated path must too, staying between
+    # the anchors rather than overshooting either
+    vals = [p["v"] for p in pts]
+    assert vals == sorted(vals)
+    assert all(200.0 < p["v"] < 250.0 for p in mids)
+
+
+def test_days_with_real_observations_are_never_overridden(monkeypatch):
+    import datetime as _dt
+
+    from app.calendar_us import ET
+
+    mid, tok = _mk_member("densify-real@aclub.test")
+    _shape(monkeypatch, {"2026-07-20": 100.0, "2026-07-21": 150.0,
+                         "2026-07-22": 100.0})
+    for day, v in (("2026-07-20", 500.0), ("2026-07-21", 501.0), ("2026-07-22", 502.0)):
+        y, m, d = (int(x) for x in day.split("-"))
+        equity_history.record(mid, v, ts=int(_dt.datetime(y, m, d, 16, 0, tzinfo=ET).timestamp()))
+    now = int(_dt.datetime(2026, 7, 22, 17, 0, tzinfo=ET).timestamp())
+    pts = equity_history.series(mid, "1W", now=now)["points"]
+    assert [p["v"] for p in pts] == [500.0, 501.0, 502.0]
+    assert not any(p.get("est") for p in pts), "no estimates when every day is real"
+
+
+def test_no_club_shape_means_no_invented_points(monkeypatch):
+    """Without a club record there is nothing honest to shape a gap with —
+    sparse stays sparse rather than inventing a path."""
+    import datetime as _dt
+
+    from app.calendar_us import ET
+
+    mid, tok = _mk_member("densify-noshape@aclub.test")
+    _shape(monkeypatch, {})
+    t0 = int(_dt.datetime(2026, 7, 20, 16, 0, tzinfo=ET).timestamp())
+    equity_history.record(mid, 100.0, ts=t0)
+    equity_history.record(mid, 120.0, ts=t0 + 5 * 86400)
+    pts = equity_history.series(mid, "1W", now=t0 + 6 * 86400)["points"]
+    assert len(pts) == 2 and not any(p.get("est") for p in pts)
+
+
+def test_1d_range_is_gone():
+    mid, tok = _mk_member("no-1d@aclub.test")
+    r = client.get("/api/me/equity?range=1D", headers=_hdrs(tok))
+    assert r.status_code == 400
+
+
+def test_weekend_anchor_still_backfills(monkeypatch):
+    """The first real recording happened on a SATURDAY; the club series ends
+    Friday. The anchor must borrow Friday's index, not silently disable all
+    backfill (the original bug: exact-day lookup -> zero estimates)."""
+    import datetime as _dt
+
+    from app.calendar_us import ET
+
+    mid, tok = _mk_member("densify-weekend@aclub.test")
+    _shape(monkeypatch, {"2026-07-30": 100.0, "2026-07-31": 110.0})
+    sat = int(_dt.datetime(2026, 8, 1, 22, 39, tzinfo=ET).timestamp())
+    equity_history.record(mid, 342.30, ts=sat)
+    pts = equity_history.series(mid, "1W", now=sat + 3600)["points"]
+    ests = [p for p in pts if p.get("est")]
+    assert len(ests) == 2, "both club days before the Saturday anchor are filled"
+    # Friday carries the anchor's own index -> equals the anchor value; Thursday
+    # sits 10% below it, exactly the club's move.
+    assert ests[-1]["v"] == 342.30
+    assert abs(ests[0]["v"] - 342.30 / 1.10) < 0.01

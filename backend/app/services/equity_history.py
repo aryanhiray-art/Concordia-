@@ -54,8 +54,13 @@ MAX_SANE_VALUE = 1e12
 # ─── ranges + downsampling ───────────────────────────────────────────────────
 # Windows mirror services/stocks._RANGES so the account chart and the stock
 # charts mean the same thing by "3M". ALL has no cutoff.
+# 1D was removed (owner call, 2026-08-02): recording is younger than one
+# trading session, so a 1D view could only show an after-hours flatline or a
+# club-shaped estimate of a day we never observed — both worse than no tab.
+# The 10-minute recorder keeps running precisely so 1D can come back once a
+# few real sessions exist.
 RANGE_DAYS: dict[str, int | None] = {
-    "1D": 1, "1W": 7, "1M": 31, "3M": 92, "1Y": 366, "ALL": None,
+    "1W": 7, "1M": 31, "3M": 92, "1Y": 366, "ALL": None,
 }
 DEFAULT_RANGE = "1M"
 
@@ -226,32 +231,125 @@ def _downsample(rows: list[tuple[int, float]]) -> tuple[list[tuple[int, float]],
     return [kept[k] for k in sorted(kept)[-MAX_POINTS:]], label
 
 
-def _last_session_rows(member_id: int, at: int) -> list[tuple[int, float]]:
-    """1D = the most recent ET TRADING DAY that has observations — not the
-    trailing 24 hours.
+# ─── club-shaped densification ───────────────────────────────────────────────
+# The recorded history is sparse (weekly snapshots until 2026-08-01, dense
+# 10-minute observations after). A straight segment across a two-week gap reads
+# as "nothing happened", which is false — the member's money was IN the club's
+# basket the whole time, moving with it. Owner call: fill the gaps at DAILY
+# grain by shaping them along the club's own real daily performance, anchored
+# to the real observations at both ends. One real $110 after a +10% club run
+# draws 100→110 along the club's actual path, not a cliff.
+#
+# Estimated points carry est:true. Days that have a real observation always use
+# the real value; the estimate never overrides a recording, and as the 10-min
+# recorder accumulates real sessions the estimates retire day by day.
 
-    A trailing-24h window asked on a weekend holds only after-hours samples of
-    an unmoving balance: a flat line ending "now", which the owner read (fairly)
-    as a broken chart. Robinhood's own 1D does what this does — on Saturday it
-    shows Friday's session. Implementation: walk back day by day (up to ~2
-    weeks, covering holidays) until an ET calendar day that (a) was a trading
-    day and (b) actually has points; serve that whole ET day. Falls back to the
-    trailing 24h when no such day exists yet — recording may simply be younger
-    than one session.
+# Estimates are stamped at the ET close of their day.
+_EST_HOUR_ET = 16
+
+
+def _club_shape() -> dict[str, float]:
+    """date "YYYY-MM-DD" → club index (base 100), from the club's real record.
+
+    On the demo instance the club record is the MIRRORED real club (the demo's
+    own DB has no decided cycles), so demo members' gaps are shaped by the same
+    curve live members see. Empty dict = no shape available → no densification.
     """
-    from datetime import datetime, timedelta
+    try:
+        from . import clubmirror
+        mirrored = clubmirror.performance()
+        perf = mirrored if mirrored is not None else None
+    except Exception:  # noqa: BLE001
+        perf = None
+    if perf is None:
+        try:
+            from . import performance as _perf
+            perf = _perf.club_performance()
+        except Exception:  # noqa: BLE001
+            return {}
+    out: dict[str, float] = {}
+    for pt in (perf or {}).get("points") or []:
+        d, c = pt.get("d"), pt.get("club")
+        if isinstance(d, str) and isinstance(c, (int, float)) and c > 0:
+            out[d] = float(c)
+    return out
 
-    from ..calendar_us import ET, is_trading_day
-    day = datetime.fromtimestamp(at, ET).date()
-    for _ in range(14):
-        if is_trading_day(day):
-            start = int(datetime(day.year, day.month, day.day, tzinfo=ET).timestamp())
-            end = start + 86_400
-            rows = [r for r in _rows(member_id, start) if r[0] < end]
-            if rows:
-                return rows
-        day -= timedelta(days=1)
-    return _rows(member_id, at - 86_400)
+
+def _et_day_close(day: str) -> int:
+    from datetime import datetime
+
+    from ..calendar_us import ET
+    y, m, d = (int(x) for x in day.split("-"))
+    return int(datetime(y, m, d, _EST_HOUR_ET, tzinfo=ET).timestamp())
+
+
+def _densify(rows: list[tuple[int, float]], at: int) -> list[dict]:
+    """Real observations + club-shaped daily estimates for the gaps between
+    (and before) them. Returns [{t, v[, est]}] ascending; real rows verbatim.
+
+    Between anchors (t0,v0)→(t1,v1): v_day = v0 · (club_day/club_d0) · blendᵏ,
+    where blend is the per-step residual that makes the path land EXACTLY on v1
+    — the club shape provides the curve, the anchors stay the truth. Before the
+    first anchor: pure back-extrapolation v_first · club_day/club_dfirst (the
+    owner's 100→110 example). Nothing is extrapolated past the last real
+    observation — the future is recorded, not invented.
+    """
+    from datetime import datetime
+
+    from ..calendar_us import ET
+    if not rows:
+        return []
+    shape = _club_shape()
+    real = [{"t": ts, "v": v} for ts, v in rows]
+    if not shape:
+        return real
+
+    days = sorted(shape)
+    day_of = lambda ts: datetime.fromtimestamp(ts, ET).strftime("%Y-%m-%d")  # noqa: E731
+    have = {day_of(ts) for ts, _ in rows}
+    out: list[dict] = list(real)
+
+    def idx_at(day: str) -> float | None:
+        """Club index effective ON a day: the latest shape day at or before it.
+        Anchors routinely land where the shape has no exact entry — the first
+        recording happened on a SATURDAY while the club series ends Friday —
+        and requiring an exact hit silently disabled all backfill for them."""
+        import bisect
+        i = bisect.bisect_right(days, day)
+        return shape[days[i - 1]] if i else None
+
+    # Before the first observation: club shape scaled to END at the first value.
+    t0, v0 = rows[0]
+    d0 = day_of(t0)
+    idx0 = idx_at(d0)
+    if idx0 and v0 > 0:
+        for d in days:
+            if d >= d0 or d in have:
+                continue
+            out.append({"t": _et_day_close(d), "v": round(v0 * shape[d] / idx0, 2),
+                        "est": True})
+
+    # Between consecutive observations: club shape, residual-blended to land on
+    # the right-hand anchor.
+    for (ta, va), (tb, vb) in zip(rows, rows[1:]):
+        da, db = day_of(ta), day_of(tb)
+        ia, ib = idx_at(da), idx_at(db)
+        if not ia or not ib or va <= 0:
+            continue
+        between = [d for d in days if da < d < db and d not in have]
+        if not between:
+            continue
+        club_end = ib / ia
+        target = vb / va
+        # per-step multiplicative residual so the last estimate meets vb
+        n = len(between) + 1
+        resid = (target / club_end) ** (1.0 / n) if club_end > 0 else 1.0
+        for k, d in enumerate(between, start=1):
+            v = va * (shape[d] / ia) * (resid ** k)
+            out.append({"t": _et_day_close(d), "v": round(v, 2), "est": True})
+
+    out.sort(key=lambda p: p["t"])
+    return out
 
 
 def series(member_id: int, rng: str = DEFAULT_RANGE, now: int | None = None) -> dict:
@@ -269,15 +367,26 @@ def series(member_id: int, rng: str = DEFAULT_RANGE, now: int | None = None) -> 
         raise UnknownRange("no such range")
     days = RANGE_DAYS[rng]
     at = int(now if now is not None else time.time())
-    if rng == "1D":
-        rows = _last_session_rows(member_id, at)
+    # Densify over the member's FULL history first (anchors outside the window
+    # still shape what is inside it), then slice to the window.
+    all_rows = _rows(member_id, None)
+    dense = _densify(all_rows, at)
+    cutoff = None if days is None else at - days * 86_400
+    windowed = [p for p in dense if cutoff is None or p["t"] >= cutoff]
+    # Downsample REAL points only when the window is oversized; estimates are
+    # daily already and never dominate the payload.
+    if len(windowed) > MAX_POINTS:
+        real = [(p["t"], p["v"]) for p in windowed if not p.get("est")]
+        ests = [p for p in windowed if p.get("est")]
+        pts, resolution = _downsample(real)
+        windowed = sorted(
+            [{"t": ts, "v": v} for ts, v in pts] + ests, key=lambda p: p["t"])
     else:
-        rows = _rows(member_id, None if days is None else at - days * 86_400)
-    pts, resolution = _downsample(rows)
+        resolution = "raw"
     return {
         "range": rng,
-        "points": [{"t": ts, "v": v} for ts, v in pts],
+        "points": windowed,
         "resolution": resolution,
         "first_ts": first_ts(member_id),
-        "ok": len(pts) >= 2,
+        "ok": len(windowed) >= 2,
     }

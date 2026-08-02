@@ -27,14 +27,15 @@ export type Holding = { symbol: string; quantity: number; value: number; pnl: nu
 export type HoldingsView = { holdings: Holding[]; as_of?: number | null; stale?: boolean };
 
 // ── the member's own recorded account-value history ────────────────────────
-// GET /api/me/equity?range=… — REAL observations, one row per time the club
-// read the balance off the broker (~10 minutes for recent windows, thinned to
-// daily further back). NOTHING is interpolated: if the club didn't record it,
-// it isn't in here, which is why a young account legitimately returns 0 or 1
-// point. The broker has no account-value history endpoint, so this can only
-// ever be recorded going forward — never backfilled.
-export type EquityRangeKey = "1D" | "1W" | "1M" | "3M" | "1Y" | "ALL";
-export type EquityPoint = { t: number; v: number };   // epoch seconds, $ total value
+// GET /api/me/equity?range=… — real observations (~10-minute cadence going
+// forward, weekly seeds behind), PLUS daily gap-fill estimates shaped by the
+// club's own performance between real anchors (est: true on those). Owner
+// call: a member's money rides the club's basket, so a two-week gap drawn as
+// a straight line is falser than the club-shaped path. Real observations are
+// never overridden, estimates retire as real sessions accumulate, and the
+// broker has no account-history endpoint so the past cannot be re-recorded.
+export type EquityRangeKey = "1W" | "1M" | "3M" | "1Y" | "ALL";  // 1D returns when a full session has been recorded
+export type EquityPoint = { t: number; v: number; est?: boolean };   // est = club-shaped gap-fill
 export type EquityHistory = {
   range: EquityRangeKey;
   points: EquityPoint[];
