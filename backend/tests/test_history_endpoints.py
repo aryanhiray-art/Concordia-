@@ -364,3 +364,41 @@ def test_is_abandoned_open_rule_matches_the_admin_console():
     finally:
         with db() as conn:
             conn.execute("DELETE FROM vote_sessions WHERE id=?", (sid,))
+
+
+def test_demo_roll_session_rolls_an_expired_ballot(monkeypatch):
+    """Regression: the roll passed a STRING to open_session_for, which calls
+    .isoformat() internally -> AttributeError -> 500 on every ballot read on
+    the demo. Prove the roll now closes an expired ballot and opens a fresh
+    one with a future close."""
+    import time as _time
+
+    from app.config import settings as _settings
+    from app.services import voting as _voting
+
+    # Settings is a frozen dataclass — go around the freeze, restore after.
+    object.__setattr__(_settings, "demo_mode", True)
+    monkeypatch  # unused; kept for signature symmetry
+    with db() as conn:
+        # Other tests in this module leave their own OPEN sessions with future
+        # closes; the roll rightly ignores an expired row when a live ballot
+        # exists, so park them for the duration of this test.
+        conn.execute("UPDATE vote_sessions SET status='parked' WHERE status='open'")
+        conn.execute(
+            "INSERT INTO vote_sessions(trade_date,status,closes_at,top_n) "
+            "VALUES('2026-01-05','open',?,20)", (int(_time.time()) - 86400,))
+    _voting.demo_roll_session()
+    fresh = _voting.latest_session("open")
+    assert fresh is not None
+    assert fresh["closes_at"] > _time.time(), "the rolled ballot must have a future close"
+    try:
+        with db() as conn:
+            old = conn.execute(
+                "SELECT status FROM vote_sessions WHERE trade_date='2026-01-05'").fetchone()
+        assert old["status"] != "open", "the expired ballot was closed, not left dangling"
+    finally:
+        object.__setattr__(_settings, "demo_mode", False)
+        with db() as conn:
+            conn.execute("DELETE FROM vote_sessions WHERE trade_date='2026-01-05' "
+                         "OR (status='open' AND closes_at > strftime('%s','now'))")
+            conn.execute("UPDATE vote_sessions SET status='open' WHERE status='parked'")

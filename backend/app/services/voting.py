@@ -83,7 +83,11 @@ def demo_roll_session() -> None:
             hit = conn.execute("SELECT status FROM vote_sessions WHERE trade_date=?",
                                (probe.isoformat(),)).fetchone()
         if hit is None:
-            open_session_for(probe.isoformat())
+            # open_session_for takes the DATE OBJECT — it isoformat()s
+            # internally. Passing the string 500'd every /api/vote/today on the
+            # demo (AttributeError) until a reviewer hot-patched the box; this
+            # is the upstream commit of that fix.
+            open_session_for(probe)
             return
 
 

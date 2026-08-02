@@ -325,6 +325,15 @@ export function AuthGate({ onAuthed, notice }: { onAuthed: (m: Member) => void; 
         <p className="mt-2.5 text-[17px] font-light leading-snug text-ink">
           Taking on Wall Street, <span className="text-teal">one vote at a time</span>.
         </p>
+        {/* The desktop BrandPane carries "How the demo works" (incl. the invite
+            code); it is lg-only, so a PHONE visitor had nothing but the input
+            placeholder to guess the code from. One line covers the essentials. */}
+        {demoHost && (
+          <p className="mt-3 text-[13px] leading-relaxed text-muted">
+            Invite code <b className="text-teal">demo</b> · use your real email —
+            we send a 6-digit code.
+          </p>
+        )}
       </div>
 
       {/* obvious "you're on the ops console, not the member site" marker */}

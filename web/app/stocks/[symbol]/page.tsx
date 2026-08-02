@@ -198,7 +198,12 @@ export default function StockPage({ params }: { params: { symbol: string } }) {
               </div>
             </div>
             <div className="mt-4">
-              <PriceChart points={points} height={300} interactive />
+              {/* 1W is intraday DATA (30-min bars) but spans five days, so
+                  "auto" labelled it with times of day — 9:30 AM ... 3:30 PM
+                  across a week reads as a broken 1D. The label is a property
+                  of the RANGE, not the bar width. */}
+              <PriceChart points={points} height={300} interactive
+                labelMode={range === "1D" ? "time" : range === "1W" ? "weekday" : "auto"} />
             </div>
           </Card>
 
