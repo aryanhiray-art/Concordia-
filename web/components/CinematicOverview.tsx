@@ -78,8 +78,14 @@ const usd = (v: number) =>
 // labels land in clear air: the range tabs live at bottom: 92px (.perfx), and
 // the floating nav pill covers the top ~65px — a peak drawn at the plot's top
 // edge would otherwise disappear behind it.
-const CHART_TOP = 76;
-const CHART_BOTTOM = 148;
+const CHART_BOTTOM = 148;        // clearance for the axis + range controls
+// The line lives in a BAND above the range controls, not the whole stage.
+// The stage is viewport-height, so an uncapped layer made the chart ~900px
+// tall on a desktop — a flat after-hours series rendered as a wall of teal
+// fill with the line lost at the top (owner: "graph looks even worse").
+// Robinhood's own account chart is a modest horizontal band under the hero
+// number; 40vh capped at 380px reads the same at every window size.
+const CHART_BAND = "clamp(220px, 40vh, 380px)";
 
 // lighten/darken a hex by index so the stocks inside one sector stay visually
 // related (same hue) but distinguishable.
@@ -411,7 +417,8 @@ export function CinematicOverview() {
 
   const labelMode = labelModeFor(range, series);
   const layer = (extra: React.CSSProperties = {}): React.CSSProperties => ({
-    position: "absolute", left: 0, right: 0, top: CHART_TOP, bottom: CHART_BOTTOM,
+    position: "absolute", left: 0, right: 0, bottom: CHART_BOTTOM,
+    height: CHART_BAND, top: "auto",
     transition: "opacity .34s var(--ease)", ...extra,
   });
 
