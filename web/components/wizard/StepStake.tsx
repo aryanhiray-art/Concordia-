@@ -67,7 +67,7 @@ export function StepStake({ onNext }: { onNext: () => void }) {
 
       {bal && (
         <div className="mt-3 text-[12.5px] text-subtle">
-          Agentic account <span className="font-display font-semibold text-ink">{money(bal.total_value)}</span>
+          Agentic account <span className="font-display font-semibold text-ink">{money(bal.total_value, 2)}</span>
           {" · "}{money(bal.cash)} cash{" · "}{money(bal.buying_power)} buying power
         </div>
       )}

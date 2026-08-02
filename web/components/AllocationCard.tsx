@@ -58,7 +58,7 @@ export function AllocationCard({ onChange }: { onChange?: () => void }) {
 
       {bal && (
         <div className="mt-2 text-[12.5px] text-subtle">
-          Agentic account <span className="font-display text-ink">{money(bal.total_value)}</span>
+          Agentic account <span className="font-display text-ink">{money(bal.total_value, 2)}</span>
           {" · "}{money(bal.cash)} cash
         </div>
       )}
