@@ -158,6 +158,30 @@ class DemoClient:
     # a fresh DB still renders. Quantities are hash-derived and deterministic.
     _FALLBACK = [("AAPL", 0.35), ("NVDA", 0.12), ("MSFT", 0.18), ("AMZN", 0.25)]
 
+    # Every demo account is a standard $1,000 (owner call). The member's OWN
+    # committed stake decides how much of it sits in the club basket vs cash:
+    # commit 40% -> ~$400 across the basket names, ~$600 cash. No stake yet ->
+    # all cash, so the stake step reads a clean "$1,000.00 · $1,000 cash".
+    DEMO_TOTAL = 1000.0
+
+    def _stake_fraction(self) -> float:
+        """The member's committed slice of the $1,000, 0.0-1.0. Unknown member
+        or no stake -> 0 (all cash) — never invent a position they didn't ask for."""
+        if not self.member_id:
+            return 0.0
+        try:
+            from ..db import db as _db
+            with _db() as c:
+                r = c.execute("SELECT alloc_type, alloc_value FROM member_settings "
+                              "WHERE member_id=?", (self.member_id,)).fetchone()
+            if not r or not r["alloc_value"]:
+                return 0.0
+            if r["alloc_type"] == "dollar":
+                return max(0.0, min(1.0, float(r["alloc_value"]) / self.DEMO_TOTAL))
+            return max(0.0, min(1.0, float(r["alloc_value"]) / 100.0))
+        except Exception:  # noqa: BLE001
+            return 0.0
+
     @property
     def _HOLDINGS(self):  # noqa: N802 — name kept, call sites unchanged
         syms: list[str] = []
@@ -182,16 +206,18 @@ class DemoClient:
                             if p.get("symbol")]
             except Exception:  # noqa: BLE001
                 pass
-        if not syms:
-            return list(self._FALLBACK)
-        # ~$25 per name — but the quantity is frozen against the BASE price
-        # (no hourly wiggle), not the current one. Sizing from the current
-        # price re-fit every position to $25.00 on every read, which pinned
-        # the account value flat forever: no P&L, nothing for the equity
-        # chart to draw. Fixed shares × a moving price is what a real
-        # account is, so the demo drifts a little hour to hour, around a
-        # total of ~12 × $25 + $100 cash ≈ $400.
-        return [(sym, round(25.0 / _base_price(sym), 4)) for sym in syms[:12]]
+        invested = self.DEMO_TOTAL * self._stake_fraction()
+        if not syms or invested <= 0:
+            return []
+        # Equal slice of the INVESTED amount per basket name. Quantities are
+        # frozen against the BASE price (no hourly wiggle): sizing from the
+        # current price re-fit every position on every read and pinned the
+        # account value flat forever — fixed shares × a moving price is what
+        # a real account is, so the value drifts hour to hour around the
+        # invested amount while the rest stays cash.
+        syms = syms[:12]
+        per = invested / len(syms)
+        return [(sym, round(per / _base_price(sym), 4)) for sym in syms]
 
     def __init__(self, member_id: int | None = None):
         self.member_id = member_id
@@ -202,9 +228,14 @@ class DemoClient:
             {"account_number": self.DEMO_ACCOUNT, "agentic_allowed": True}]}}
 
     def get_portfolio(self, account_number: str) -> dict:
-        held = sum(q * _price(s) for s, q in self._HOLDINGS)
-        return {"data": {"total_value": round(held + 100.0, 2), "cash": 100.0,
-                         "buying_power": {"buying_power": 100.0}}}
+        holds = self._HOLDINGS
+        held = sum(q * _price(s) for s, q in holds)
+        # Cash is what the stake left uninvested (at base prices, so it does
+        # not wobble); market drift lives entirely in the held slice.
+        at_base = sum(q * _base_price(s) for s, q in holds)
+        cash = round(max(0.0, self.DEMO_TOTAL - at_base), 2)
+        return {"data": {"total_value": round(held + cash, 2), "cash": cash,
+                         "buying_power": {"buying_power": cash}}}
 
     def get_positions(self, account_number: str) -> dict:
         return {"data": {"positions": [

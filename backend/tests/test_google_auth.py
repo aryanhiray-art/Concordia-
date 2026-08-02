@@ -284,7 +284,9 @@ def test_demo_mode_forces_is_live_false_and_returns_demo_client(monkeypatch):
         c = vault.ensure_client(999999)           # no rh_accounts row needed
         assert isinstance(c, DemoClient)
         port = c.get_portfolio(c.DEMO_ACCOUNT)["data"]
-        assert port["buying_power"]["buying_power"] == 100.0
+        # Standard $1,000 demo account (owner call): a member with NO committed
+        # stake holds it entirely as cash — positions appear once they commit.
+        assert port["buying_power"]["buying_power"] == 1000.0
         q = c.get_quotes(["AAPL"])["data"]["results"][0]["quote"]
         assert q["symbol"] == "AAPL" and q["last_trade_price"] > 0
     finally:
