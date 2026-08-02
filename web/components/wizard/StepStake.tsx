@@ -60,9 +60,10 @@ export function StepStake({ onNext }: { onNext: () => void }) {
   return (
     <div>
       <p className="text-[13.5px] leading-relaxed text-muted">
-        Pick the slice of your account the club trades —{" "}
-        <b className="text-ink">only that slice, ever</b> — and it becomes your{" "}
-        <b className="text-ink">voting power</b>. A per-cycle safety cap applies on top.
+        Choose how much of your account the club trades. That amount becomes
+        your <b className="text-ink">voting power</b> —{" "}
+        <b className="text-ink">the club never touches the rest</b>. A per-cycle
+        safety cap applies on top.
       </p>
 
       {bal && (
