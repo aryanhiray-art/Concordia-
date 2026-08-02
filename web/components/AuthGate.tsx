@@ -475,7 +475,12 @@ export function AuthGate({ onAuthed, notice }: { onAuthed: (m: Member) => void; 
               </p>
             )}
 
-            {googleEnabled && !adminHost && !demoHost && (
+            {/* Demo included (owner call): demo.voteconcordia.com must be an
+                Authorized JavaScript origin on the Google OAuth client or GIS
+                refuses to render — the button only appears once the demo build
+                carries NEXT_PUBLIC_GOOGLE_CLIENT_ID, and works once the origin
+                is whitelisted in the owner's Google Cloud Console. */}
+            {googleEnabled && !adminHost && (
               <>
                 <GoogleButton onCredential={(c) =>
                   finishGoogle(c,
