@@ -59,7 +59,15 @@ export function Wizard() {
     const rh = member.robinhood;
     const connected = rh?.status === "connected" && !!rh?.account_number;
     if (!connected) {
-      const start = rh?.account_number ? 2 : 1;
+      // A blocked popup navigates THIS tab to the approval page; when the
+      // member comes back mid-OAuth, re-deriving to step 1 hides the paste
+      // step's instructions exactly when they are holding the URL to paste.
+      let inflight = false;
+      try {
+        inflight = sessionStorage.getItem("concordia_oauth_inflight") === "1";
+        sessionStorage.removeItem("concordia_oauth_inflight");
+      } catch {}
+      const start = inflight ? 3 : rh?.account_number ? 2 : 1;
       setStep(start); setUnlocked(start); setDerived(true);
       return;
     }

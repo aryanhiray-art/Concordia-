@@ -28,6 +28,7 @@ export function StepConnect({ onOpened, onConnected }: { onOpened: () => void; o
     const tab = window.open("", "_blank"); // open synchronously (no popup block)
     try {
       const { authorize_url } = await api.rhStart();
+      try { sessionStorage.setItem("concordia_oauth_inflight", "1"); } catch {}
       if (tab) tab.location.href = authorize_url; else window.location.href = authorize_url;
       onOpened(); // the paste step takes it from here
     } catch (e: any) {
@@ -64,6 +65,18 @@ export function StepConnect({ onOpened, onConnected }: { onOpened: () => void; o
         )}
       </p>
 
+      {/* The what-happens-next warning must come BEFORE the member leaves:
+          the "can't connect page is expected" line used to live only on the
+          paste step, which a member first sees AFTER they are already stranded
+          on that page — and never sees at all if a blocked popup navigated
+          this tab away (owner report: "the step that mentions you will be
+          redirected ... is missing"). */}
+      <ol className="mt-3 space-y-1.5 text-[12.5px] leading-relaxed text-muted">
+        <li><b className="text-ink">1.</b> Approve on Robinhood (opens in a new tab).</li>
+        <li><b className="text-ink">2.</b> You&apos;ll land on a <b className="text-ink">&ldquo;can&rsquo;t connect&rdquo;</b> page — that&apos;s expected.</li>
+        <li><b className="text-ink">3.</b> Copy that page&apos;s URL and paste it back here.</li>
+      </ol>
+
       <Button variant="go" className="mt-4 w-full" onClick={connect} busy={busy}>
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
           strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -71,10 +84,6 @@ export function StepConnect({ onOpened, onConnected }: { onOpened: () => void; o
         </svg>
         {reauth ? "Reconnect Robinhood" : "Connect Robinhood"}
       </Button>
-      <p className="mt-3 text-center text-[12px] leading-relaxed text-subtle">
-        Opens in a new tab — approve there, then come back for one paste.
-      </p>
-
       {err && <div className="mt-3 text-[13px] leading-relaxed text-red">⚠ {err}</div>}
     </div>
   );

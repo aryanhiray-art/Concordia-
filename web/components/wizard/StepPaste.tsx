@@ -33,6 +33,7 @@ export function StepPaste({ onDone }: { onDone: () => void }) {
     const tab = window.open("", "_blank"); // open synchronously (no popup block)
     try {
       const { authorize_url } = await api.rhStart();
+      try { sessionStorage.setItem("concordia_oauth_inflight", "1"); } catch {}
       if (tab) tab.location.href = authorize_url; else window.location.href = authorize_url;
     } catch (e: any) {
       if (tab) tab.close();
