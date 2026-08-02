@@ -30,11 +30,15 @@ _RTH_OPEN = (9, 30)     # ET
 _RTH_CLOSE = (16, 0)    # ET
 
 
+def _base_price(symbol: str) -> float:
+    """The symbol's anchor price — deterministic, no time component."""
+    return round(int(hashlib.sha256(symbol.encode()).hexdigest()[:8], 16) % 50000 / 100 + 20, 2)
+
+
 def _price(symbol: str) -> float:
     """Stable pseudo-price per symbol: $20–$520, varies gently by the hour."""
-    base = int(hashlib.sha256(symbol.encode()).hexdigest()[:8], 16) % 50000 / 100 + 20
     wiggle = (int(time.time() // 3600) + len(symbol)) % 7 - 3
-    return round(base * (1 + wiggle / 200), 2)
+    return round(_base_price(symbol) * (1 + wiggle / 200), 2)
 
 
 def _seed(symbol: str) -> int:
@@ -180,8 +184,14 @@ class DemoClient:
                 pass
         if not syms:
             return list(self._FALLBACK)
-        # ~$25 per name, quantity from the deterministic demo price.
-        return [(sym, round(25.0 / _price(sym), 4)) for sym in syms[:12]]
+        # ~$25 per name — but the quantity is frozen against the BASE price
+        # (no hourly wiggle), not the current one. Sizing from the current
+        # price re-fit every position to $25.00 on every read, which pinned
+        # the account value flat forever: no P&L, nothing for the equity
+        # chart to draw. Fixed shares × a moving price is what a real
+        # account is, so the demo drifts a little hour to hour, around a
+        # total of ~12 × $25 + $100 cash ≈ $400.
+        return [(sym, round(25.0 / _base_price(sym), 4)) for sym in syms[:12]]
 
     def __init__(self, member_id: int | None = None):
         self.member_id = member_id
