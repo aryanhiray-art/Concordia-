@@ -166,15 +166,29 @@ class DemoClient:
 
     def _stake_fraction(self) -> float:
         """The member's committed slice of the $1,000, 0.0-1.0. Unknown member
-        or no stake -> 0 (all cash) — never invent a position they didn't ask for."""
+        or no stake -> 0 (all cash) — never invent a position they didn't ask for.
+
+        A stake buys in only at the NEXT cycle, like the real club: committing
+        mid-cycle leaves you in cash until a vote session DECIDES (closes) after
+        the commit — the demo rolls its session daily (voting.demo_roll_session),
+        so a new member sees positions after the next roll, not the instant they
+        pick a number. member_settings.updated_at is the commit time."""
         if not self.member_id:
             return 0.0
         try:
             from ..db import db as _db
             with _db() as c:
-                r = c.execute("SELECT alloc_type, alloc_value FROM member_settings "
+                r = c.execute("SELECT alloc_type, alloc_value, updated_at FROM member_settings "
                               "WHERE member_id=?", (self.member_id,)).fetchone()
-            if not r or not r["alloc_value"]:
+                if not r or not r["alloc_value"]:
+                    return 0.0
+                # the first cycle decided AFTER the stake was committed is the
+                # buy-in; no such session yet -> still all cash
+                decided = c.execute(
+                    "SELECT 1 FROM vote_sessions WHERE status IN ('closed','executed') "
+                    "AND COALESCE(closed_at, opened_at, 0) > ? LIMIT 1",
+                    (int(r["updated_at"] or 0),)).fetchone()
+            if not decided:
                 return 0.0
             if r["alloc_type"] == "dollar":
                 return max(0.0, min(1.0, float(r["alloc_value"]) / self.DEMO_TOTAL))

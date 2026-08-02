@@ -326,6 +326,97 @@ def test_delete_account_scrubs_identity_and_stops_trading():
     assert r.status_code == 401
 
 
+def test_delete_then_google_relogin_creates_a_brand_new_member(monkeypatch):
+    """Deletion must sever EVERYTHING personal: the same Google account signing
+    in again is a brand-new membership that starts onboarding from scratch —
+    default settings, no broker connection, no recorded equity history. (The
+    demo owner deleted an account, Google-signed-up again, and got the old
+    account's state back — this locks the fresh-start contract in.)"""
+    from app import ratelimit
+    ratelimit.clear("signup:testclient")   # this test needs two signups of its own
+    _use_token(monkeypatch, _info("g-fresh@gclub.test", "sub-fresh-1", name="Fresh Start"))
+    r = _google({"invite_code": settings.invite_code, "consent": True})
+    assert r.status_code == 200
+    tok, mid = r.json()["token"], r.json()["member"]["id"]
+    now = int(time.time())
+    with db() as conn:   # give the account a full life: stake, broker link, history
+        conn.execute("UPDATE member_settings SET opted_in=1, alloc_type='dollar', alloc_value=800, "
+                     "accuracy=0.5, cycles_participated=3, updated_at=? WHERE member_id=?", (now, mid))
+        conn.execute("INSERT OR REPLACE INTO rh_accounts(member_id,account_number,agentic_allowed,"
+                     "status,connected_at) VALUES(?, 'DEMO4242', 1, 'connected', ?)", (mid, now))
+        conn.execute("INSERT OR IGNORE INTO equity_points(member_id,ts,total_value) VALUES(?,?,?)",
+                     (mid, now, 1234.5))
+    r = client.request("DELETE", "/api/me", headers={"Authorization": f"Bearer {tok}"},
+                       json={"confirm": "DELETE"})
+    assert r.status_code == 200
+
+    # same Google account returns → a NEW invite-gated signup, never the scrubbed row
+    r2 = _google({"invite_code": settings.invite_code, "consent": True})
+    ratelimit.clear("signup:testclient")   # don't burn later tests' signup window
+    assert r2.status_code == 200
+    mid2 = r2.json()["member"]["id"]
+    assert mid2 != mid
+    with db() as conn:
+        for m in (mid2, mid):   # new member starts clean AND the old row kept nothing
+            s = conn.execute("SELECT * FROM member_settings WHERE member_id=?", (m,)).fetchone()
+            assert (s["opted_in"], s["alloc_value"], s["alloc_type"],
+                    s["accuracy"], s["cycles_participated"]) == (0, 0, "percent", 0, 0)
+        assert conn.execute("SELECT COUNT(*) FROM rh_accounts WHERE member_id IN (?,?)",
+                            (mid, mid2)).fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM equity_points WHERE member_id IN (?,?)",
+                            (mid, mid2)).fetchone()[0] == 0
+    # the Google identity moved: gone from the deleted member, linked to the new one
+    assert _identities(mid) == []
+    idents = _identities(mid2)
+    assert len(idents) == 1 and idents[0]["subject"] == "sub-fresh-1"
+
+
+def test_demo_positions_wait_for_the_first_cycle_after_the_stake(monkeypatch):
+    """DemoClient: a committed stake sits in cash until the demo's NEXT cycle
+    decides (a vote session closing AFTER the commit) — like the real club,
+    where you wait for the next buy day instead of materializing positions the
+    instant you pick a number."""
+    import json
+    from app.robinhood.demo import DemoClient
+    from app.services import clubmirror
+    # deterministic basket source: no mirror payload → fall back to vote_sessions
+    monkeypatch.setattr(clubmirror, "history", lambda limit: None)
+    now = int(time.time())
+    picks = json.dumps([{"symbol": "AAPL"}, {"symbol": "MSFT"}])
+    with db() as conn:
+        cur = conn.execute("INSERT INTO members(email,display_name,created_at) VALUES(?,?,?)",
+                           (f"demo-cycle-{now}@gclub.test", "Demo Cycle", now))
+        mid = cur.lastrowid
+        # stake committed NOW; the only decided session closed BEFORE that
+        conn.execute("INSERT INTO member_settings(member_id,opted_in,alloc_type,alloc_value,"
+                     "updated_at) VALUES(?,1,'percent',40.0,?)", (mid, now))
+        conn.execute("INSERT INTO vote_sessions(trade_date,status,closed_at,top_n,picks_json) "
+                     "VALUES('2990-01-01','closed',?,2,?)", (now - 3600, picks))
+    c = DemoClient(mid)
+    try:
+        assert c._HOLDINGS == []                      # not invested yet
+        port = c.get_portfolio(c.DEMO_ACCOUNT)["data"]
+        assert port["total_value"] == 1000.0 and port["cash"] == 1000.0
+        # the next cycle decides after the commit → invested per the fraction
+        with db() as conn:
+            conn.execute("INSERT INTO vote_sessions(trade_date,status,closed_at,top_n,picks_json) "
+                         "VALUES('2990-01-02','closed',?,2,?)", (now + 60, picks))
+        holds = c._HOLDINGS
+        assert [s for s, _ in holds] == ["AAPL", "MSFT"]
+        port = c.get_portfolio(c.DEMO_ACCOUNT)["data"]
+        # 40% of $1,000 deployed (± a cent or two of share-quantity rounding)
+        assert abs(port["cash"] - 600.0) < 0.05
+        # each name got an equal slice of the invested $400, frozen at base price
+        from app.robinhood.demo import _base_price
+        for sym, qty in holds:
+            assert qty == round(200.0 / _base_price(sym), 4)
+    finally:
+        with db() as conn:                            # far-future sessions must not leak
+            conn.execute("DELETE FROM vote_sessions WHERE trade_date LIKE '2990-%'")
+            conn.execute("DELETE FROM member_settings WHERE member_id=?", (mid,))
+            conn.execute("DELETE FROM members WHERE id=?", (mid,))
+
+
 def test_delete_account_requires_phrase_and_blocks_owner(monkeypatch):
     import time as _t
     from fastapi.testclient import TestClient

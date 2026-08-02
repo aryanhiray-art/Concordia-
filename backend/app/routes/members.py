@@ -419,13 +419,21 @@ def delete_account(body: DeleteAccountBody, member: dict = Depends(require_sessi
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
-            # kill switch first: no future cycle may touch this member
-            conn.execute("UPDATE member_settings SET opted_in=0, alloc_value=0, updated_at=strftime('%s','now') "
+            # kill switch first: no future cycle may touch this member — and a
+            # FULL settings reset, not just the switch: stake, caps and
+            # reputation are personal state, and if the same person rejoins
+            # later they must start from scratch, remembering nothing
+            conn.execute("UPDATE member_settings SET opted_in=0, buying_power_pct=0, "
+                         "daily_cap_usd=0, voting_power=0, alloc_type='percent', alloc_value=0, "
+                         "accuracy=0, cycles_participated=0, updated_at=strftime('%s','now') "
                          "WHERE member_id=?", (mid,))
             # revoke broker access + every way to authenticate
             conn.execute("DELETE FROM rh_accounts WHERE member_id=?", (mid,))
             # the display snapshot caches their balances/holdings — erase it too
             conn.execute("DELETE FROM account_snapshots WHERE member_id=?", (mid,))
+            # ...and their recorded account-value history (personal financial
+            # data, not part of the club's anonymized books)
+            conn.execute("DELETE FROM equity_points WHERE member_id=?", (mid,))
             conn.execute("DELETE FROM api_keys WHERE member_id=?", (mid,))
             conn.execute("DELETE FROM oauth_identities WHERE member_id=?", (mid,))
             conn.execute("DELETE FROM login_events WHERE member_id=?", (mid,))
