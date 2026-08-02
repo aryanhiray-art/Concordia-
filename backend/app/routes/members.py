@@ -13,7 +13,7 @@ from .. import ratelimit
 from ..config import settings
 from ..db import audit, db
 from ..security import hash_password, verify_password
-from ..services import accountsnap, alloc, apikeys, email_codes, power
+from ..services import accountsnap, alloc, apikeys, email_codes, equity_history, power
 from .deps import COOKIE_NAME, client_ip, load_member, require_member, require_session_member
 
 router = APIRouter(prefix="/api", tags=["member"])
@@ -102,6 +102,26 @@ def me_holdings(member: dict = Depends(require_member)):
     calls instead of five."""
     view = accountsnap.get(member["id"])
     return {"holdings": view["holdings"], "as_of": view["as_of"], "stale": view["stale"]}
+
+
+@router.get("/me/equity")
+def me_equity(range: str = equity_history.DEFAULT_RANGE,
+              member: dict = Depends(require_member)):
+    """Recorded account-value history → {range, points:[{t,v}], resolution,
+    first_ts, ok}.
+
+    Every point is a REAL observation of the member's total account value,
+    recorded on each successful snapshot refresh (~10 min). Nothing is
+    interpolated: long ranges are thinned by keeping the last real point per
+    bucket (`resolution` says which), never by averaging. `first_ts` is the
+    earliest point on record and `ok` is False when the range holds fewer than
+    two points, so the UI can say "not enough history yet" instead of drawing a
+    line through invented data.
+    """
+    try:
+        return equity_history.series(member["id"], range)
+    except equity_history.UnknownRange:
+        raise HTTPException(status_code=400, detail="no such range")
 
 
 @router.put("/me/allocation")

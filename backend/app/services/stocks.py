@@ -42,7 +42,12 @@ _RANGE_DAYS = {"1M": 31, "3M": 92, "1Y": 366}
 # `intraday` decides the point shape: intraday points carry `t` (epoch seconds,
 # a date alone cannot place a 5-minute bar), daily points carry `d`.
 _RANGES: dict[str, dict] = {
-    "1D": {"days": 1,   "interval": "5minute",  "bounds": "regular", "intraday": True},
+    # 5 days back, then trimmed to the LAST session by _last_session_only. A
+    # 1-day window looks right and is wrong: asked on a Sunday it spans only
+    # Saturday and returns an empty chart (caught exactly that way — a weekend
+    # test run came back with 0 bars). Five days clears a weekend plus a public
+    # holiday. ~78 RTH bars a day, so ~390 at most: well inside the bar cap.
+    "1D": {"days": 5,   "interval": "5minute",  "bounds": "regular", "intraday": True},
     "1W": {"days": 7,   "interval": "30minute", "bounds": "regular", "intraday": True},
     "1M": {"days": 31,  "interval": "day",      "bounds": None,      "intraday": False},
     "3M": {"days": 92,  "interval": "day",      "bounds": None,      "intraday": False},

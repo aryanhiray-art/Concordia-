@@ -34,7 +34,7 @@ import threading
 import time
 
 from ..db import db
-from . import alloc, positions, power
+from . import alloc, equity_history, positions, power
 
 # How long a snapshot is served without even trying to refresh it. Matches the
 # 10-minute interval refresher, so a warm member is normally served by the timer.
@@ -129,6 +129,12 @@ def refresh(member_id: int) -> dict:
     must never blank out good numbers on the member's dashboard) and only ok/error
     flip — refreshed_at deliberately stays at the last SUCCESSFUL read so `as_of`
     never lies about how old the numbers are.
+
+    This is also where the member's account-value HISTORY is recorded
+    (services/equity_history): the balance was just read for the cache, so the
+    point is free, and only the success path below reaches the write — the
+    failure branch returns first, so a broker outage leaves a gap in the chart
+    rather than a fake $0.
     """
     with _lock:
         _last_attempt[member_id] = time.time()
@@ -144,7 +150,12 @@ def refresh(member_id: int) -> dict:
         # next request can retry rather than blocking on the broker again.
         return _store(member_id, _empty_payload(), [], int(time.time()), False, err)
     holdings = snap.pop("holdings")
-    return _store(member_id, snap, holdings, int(time.time()), True, None)
+    at = int(time.time())
+    row = _store(member_id, snap, holdings, at, True, None)
+    # Success only, and a no-op when balance is None (member not connected /
+    # partial read). Never raises — see equity_history.record_from_payload.
+    equity_history.record_from_payload(member_id, snap, at)
+    return row
 
 
 def invalidate(member_id: int) -> None:

@@ -230,6 +230,27 @@ CREATE TABLE IF NOT EXISTS account_snapshots (
     ok           INTEGER NOT NULL DEFAULT 1,  -- 0 = last refresh failed; payload is the last GOOD one
     error        TEXT                         -- why the last refresh failed (truncated)
 );
+
+-- RECORDED account-value history: one row per real observation of a member's
+-- total account value. Written by services/equity_history on every SUCCESSFUL
+-- snapshot refresh (~every 10 min), pruned by the same module.
+--
+-- Why a table at all: the only account-value history the club had was
+-- voting_power_history.equity — written ONCE A WEEK — so the member chart was
+-- ~6 real dots with straight lines invented between them. Robinhood exposes no
+-- portfolio-history endpoint (only equity/option/index historicals), so this
+-- CANNOT be backfilled from the broker: it has to be recorded going forward.
+-- Every row here is an observed number; nothing in this table is interpolated.
+CREATE TABLE IF NOT EXISTS equity_points (
+    member_id   INTEGER NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+    ts          INTEGER NOT NULL,             -- epoch seconds of the observation
+    total_value REAL NOT NULL                 -- $ total account value as read
+);
+-- UNIQUE (not just indexed): two writers landing in the same second must
+-- collapse to one row, which is also what makes the weekly-history seed
+-- idempotent (INSERT OR IGNORE) and the retention prune exact.
+CREATE UNIQUE INDEX IF NOT EXISTS ix_equity_points_member_ts
+    ON equity_points(member_id, ts);
 """
 
 

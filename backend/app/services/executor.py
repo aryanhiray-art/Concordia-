@@ -30,6 +30,27 @@ from ..robinhood import vault
 from ..robinhood.client import RHAuthError
 from . import alloc, positions, reconcile, voting
 
+# How old a 'closed' session may be and still count as "the basket sold
+# yesterday". A cycle's sell and buy legs are consecutive TRADING days, so the
+# gap is at most a long weekend plus a public holiday. Beyond that the session
+# is stuck, not pending.
+STALE_BASKET_DAYS = 5
+
+
+def _session_age_days(session: dict) -> int | None:
+    """Calendar days between a session's trade_date and today (ET). None when
+    the row carries no parseable date — callers then skip the staleness gate
+    rather than refusing to trade on a formatting quirk."""
+    import datetime as _dt
+
+    from ..calendar_us import today_et
+    raw = str(session.get("trade_date") or "").strip()
+    try:
+        y, m, d = (int(x) for x in raw.split("-"))
+        return (today_et() - _dt.date(y, m, d)).days
+    except Exception:  # noqa: BLE001
+        return None
+
 _REF_NS = uuid.UUID("c0c0c0c0-0000-4000-8000-000000000000")
 
 
@@ -828,6 +849,31 @@ def _run_today_locked(force_dry_run: bool = False) -> dict:
         session = voting.latest_session("closed")   # the basket sold on the prior sell day
         if not session:
             return {"ok": True, "note": "no sold basket waiting to be bought", "orders": []}
+        # The sell and buy legs are CONSECUTIVE trading days. latest_session()
+        # is unbounded, so a session that got stuck at 'closed' stays the newest
+        # 'closed' row forever and this leg would happily buy it — with real
+        # money, months later.
+        #
+        # Not hypothetical: session 14 (2026-07-20) never flipped to 'executed'
+        # because 3 orders errored, and it was the ONLY 'closed' row in
+        # production while the club was live and armed. Any buy-phase run
+        # (a second timer fire, the admin Execute-now button, or a buy day whose
+        # own cycle never reached 'closed') would have re-bought a basket the
+        # club deliberately exited six cycles earlier.
+        #
+        # A stale basket is never worth buying, so this refuses instead of
+        # trading and says so loudly. STALE_BASKET_DAYS spans a long weekend
+        # plus a holiday; anything older is a stuck session to be investigated,
+        # not an instruction.
+        age_days = _session_age_days(session)
+        if age_days is not None and age_days > STALE_BASKET_DAYS:
+            note = (f"refusing to buy a stale basket: session {session.get('id')} "
+                    f"({session.get('trade_date')}) is {age_days} days old and still "
+                    f"'closed' — investigate that session; it is not today's cycle")
+            print(f"[executor] {note}", flush=True)
+            audit("system", "buy_refused_stale_basket", str(session.get("id")),
+                  {"trade_date": session.get("trade_date"), "age_days": age_days})
+            return {"ok": True, "note": note, "orders": [], "stale_session": session.get("id")}
         return run(session, force_dry_run=force_dry_run, phase="buy")
     # 'sell' or 'both' — close today's ballot, then sell (and buy too, if 'both')
     session = voting.session_for_trade_date(today_et().isoformat())
