@@ -53,6 +53,40 @@ def universe_search(q: str = "", limit: int = 40) -> list[dict]:
 
 # ─── session lifecycle ───────────────────────────────────────────────────────
 
+def demo_roll_session() -> None:
+    """DEMO_MODE only: keep an open ballot alive without any timers.
+
+    The demo box runs none of the club's cron units, so its one seeded session
+    expired and the Overview pill read "Cycle closes in 0:00" forever (owner
+    report). On each ballot read: close an expired open session (normal tally,
+    so it becomes real history) and open today's/tomorrow's with a future close.
+    Idempotent and cheap; a no-op everywhere but demo_mode.
+    """
+    import datetime as _dt
+
+    from ..calendar_us import ET
+    from ..config import settings
+    if not settings.demo_mode:
+        return
+    now = time.time()
+    row = latest_session("open")
+    if row and (row.get("closes_at") or 0) > now:
+        return
+    if row:
+        try:
+            close_and_select(row["id"])
+        except Exception:  # noqa: BLE001
+            pass
+    today = _dt.datetime.now(ET).date()
+    for probe in (today, today + _dt.timedelta(days=1)):
+        with db() as conn:
+            hit = conn.execute("SELECT status FROM vote_sessions WHERE trade_date=?",
+                               (probe.isoformat(),)).fetchone()
+        if hit is None:
+            open_session_for(probe.isoformat())
+            return
+
+
 def open_session_for(trade_date) -> dict:
     """Create (or return) an OPEN session for a trade date. Used by open_vote job."""
     td = trade_date.isoformat()
@@ -91,6 +125,7 @@ def ensure_active_session() -> dict:
     If today is a trading day and not yet past close, open today's session;
     otherwise open the next trading day's session.
     """
+    demo_roll_session()   # no-op outside DEMO_MODE (no timers run there)
     a = active_session()
     if a and a["status"] == "open":
         return a

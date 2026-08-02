@@ -147,7 +147,41 @@ class DemoClient:
     """Mirrors RobinhoodClient's surface with canned, self-consistent data."""
 
     DEMO_ACCOUNT = "DEMO4242"
-    _HOLDINGS = [("AAPL", 0.35), ("NVDA", 0.12), ("MSFT", 0.18), ("AMZN", 0.25)]
+    # Positions mirror the CLUB's latest decided basket (owner call: a demo
+    # account should hold what the club holds, not four hardcoded names). On
+    # the hosted demo that basket comes from the mirrored REAL club; a local
+    # sandbox falls back to its own decided sessions, then to a static list so
+    # a fresh DB still renders. Quantities are hash-derived and deterministic.
+    _FALLBACK = [("AAPL", 0.35), ("NVDA", 0.12), ("MSFT", 0.18), ("AMZN", 0.25)]
+
+    @property
+    def _HOLDINGS(self):  # noqa: N802 — name kept, call sites unchanged
+        syms: list[str] = []
+        try:
+            from ..services import clubmirror
+            rows = clubmirror.history(1)
+            if rows and rows[0].get("basket"):
+                syms = list(rows[0]["basket"])
+        except Exception:  # noqa: BLE001
+            pass
+        if not syms:
+            try:
+                import json as _json
+
+                from ..db import db as _db
+                with _db() as c:
+                    r = c.execute(
+                        "SELECT picks_json FROM vote_sessions WHERE picks_json "
+                        "IS NOT NULL ORDER BY trade_date DESC LIMIT 1").fetchone()
+                if r:
+                    syms = [p.get("symbol") for p in _json.loads(r["picks_json"] or "[]")
+                            if p.get("symbol")]
+            except Exception:  # noqa: BLE001
+                pass
+        if not syms:
+            return list(self._FALLBACK)
+        # ~$25 per name, quantity from the deterministic demo price.
+        return [(sym, round(25.0 / _price(sym), 4)) for sym in syms[:12]]
 
     def __init__(self, member_id: int | None = None):
         self.member_id = member_id
