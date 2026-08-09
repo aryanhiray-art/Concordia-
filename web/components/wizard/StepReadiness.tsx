@@ -5,8 +5,10 @@
 // member's furthest step — revisits via Back get a manual Continue instead,
 // so Back navigation is never fought by an auto-advance). The common blocker
 // is Robinhood's investing-goals questionnaire, which gets its own
-// walkthrough + a force re-check. Anything else: reason + Re-check + a quiet
-// skip so nobody is ever trapped here.
+// walkthrough + a force re-check. No idle cash counts as ready (fully
+// invested is the executor's steady state) with a quiet deposit note.
+// Anything else: reason + Re-check + a quiet skip so nobody is ever
+// trapped here.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
@@ -50,6 +52,12 @@ export function StepReadiness({ onDone, auto }: { onDone: () => void; auto: bool
           <span className="grid h-9 w-9 flex-none place-items-center rounded-full bg-green/15 text-[16px] font-bold text-green" aria-hidden>✓</span>
           <div className="font-display text-[15px] font-semibold text-green">Your account is clear to trade ✓</div>
         </div>
+        {res.reason === "fully_invested" && (
+          <p className="mt-3 text-[12.5px] leading-relaxed text-subtle">
+            No idle cash right now — you&rsquo;re fully invested. The club trades with settled
+            cash, so deposit whenever you want it doing more.
+          </p>
+        )}
         {auto ? (
           <p className="mt-3 text-center text-[12.5px] text-subtle">Next: commit your stake…</p>
         ) : (

@@ -25,6 +25,11 @@ def trade_readiness(member_id: int, force: bool = False) -> dict:
     investing-goals/suitability questionnaire — the review returns an
     EQUITY_SUITABILITY alert and the place 400s. We probe with a tiny $1 review
     (no order placed) and cache the verdict so onboarding can guide the member.
+
+    A no-idle-cash alert (EQUITY_NOT_ENOUGH_BP*) counts as READY: fully
+    invested is the executor's steady state (sell → settle → redeploy leaves
+    only the reserve), so treating it as a blocker failed every active member
+    forever.
     """
     acct = vault.account_number_for(member_id)
     if not acct:
@@ -47,6 +52,13 @@ def trade_readiness(member_id: int, force: bool = False) -> dict:
         atype = checks.get("alertType") if isinstance(checks, dict) else None
         if atype == "EQUITY_SUITABILITY":
             out = {"connected": True, "ready": False, "reason": "needs_questionnaire"}
+        elif isinstance(atype, str) and atype.startswith("EQUITY_NOT_ENOUGH_BP"):
+            # Under $1 of idle cash — not a broken account. The probe has already
+            # proven what it exists to prove (token good, questionnaire done, RH
+            # evaluated the order and only complained about cash), and the
+            # executor deliberately keeps active members spent down below the
+            # probe amount.
+            out = {"connected": True, "ready": True, "reason": "fully_invested"}
         elif checks:
             out = {"connected": True, "ready": False, "reason": "blocked", "detail": str(checks)[:140]}
         else:
