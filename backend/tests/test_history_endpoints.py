@@ -377,21 +377,27 @@ def test_demo_roll_session_rolls_an_expired_ballot(monkeypatch):
     from app.services import voting as _voting
 
     # Settings is a frozen dataclass — go around the freeze, restore after.
+    # Everything runs inside the try so a failing assertion can NEVER leak
+    # demo_mode=True (or the parked rows) into later modules — a leak here is
+    # what used to knock over test_verify_email/test_vault_reauth/etc. This test
+    # must also hold at any wall-clock time: the roll now always opens a ballot
+    # with a genuinely future close, so the assertion below can't flip after
+    # 08:30 ET (the old flake).
     object.__setattr__(_settings, "demo_mode", True)
     monkeypatch  # unused; kept for signature symmetry
-    with db() as conn:
-        # Other tests in this module leave their own OPEN sessions with future
-        # closes; the roll rightly ignores an expired row when a live ballot
-        # exists, so park them for the duration of this test.
-        conn.execute("UPDATE vote_sessions SET status='parked' WHERE status='open'")
-        conn.execute(
-            "INSERT INTO vote_sessions(trade_date,status,closes_at,top_n) "
-            "VALUES('2026-01-05','open',?,20)", (int(_time.time()) - 86400,))
-    _voting.demo_roll_session()
-    fresh = _voting.latest_session("open")
-    assert fresh is not None
-    assert fresh["closes_at"] > _time.time(), "the rolled ballot must have a future close"
     try:
+        with db() as conn:
+            # Other tests in this module leave their own OPEN sessions with future
+            # closes; the roll rightly ignores an expired row when a live ballot
+            # exists, so park them for the duration of this test.
+            conn.execute("UPDATE vote_sessions SET status='parked' WHERE status='open'")
+            conn.execute(
+                "INSERT INTO vote_sessions(trade_date,status,closes_at,top_n) "
+                "VALUES('2026-01-05','open',?,20)", (int(_time.time()) - 86400,))
+        _voting.demo_roll_session()
+        fresh = _voting.latest_session("open")
+        assert fresh is not None
+        assert fresh["closes_at"] > _time.time(), "the rolled ballot must have a future close"
         with db() as conn:
             old = conn.execute(
                 "SELECT status FROM vote_sessions WHERE trade_date='2026-01-05'").fetchone()

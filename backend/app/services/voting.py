@@ -78,7 +78,16 @@ def demo_roll_session() -> None:
         except Exception:  # noqa: BLE001
             pass
     today = _dt.datetime.now(ET).date()
-    for probe in (today, today + _dt.timedelta(days=1)):
+    # Open the first upcoming date whose VOTE_CLOSE_AT is still in the FUTURE, so
+    # the fresh demo ballot always has a live countdown. today@VOTE_CLOSE_AT is
+    # already past whenever we roll after that time (e.g. any time after 08:30
+    # ET) — opening for `today` then would create a ballot that reads 'expired'
+    # the instant it exists, which is the bug this rolls past. Probe a few days
+    # out so a holiday/weekend row already occupying tomorrow can't strand us.
+    for probe in (today, today + _dt.timedelta(days=1), today + _dt.timedelta(days=2)):
+        closes_at = int(at_et(probe, settings.vote_close_at).timestamp())
+        if closes_at <= now:
+            continue  # this date's close has already passed — never open expired
         with db() as conn:
             hit = conn.execute("SELECT status FROM vote_sessions WHERE trade_date=?",
                                (probe.isoformat(),)).fetchone()
@@ -89,6 +98,8 @@ def demo_roll_session() -> None:
             # is the upstream commit of that fix.
             open_session_for(probe)
             return
+        if hit["status"] == "open":
+            return  # a live future ballot already exists for this date
 
 
 def open_session_for(trade_date) -> dict:
