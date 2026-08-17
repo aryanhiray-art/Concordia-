@@ -176,6 +176,19 @@ export const api = {
   tradeReadiness: (force = false) =>
     req<{ connected: boolean; ready: boolean; reason: string; detail?: string }>(
       `/api/me/trade-readiness${force ? "?force=true" : ""}`),
+  // the member's agentic-account type + limited-margin upgrade links. A cash
+  // account waits T+1 for sale proceeds (delayed redeploy); limited margin
+  // trades on unsettled funds with no borrowing or leverage.
+  marginStatus: (force = false) =>
+    req<{
+      connected: boolean; account_type?: string | null; delayed?: boolean | null;
+      unsettled_funds?: string | null; acknowledged?: boolean;
+      upgrade?: { web_upgrade_url: string; mobile_upgrade_url: string; upgrade_fallback: string } | null;
+    }>(`/api/me/margin-status${force ? "?force=true" : ""}`),
+  marginAck: (acknowledged: boolean) =>
+    req<{ ok: boolean; acknowledged: boolean }>("/api/me/margin-ack", {
+      method: "PUT", body: JSON.stringify({ acknowledged }),
+    }),
   // the member's positions (for the overview donut + holdings list) — same
   // cached-snapshot contract as account().
   holdings: () => req<HoldingsView>("/api/me/holdings"),

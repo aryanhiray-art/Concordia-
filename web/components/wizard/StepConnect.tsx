@@ -65,6 +65,14 @@ export function StepConnect({ onOpened, onConnected }: { onOpened: () => void; o
           your credentials never touch Concordia.</>
         )}
       </p>
+      {!reauth && (
+        <p className="mt-2 text-[12.5px] leading-relaxed text-subtle">
+          If Robinhood offers an account-type choice while you set up your agentic account,
+          pick <b className="text-ink">limited margin</b> — your trades execute without
+          settlement delays, with no borrowing and no leverage. Miss it? No problem — the
+          next step offers a one-click switch.
+        </p>
+      )}
 
       {/* The what-happens-next story must come BEFORE the member leaves: the
           "can't connect page is expected" warning used to live only on the

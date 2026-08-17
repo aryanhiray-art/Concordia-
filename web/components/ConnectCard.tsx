@@ -1,10 +1,50 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { Member } from "@/lib/types";
 import { ConnectExplainer } from "./ConnectExplainer";
 import { Button, Card, Pill, Toggle } from "./ui";
+
+type MarginStatus = Awaited<ReturnType<typeof api.marginStatus>>;
+
+/** Account-type line for the connected state: limited margin trades on
+ *  unsettled funds (no borrowing/leverage); a cash account waits T+1 after
+ *  every sell, so we surface the one-click switch here too. */
+function MarginBadge() {
+  const [m, setM] = useState<MarginStatus | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api.marginStatus()
+      .then((r) => { if (alive) setM(r); })
+      .catch(() => { /* quiet — the badge is informational */ });
+    return () => { alive = false; };
+  }, []);
+  if (!m?.connected || !m.account_type) return null;
+  if (m.account_type !== "cash") {
+    return (
+      <div className="mt-1.5 text-[12.5px] text-teal">
+        Limited margin — sale proceeds redeploy immediately, no settlement delays.
+      </div>
+    );
+  }
+  return (
+    <div className="mt-1.5 text-[12.5px] text-amber">
+      Cash account — after each sell, proceeds settle the next business day before the
+      club can redeploy them.{" "}
+      {m.upgrade && (
+        <a
+          className="underline hover:text-ink"
+          href={m.upgrade.web_upgrade_url}
+          target="_blank" rel="noopener noreferrer"
+        >
+          Switch to limited margin
+        </a>
+      )}{" "}
+      <span className="text-subtle">(no borrowing, no leverage — just no waiting)</span>
+    </div>
+  );
+}
 
 export function ConnectCard({ member, onChange }: { member: Member; onChange: () => void }) {
   const rh = member.robinhood;
@@ -132,6 +172,7 @@ export function ConnectCard({ member, onChange }: { member: Member; onChange: ()
             Account <span className="font-display text-ink">···{String(rh!.account_number).slice(-4)}</span>
             {!agentic && <span className="ml-2 text-amber">— enable Robinhood&apos;s “Agentic” account to trade.</span>}
           </div>
+          <MarginBadge />
 
           <div className="mt-5 flex items-center justify-between gap-4 border-t border-white/10 pt-5">
             <div>

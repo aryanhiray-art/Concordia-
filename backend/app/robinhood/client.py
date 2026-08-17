@@ -140,6 +140,12 @@ class RobinhoodClient:
     def get_accounts(self) -> dict:
         return self.mcp.call_tool("get_accounts", {})
 
+    def get_limited_margin_upgrade_info(self, account_number: str) -> dict:
+        """Eligibility + the self-serve links that switch a cash account to
+        limited margin (trade with unsettled funds; no borrowing, no leverage)."""
+        return self.mcp.call_tool("get_limited_margin_upgrade_info",
+                                  {"account_number": account_number})
+
     def get_portfolio(self, account_number: str) -> dict:
         return self.mcp.call_tool("get_portfolio", {"account_number": account_number})
 

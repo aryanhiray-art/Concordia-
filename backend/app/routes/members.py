@@ -1,6 +1,7 @@
 """Current member: profile + the single participation switch."""
 from __future__ import annotations
 
+import json
 import time
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -11,7 +12,8 @@ from pydantic import Field, field_validator
 
 from .. import ratelimit
 from ..config import settings
-from ..db import audit, db
+from ..db import audit, db, kv_get, kv_set
+from ..robinhood import vault
 from ..security import hash_password, verify_password
 from ..services import accountsnap, alloc, apikeys, email_codes, equity_history, power
 from .deps import COOKIE_NAME, client_ip, load_member, require_member, require_session_member
@@ -93,6 +95,96 @@ def me_account_refresh(member: dict = Depends(require_member)):
 def me_trade_readiness(force: bool = False, member: dict = Depends(require_member)):
     """Is the member's RH account cleared to place buys (questionnaire done)?"""
     return alloc.trade_readiness(member["id"], force=force)
+
+
+# ── Limited margin (settlement-delay killer) ──────────────────────────────
+# A cash agentic account can only spend SETTLED funds: sale proceeds arrive
+# T+1, so the club's redeploy for that member runs a day behind. Robinhood's
+# "limited margin" removes exactly that delay — trade with unsettled funds,
+# NO borrowing, NO leverage — via a self-serve switch flow the member
+# completes on Robinhood. The wizard uses this endpoint to route cash members
+# into that flow, and to make staying on cash an explicit, informed choice.
+
+_MARGIN_TTL = 120  # seconds to cache the probe (get_accounts is a broker call)
+
+_MARGIN_FLOW = "flow_id=brokerage.switch-to-margin-account&source=concordia&target_margin_type=limited"
+
+
+def _margin_fallback_links(acct: str) -> dict:
+    # Deterministic self-serve URLs (same params the broker's own tool emits) —
+    # used only if the upgrade-info tool is unavailable for this token.
+    q = f"account_number={acct}&account_type=individual&{_MARGIN_FLOW}"
+    return {
+        "web_upgrade_url": f"https://robinhood.com/contact?{q}",
+        "mobile_upgrade_url": f"https://applink.robinhood.com/self_serve?{q}",
+        "upgrade_fallback": "In the Robinhood app: Settings → Investing → Account type → switch the account to margin (limited).",
+    }
+
+
+@router.get("/me/margin-status")
+def me_margin_status(force: bool = False, member: dict = Depends(require_member)):
+    """The member's agentic-account type + the limited-margin upgrade path."""
+    mid = member["id"]
+    acct = vault.account_number_for(mid)
+    if not acct:
+        return {"connected": False}
+    ck = f"margin_status:{mid}"
+    if not force:
+        cached = kv_get(ck)
+        if cached:
+            try:
+                c = json.loads(cached)
+                if time.time() - c.get("ts", 0) < _MARGIN_TTL:
+                    return {k: v for k, v in c.items() if k != "ts"}
+            except Exception:  # noqa: BLE001
+                pass
+    out: dict = {"connected": True, "account_type": None, "unsettled_funds": None,
+                 "delayed": None, "upgrade": None}
+    try:
+        client = vault.ensure_client(mid)
+        accounts = (client.get_accounts().get("data") or {}).get("accounts") or []
+        row = next((a for a in accounts if a.get("account_number") == acct), None)
+        if row:
+            atype = row.get("type")
+            out["account_type"] = atype
+            out["unsettled_funds"] = row.get("unsettled_funds")
+            # Only a plain cash account waits on settlement; margin and
+            # limited_margin both redeploy sale proceeds immediately.
+            out["delayed"] = atype == "cash"
+            if atype == "cash":
+                try:
+                    info = (client.get_limited_margin_upgrade_info(acct).get("data") or {})
+                    if info.get("eligible"):
+                        out["upgrade"] = {
+                            "web_upgrade_url": info.get("web_upgrade_url"),
+                            "mobile_upgrade_url": info.get("mobile_upgrade_url"),
+                            "upgrade_fallback": info.get("upgrade_fallback"),
+                        }
+                except Exception:  # noqa: BLE001
+                    out["upgrade"] = _margin_fallback_links(acct)
+                if out["upgrade"] is None:
+                    out["upgrade"] = _margin_fallback_links(acct)
+            # Last-known type, persisted for the executor/admin surfaces.
+            kv_set(f"acct_type:{mid}", atype or "")
+    except Exception as e:  # noqa: BLE001
+        out["error"] = str(e)[:140]
+    out["acknowledged"] = kv_get(f"margin_ack:{mid}") == "1"
+    kv_set(ck, json.dumps({**out, "ts": int(time.time())}))
+    return out
+
+
+class MarginAckBody(BaseModel):
+    acknowledged: bool
+
+
+@router.put("/me/margin-ack")
+def me_margin_ack(body: MarginAckBody, member: dict = Depends(require_member)):
+    """Record that a cash-account member understands their trades are delayed
+    (sale proceeds settle T+1 before the club can redeploy them)."""
+    kv_set(f"margin_ack:{member['id']}", "1" if body.acknowledged else "0")
+    audit(f"member:{member['id']}", "margin_ack", None,
+          {"acknowledged": body.acknowledged})
+    return {"ok": True, "acknowledged": body.acknowledged}
 
 
 @router.get("/me/holdings")
