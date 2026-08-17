@@ -93,7 +93,10 @@ class Settings:
     # default = ALTERNATE trading days (a settlement day always sits between
     # rebalances) + WEEKLY power. Production target = weekly + monthly (set
     # CYCLE_CADENCE=weekly, POWER_CADENCE=monthly in .env).
-    cycle_cadence: str = os.environ.get("CYCLE_CADENCE", "alternate").strip().lower()  # daily|alternate|weekly
+    cycle_cadence: str = os.environ.get("CYCLE_CADENCE", "alternate").strip().lower()  # daily|alternate|weekly|mwf
+    # 'mwf': Mon/Wed/Fri vote days run sell+buy in one session (limited-margin
+    # members complete same-day via unsettled-funds buying power; cash members'
+    # remainders defer) and Tue/Thu are top-up days for settled cash.
     power_cadence: str = os.environ.get("POWER_CADENCE", "weekly").strip().lower()      # weekly|monthly
     cycle_anchor: str = os.environ.get("CYCLE_ANCHOR", "2026-06-23").strip()            # parity anchor; Tue 6/23 = first sell day
     cycle_start_date: str = os.environ.get("CYCLE_START_DATE", "2026-06-23").strip()    # cadence dormant before this (Mon 6/22 = fresh-start liquidation only)

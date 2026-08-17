@@ -136,6 +136,18 @@ def cycle_phase(d: _dt.date | None = None) -> str | None:
         if d == next_trading_day(first):
             return "buy"
         return None
+    if cad == "mwf":
+        # Mon/Wed/Fri = vote days that run BOTH legs in one 9:31 session.
+        # The per-member split falls out of the broker's own buying-power
+        # semantics: limited-margin members' buying power includes today's
+        # unsettled sale proceeds, so their buys complete same-day; cash
+        # members deploy only already-settled cash and the executor defers
+        # the rest. Tue/Thu (and any non-MWF trading day, e.g. after a
+        # Monday holiday) = 'buy' top-up days where those deferred cash
+        # buys land with now-settled proceeds; fully-deployed margin
+        # members simply have nothing to top up and hold. A vote day lost
+        # to a holiday is skipped (the next MWF picks up the cycle).
+        return "both" if d.weekday() in (0, 2, 4) else "buy"
     # 'alternate' (fast testing): even trading-day = sell, odd = buy. Every
     # trading day is active — Mon sell → settles → Tue buy → Wed sell → Thu buy.
     return "sell" if _trading_index(d) % 2 == 0 else "buy"
