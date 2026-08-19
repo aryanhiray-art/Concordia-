@@ -545,11 +545,38 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
                 _record(sid, mid, symbol, None, ref_id, "error", review=review, error=f"sell: {e}", side="sell")
                 msum["orders"].append({"symbol": symbol, "side": "sell", "status": "error", "note": str(e)})
 
-        # Only deploy what's actually SETTLED — any buy beyond buying power is
-        # deferred (it fills next buy day, once this cycle's sells settle), so we
-        # never trip EQUITY_NOT_ENOUGH_BP. Hold back the small cash reserve
-        # (finding #28 — deployable() was defined but never used) so a sequence of
-        # dollar market orders doesn't exhaust buying power on the last leg.
+        # Same-day ('both') runs: the portfolio snapshot above predates this
+        # morning's sells, so its buying_power cannot see their proceeds — on
+        # the first live both-day (2026-08-19) every buy deferred with
+        # "beyond settled buying power" even for limited-margin members, whose
+        # proceeds ARE spendable immediately. Re-fetch buying power once the
+        # sells are in (one 4s-spaced retry for fill latency). Cash accounts
+        # report settled-only buying power either way, so this changes nothing
+        # for them; on any fetch error we keep the stale number and the buys
+        # defer to the next buy day exactly as before.
+        sells_placed = any(o.get("side") == "sell" and o.get("status") == "placed"
+                           for o in msum["orders"])
+        if phase == "both" and sells_placed:
+            for attempt in (1, 2):
+                try:
+                    port2 = client.get_portfolio(m["account_number"])
+                    p2 = port2.get("data", port2) if isinstance(port2, dict) else {}
+                    b2 = p2.get("buying_power") or {}
+                    bp_new = _num(b2.get("buying_power") if isinstance(b2, dict) else b2)
+                except Exception:  # noqa: BLE001
+                    break
+                if bp_new is not None and bp_new > buying_power:
+                    buying_power = bp_new
+                    break
+                if attempt == 1:
+                    time.sleep(4)  # give the 9:31 market sells a beat to fill
+
+        # Only deploy what's actually SETTLED-spendable — any buy beyond buying
+        # power is deferred (it fills next buy day, once this cycle's sells
+        # settle), so we never trip EQUITY_NOT_ENOUGH_BP. Hold back the small
+        # cash reserve (finding #28 — deployable() was defined but never used)
+        # so a sequence of dollar market orders doesn't exhaust buying power on
+        # the last leg.
         bp_left = deployable(buying_power)
         # A4: lazy one-shot fetch of the member's recent broker orders, only when a
         # prior run left an errored buy whose true fate is unknown.

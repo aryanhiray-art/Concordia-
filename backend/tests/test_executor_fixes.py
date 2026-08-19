@@ -635,3 +635,81 @@ def test_derived_read_failure_raises_incomplete(monkeypatch):
     positions.invalidate_feed_cache()
     with pytest.raises(positions.DerivationIncomplete):
         positions.club_shares_derived(mid)
+
+
+# ─── Same-day 'both' runs: buy leg must see the morning's sale proceeds ──────
+
+class ProceedsClient(FakeClient):
+    """buying_power jumps only after a sell has been placed — models
+    limited-margin proceeds becoming spendable once the 9:31 sells fill."""
+
+    def __init__(self, *, bp_after_sell, **kw):
+        super().__init__(**kw)
+        self.bp_after_sell = bp_after_sell
+        self.sold = False
+
+    def place_market_sell(self, acct, symbol, qty, ref_id=None):
+        self.sold = True
+        return super().place_market_sell(acct, symbol, qty, ref_id=ref_id)
+
+    def get_portfolio(self, acct):
+        if self.sold:
+            self.buying_power = self.bp_after_sell
+        return super().get_portfolio(acct)
+
+
+def test_both_day_refreshes_buying_power_after_sells(monkeypatch):
+    """Live regression (first mwf both-day, 2026-08-19): the pre-sell portfolio
+    snapshot hid the morning's sale proceeds, so every buy deferred with
+    'beyond settled buying power' — even for limited-margin members whose
+    proceeds ARE immediately spendable. After placing sells in a 'both' run,
+    the buy leg must re-fetch buying power and size against the fresh number."""
+    from app.config import settings
+    from app.db import set_armed
+
+    mid = _member("bothday@x.com", alloc_value=50.0)
+    executor._record(90050, mid, "TSLA", 250.0, "bothday-ref-1", "placed",
+                     place={"_concord_est_qty": 1.0})
+    closed = _closed_session(datetime.date(2026, 12, 28), mid, ["AAPL"])  # TSLA dropped
+    client = ProceedsClient(quotes={"AAPL": 100.0, "TSLA": 250.0},
+                            positions=[("TSLA", "1.0")],
+                            buying_power=0.40, total_value=250.0,
+                            bp_after_sell=250.0)
+    _use_client(monkeypatch, client)
+
+    prev_mode = settings.execution_mode
+    object.__setattr__(settings, "execution_mode", "live")
+    set_armed(True)
+    try:
+        summary = executor.run(closed, force_dry_run=False, phase="both")
+    finally:
+        object.__setattr__(settings, "execution_mode", prev_mode)
+        set_armed(False)
+
+    assert client.trades_for("place_sell", f"ACC{mid}", "TSLA"), "sell leg placed"
+    assert client.trades_for("place_buy", f"ACC{mid}", "AAPL"), \
+        "buy must place against refreshed buying power (regression: deferred)"
+    order = next(o for o in _mrow(summary, mid)["orders"]
+                 if o["symbol"] == "AAPL" and o["side"] == "buy")
+    assert order["status"] == "placed"
+    assert len([c for c in client.calls if c[0] == "get_portfolio"]) >= 2, \
+        "buy leg re-fetched the portfolio after the sells"
+
+
+def test_sell_only_phase_does_not_refetch_portfolio(monkeypatch):
+    """The refresh is scoped to same-day 'both' runs — a plain sell-day run
+    keeps the single portfolio fetch (no extra broker calls)."""
+    mid = _member("sellonly@x.com", alloc_value=50.0)
+    executor._record(90051, mid, "TSLA", 250.0, "sellonly-ref-1", "placed",
+                     place={"_concord_est_qty": 1.0})
+    closed = _closed_session(datetime.date(2026, 12, 29), mid, ["AAPL"])
+    client = FakeClient(quotes={"AAPL": 100.0, "TSLA": 250.0},
+                        positions=[("TSLA", "1.0")], buying_power=100.0)
+    _use_client(monkeypatch, client)
+
+    executor.run(closed, force_dry_run=True, phase="sell")
+
+    # scope to THIS member's account — the shared FakeClient serves every
+    # member the run touches (same caveat as trades_for)
+    mine = [c for c in client.calls if c[0] == "get_portfolio" and c[1] == f"ACC{mid}"]
+    assert len(mine) == 1
