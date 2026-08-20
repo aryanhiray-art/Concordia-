@@ -6,6 +6,7 @@ import { api, setToken } from "@/lib/api";
 import { isAdminHost, isBetaHost, isDemoHost } from "@/lib/host";
 import type { Member } from "@/lib/types";
 import { Button, Card, Logo, Wordmark } from "./ui";
+import { EnvChip, OpsTag } from "./admin/util";
 import { GoogleButton, googleEnabled } from "./GoogleButton";
 import { PrivacyDoc, TermsDoc } from "./legal";
 
@@ -139,6 +140,22 @@ function BrandPane() {
   );
 }
 
+// ── Ops-entrance helpers (admin host only) ──────────────────────────────────
+// The PROD/LOCAL chip and OPS tag are the console's own (admin/util.tsx) — the
+// door and the room wear the identical identity marks.
+
+// Uppercase MONO micro-label for the ops form. The club's `.label` idiom
+// hard-sets Inter via a `font:` shorthand that lands AFTER the Tailwind
+// layers in globals.css, so a font-mono utility can't win — this label owns
+// its own type instead.
+function OpsLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <label className="mb-2 block font-mono text-[10.5px] font-semibold uppercase tracking-[0.16em] text-subtle">
+      {children}
+    </label>
+  );
+}
+
 // `notice` = why the last session ended (today: the 2-hour idle logout). It
 // opens the card on the LOG IN tab and prints a quiet line above the form —
 // an expired session is a normal event, never an error.
@@ -221,46 +238,70 @@ export function AuthGate({ onAuthed, notice }: { onAuthed: (m: Member) => void; 
   // ── Ops console sign-in: deliberately unlike the club's front door ──
   // No signup tab, no invite field, no brand story, no Google (parked until
   // the admin origin is whitelisted on the GIS client — see the member-card
-  // gate below). A member who lands here by typo gets pointed home instead
+  // gate below). One wide card, two zones split by a hairline: an identity
+  // rail that says WHICH door this is (wordmark + OPS tag + PROD/LOCAL chip),
+  // then the form. A member who lands here by typo gets pointed home instead
   // of a confusing invite prompt.
   if (adminHost) {
     return (
-      <div className="mx-auto mt-[18vh] w-[min(400px,100%)] px-5">
-        <div className="mb-7 flex flex-col items-center text-center">
-          <Logo size={48} />
-          <div className="mt-4 font-display text-[26px] font-bold tracking-tight text-[#8FD9C0]">
-            concordia
-          </div>
-          <p className="label mt-2.5">Ops console</p>
-        </div>
-        <Card className="glass-glow">
-          {/* Idle-logout notice: no tabs here to dismiss it from, so it simply
-              stays until sign-in — an expired session is normal, never an error. */}
-          {notice && (
-            <p className="mb-4 rounded-[12px] border border-white/10 bg-white/[0.04] px-3.5 py-2.5 text-[12.5px] leading-relaxed text-muted">
-              {notice}
+      <div className="mx-auto mt-[16vh] w-[min(720px,100%)] px-5 pb-16">
+        <div className="glass glass-glow shine flex flex-col md:flex-row">
+          {/* Identity rail: who/where, nothing sellable. The purpose line
+              anchors the rail's bottom edge on desktop so the two zones read
+              as equal-height columns; on mobile the rail stacks above the
+              form and the hairline turns horizontal. */}
+          <div className="flex flex-col gap-7 p-6 sm:p-8 md:w-[292px] md:flex-none md:justify-between md:bg-white/[0.02]">
+            <div>
+              <div className="flex items-center gap-3">
+                <Logo size={42} />
+                <div className="flex min-w-0 items-baseline gap-2">
+                  <span className="font-display text-[23px] font-bold leading-none tracking-tight text-[#8FD9C0]">
+                    concordia
+                  </span>
+                  <OpsTag className="text-[11px]" />
+                </div>
+              </div>
+              <div className="mt-4"><EnvChip /></div>
+            </div>
+            <p className="text-[12.5px] leading-relaxed text-subtle">
+              Operations console for the Concordia voting club. Authorized
+              operators only.
             </p>
-          )}
-          <form className="space-y-3.5" onSubmit={(e) => { e.preventDefault(); adminLogin(); }}>
-            <div>
-              <label className="label mb-2">Email</label>
-              <input className="input" placeholder="you@email.com" type="email" value={email}
-                onChange={(e) => setEmail(e.target.value)} spellCheck={false} autoComplete="email" />
-            </div>
-            <div>
-              <label className="label mb-2">Password</label>
-              <input className="input" placeholder="Your password" type="password" value={password}
-                onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
-            </div>
-            {err && <div className="text-[13px] text-red">⚠ {err}</div>}
-            <Button type="submit" variant="go" className="w-full !py-3.5" busy={busy}
-              disabled={!email.trim() || !password}>
-              Log in
-            </Button>
-          </form>
-        </Card>
+          </div>
+
+          <div className="h-px w-full flex-none bg-white/10 md:h-auto md:w-px md:self-stretch" aria-hidden />
+
+          {/* Form zone — submits through adminLogin() above: the same login
+              endpoint as the member card, role-gated after auth. */}
+          <div className="min-w-0 flex-1 p-6 sm:p-8">
+            {/* Idle-logout notice: no tabs here to dismiss it from, so it simply
+                stays until sign-in — an expired session is normal, never an error. */}
+            {notice && (
+              <p className="mb-4 rounded-[12px] border border-white/10 bg-white/[0.04] px-3.5 py-2.5 text-[12.5px] leading-relaxed text-muted">
+                {notice}
+              </p>
+            )}
+            <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); adminLogin(); }}>
+              <div>
+                <OpsLabel>Email</OpsLabel>
+                <input className="input" placeholder="you@email.com" type="email" value={email}
+                  onChange={(e) => setEmail(e.target.value)} spellCheck={false} autoComplete="email" />
+              </div>
+              <div>
+                <OpsLabel>Password</OpsLabel>
+                <input className="input" placeholder="Your password" type="password" value={password}
+                  onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
+              </div>
+              {err && <div className="text-[13px] text-red">⚠ {err}</div>}
+              <Button type="submit" variant="go" className="w-full !py-3.5" busy={busy}
+                disabled={!email.trim() || !password}>
+                Log in
+              </Button>
+            </form>
+          </div>
+        </div>
         <p className="mt-4 text-center text-[11.5px] leading-relaxed text-subtle">
-          Authorized operators only. Members sign in at voteconcordia.com.
+          Members sign in at voteconcordia.com.
         </p>
       </div>
     );

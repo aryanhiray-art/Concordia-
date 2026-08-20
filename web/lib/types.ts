@@ -22,7 +22,9 @@ export type Account = {
   live?: boolean;
 };
 
-export type Holding = { symbol: string; quantity: number; value: number; pnl: number | null };
+/** club: the club's ledger holds this symbol for you; false = a personal
+ *  position sharing the account (labeled, never implied to be basket). */
+export type Holding = { symbol: string; quantity: number; value: number; pnl: number | null; club?: boolean | null };
 /** GET /api/me/holdings — same snapshot contract as Account. */
 export type HoldingsView = { holdings: Holding[]; as_of?: number | null; stale?: boolean };
 

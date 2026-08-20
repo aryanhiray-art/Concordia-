@@ -186,7 +186,11 @@ def test_first_read_builds_snapshot_and_later_reads_cost_no_broker_calls(monkeyp
         assert again["pnl"] == body["pnl"]
     h = client.get("/api/me/holdings", headers=_hdrs(tok))
     assert h.status_code == 200
-    assert h.json()["holdings"] == _HOLDINGS and h.json()["as_of"] == first_as_of
+    # /me/holdings annotates each row with `club` (this member has no club
+    # executions, so every position is personal) — the snapshot itself is
+    # unchanged, the flag is added at the route.
+    assert h.json()["holdings"] == [{**row, "club": False} for row in _HOLDINGS]
+    assert h.json()["as_of"] == first_as_of
     assert b.calls == 2, "opening Overview/Account again must not touch Robinhood"
 
 

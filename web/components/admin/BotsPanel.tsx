@@ -7,7 +7,7 @@
 
 import type { AdminBots } from "@/lib/api";
 import { Card, Pill } from "@/components/ui";
-import { SectionLabel, fmtAccuracy, fmtET, money } from "./util";
+import { SectionHead, fmtAccuracy, fmtET, money } from "./util";
 
 const MAX_PICK_CHIPS = 6;
 
@@ -18,16 +18,11 @@ export function BotsPanel({ bots, err, onOpen }: {
 }) {
   return (
     <Card>
-      <div className="flex flex-wrap items-center gap-3">
-        <SectionLabel>Bots</SectionLabel>
-        <div className="mb-3 ml-auto">
-          {bots && (
-            <Pill tone={bots.llm.reachable ? "ok" : "danger"}>
-              {bots.llm.reachable ? "LLM reachable" : "LLM unreachable"}
-            </Pill>
-          )}
-        </div>
-      </div>
+      <SectionHead label="Bots" right={bots && (
+        <Pill tone={bots.llm.reachable ? "ok" : "danger"}>
+          {bots.llm.reachable ? "LLM reachable" : "LLM unreachable"}
+        </Pill>
+      )} />
 
       {!bots ? (
         <div className="text-[12.5px] text-subtle">

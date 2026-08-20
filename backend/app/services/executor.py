@@ -25,7 +25,7 @@ import time
 import uuid
 
 from ..config import settings
-from ..db import audit, db, is_armed
+from ..db import audit, db, is_armed, kv_get
 from ..robinhood import vault
 from ..robinhood.client import RHAuthError
 from . import alloc, positions, reconcile, voting
@@ -35,6 +35,13 @@ from . import alloc, positions, reconcile, voting
 # gap is at most a long weekend plus a public holiday. Beyond that the session
 # is stuck, not pending.
 STALE_BASKET_DAYS = 5
+
+# Both-day buying-power poll: how long the buy leg will wait for Robinhood to
+# credit the morning's sale proceeds (fill + ledger lag measured >8s on 08/19),
+# and how often it looks. Early exit when ~80% of the placed sells' value shows
+# up, so the common case waits seconds, not the cap.
+BP_POLL_EVERY_S = 6
+BP_POLL_MAX_S = 120
 
 
 def _session_age_days(session: dict) -> int | None:
@@ -469,6 +476,7 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
         # the basket is fully sold; a name still in the basket but OVER its equal-
         # weight target is trimmed back to target, so the proceeds redistribute
         # into the rest of the new basket.
+        placed_sell_usd = 0.0   # ≈ proceeds in flight; the both-day BP poll's early-exit target
         for symbol, qty in (sorted(held.items()) if phase in ("sell", "both") else []):
             price = prices.get(symbol)
             # Reconcile the club ledger to the LIVE account BEFORE sizing. club_shares
@@ -541,6 +549,7 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
                 _record(sid, mid, symbol, None, ref_id, "placed", review=review, place=place, side="sell")
                 msum["orders"].append({"symbol": symbol, "side": "sell", "status": "placed", "qty": qstr, "note": why})
                 order_count += 1
+                placed_sell_usd += (price or 0.0) * qfloor
             except Exception as e:  # noqa: BLE001
                 _record(sid, mid, symbol, None, ref_id, "error", review=review, error=f"sell: {e}", side="sell")
                 msum["orders"].append({"symbol": symbol, "side": "sell", "status": "error", "note": str(e)})
@@ -549,15 +558,25 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
         # morning's sells, so its buying_power cannot see their proceeds — on
         # the first live both-day (2026-08-19) every buy deferred with
         # "beyond settled buying power" even for limited-margin members, whose
-        # proceeds ARE spendable immediately. Re-fetch buying power once the
-        # sells are in (one 4s-spaced retry for fill latency). Cash accounts
-        # report settled-only buying power either way, so this changes nothing
-        # for them; on any fetch error we keep the stale number and the buys
-        # defer to the next buy day exactly as before.
+        # proceeds ARE spendable immediately. The first fix re-fetched once
+        # after ~4s and STILL deferred everything on 08/19's second both-day:
+        # Robinhood credits buying power only after the market sells FILL and
+        # its ledger catches up, which takes well over 8 seconds at 9:31. So:
+        # poll buying power for up to BP_POLL_MAX_S, exiting early once ~80%
+        # of the placed sells' value shows up (or once the number rises and
+        # stops rising — credit landed). Cash accounts report settled-only
+        # buying power that never moves same-day, so they keep a single quick
+        # look; on any fetch error we keep the stale number and the buys defer
+        # to the next buy day exactly as before.
         sells_placed = any(o.get("side") == "sell" and o.get("status") == "placed"
                            for o in msum["orders"])
         if phase == "both" and sells_placed:
-            for attempt in (1, 2):
+            acct_type = (kv_get(f"acct_type:{mid}") or "").strip().lower()
+            deadline_s = 0 if acct_type == "cash" else BP_POLL_MAX_S
+            bp_start = buying_power
+            target = bp_start + 0.8 * placed_sell_usd
+            waited = 0
+            while True:
                 try:
                     port2 = client.get_portfolio(m["account_number"])
                     p2 = port2.get("data", port2) if isinstance(port2, dict) else {}
@@ -565,11 +584,17 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict
                     bp_new = _num(b2.get("buying_power") if isinstance(b2, dict) else b2)
                 except Exception:  # noqa: BLE001
                     break
-                if bp_new is not None and bp_new > buying_power:
+                rose = bp_new is not None and bp_new > buying_power
+                if rose:
                     buying_power = bp_new
+                if placed_sell_usd > 0 and buying_power >= target:
+                    break                    # proceeds essentially all credited
+                if buying_power > bp_start and not rose:
+                    break                    # credit landed and stopped growing
+                if waited >= deadline_s:
                     break
-                if attempt == 1:
-                    time.sleep(4)  # give the 9:31 market sells a beat to fill
+                time.sleep(BP_POLL_EVERY_S)
+                waited += BP_POLL_EVERY_S
 
         # Only deploy what's actually SETTLED-spendable — any buy beyond buying
         # power is deferred (it fills next buy day, once this cycle's sells

@@ -91,11 +91,16 @@ function linePath(pts: [number, number][]): string {
 
 export function PriceChart({
   points, height = 160, interactive = false, labelMode = "auto", onHover, ariaLabel,
+  levels = true,
 }: {
   points: StockPricePoint[];
   height?: number;
   /** Full-page variant: hover crosshair + a readout in its own band above the plot. */
   interactive?: boolean;
+  /** false = no horizontal level guides (the dashed high/low lines + midline).
+   *  The hi/lo price labels and dot markers stay. Owner call for the account
+   *  hero: just the line. */
+  levels?: boolean;
   /** Axis/readout label format. Default "auto" = infer from the series shape. */
   labelMode?: ChartLabelMode;
   /** Delegate the readout: when given, the hovered index is reported to the
@@ -277,12 +282,14 @@ export function PriceChart({
 
         {/* level guides — the high and low sit exactly on the plot edges, which
             is what lets their labels live in the gutter at the same height */}
-        {!flat && [PAD_T, plotB].map((y) => (
+        {levels && !flat && [PAD_T, plotB].map((y) => (
           <line key={y} x1={PAD_L} x2={PAD_L + plotW} y1={y} y2={y}
             stroke="rgba(255,255,255,0.10)" strokeWidth="1" strokeDasharray="3 4" />
         ))}
-        <line x1={PAD_L} x2={PAD_L + plotW} y1={PAD_T + plotH / 2} y2={PAD_T + plotH / 2}
-          stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
+        {levels && (
+          <line x1={PAD_L} x2={PAD_L + plotW} y1={PAD_T + plotH / 2} y2={PAD_T + plotH / 2}
+            stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
+        )}
 
         <path d={area} fill={`url(#pcf-${uid})`} />
         <path d={line} fill="none" stroke={color} strokeWidth="2"

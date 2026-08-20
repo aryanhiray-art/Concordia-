@@ -511,8 +511,10 @@ html, body { overscroll-behavior-x: none; }
 .cine .leg .nm s { display: block; font: 400 11.5px/1 var(--font-inter), sans-serif; color: var(--subtle); text-decoration: none; margin-top: 3px; }
 
 /* sector donut drill-down: clickable legend rows, back button, wrapping center label */
-.cine .leg .row[data-sec] { cursor: pointer; border-radius: 9px; margin: -5px -9px; padding: 5px 9px; transition: background .18s var(--ease); }
-.cine .leg .row[data-sec]:hover { background: rgba(255,255,255,.05); }
+.cine .leg .row[data-sec], .cine .leg .row[data-stock] { cursor: pointer; border-radius: 9px; margin: -5px -9px; padding: 5px 9px; transition: background .18s var(--ease); }
+/* personal-position tag: a holding that shares the account but was never club-bought */
+.cine .ptag { font-style: normal; color: var(--amber, #d9a441); }
+.cine .leg .row[data-sec]:hover, .cine .leg .row[data-stock]:hover { background: rgba(255,255,255,.05); }
 .cine .legback { display: inline-flex; align-items: center; gap: 5px; align-self: flex-start; margin-bottom: 6px; padding: 5px 12px 5px 7px; border-radius: 999px; border: 1px solid var(--hair); background: rgba(255,255,255,.04); color: var(--muted); font: 600 12px/1 var(--font-inter); cursor: pointer; transition: .2s; }
 .cine .legback:hover { color: var(--ink); background: rgba(45,212,191,.1); border-color: rgba(45,212,191,.3); }
 .cine .legback svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }

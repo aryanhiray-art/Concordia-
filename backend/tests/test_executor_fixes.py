@@ -713,3 +713,96 @@ def test_sell_only_phase_does_not_refetch_portfolio(monkeypatch):
     # member the run touches (same caveat as trades_for)
     mine = [c for c in client.calls if c[0] == "get_portfolio" and c[1] == f"ACC{mid}"]
     assert len(mine) == 1
+
+
+class LaggyProceedsClient(FakeClient):
+    """buying_power rises only on the Nth get_portfolio call AFTER a sell —
+    models the real 08/19 failure: Robinhood credits proceeds well after the
+    market sells place (fill + ledger lag), so a single quick re-fetch still
+    sees the stale number and every buy defers."""
+
+    def __init__(self, *, bp_after_sell, credit_after_fetches, **kw):
+        super().__init__(**kw)
+        self.bp_after_sell = bp_after_sell
+        self.credit_after_fetches = credit_after_fetches
+        self.sold = False
+        self.fetches_since_sell = 0
+
+    def place_market_sell(self, acct, symbol, qty, ref_id=None):
+        self.sold = True
+        return super().place_market_sell(acct, symbol, qty, ref_id=ref_id)
+
+    def get_portfolio(self, acct):
+        if self.sold:
+            self.fetches_since_sell += 1
+            if self.fetches_since_sell >= self.credit_after_fetches:
+                self.buying_power = self.bp_after_sell
+        return super().get_portfolio(acct)
+
+
+def test_both_day_polls_past_slow_proceeds_credit(monkeypatch):
+    """Second live regression (both-day 2026-08-19, AFTER the first fix): a
+    single ~4s re-fetch still read stale buying power because the credit lands
+    tens of seconds after the sells place. The buy leg must POLL until the
+    proceeds show up (bounded by BP_POLL_MAX_S) and then place."""
+    from app.config import settings
+    from app.db import set_armed
+
+    mid = _member("bothlag@x.com", alloc_value=50.0)
+    executor._record(90060, mid, "TSLA", 250.0, "bothlag-ref-1", "placed",
+                     place={"_concord_est_qty": 1.0})
+    closed = _closed_session(datetime.date(2026, 12, 30), mid, ["AAPL"])
+    # stale reads for the first 3 post-sell fetches, credit on the 4th
+    client = LaggyProceedsClient(quotes={"AAPL": 100.0, "TSLA": 250.0},
+                                 positions=[("TSLA", "1.0")],
+                                 buying_power=0.40, total_value=250.0,
+                                 bp_after_sell=250.40, credit_after_fetches=4)
+    _use_client(monkeypatch, client)
+
+    prev_mode = settings.execution_mode
+    object.__setattr__(settings, "execution_mode", "live")
+    set_armed(True)
+    try:
+        summary = executor.run(closed, force_dry_run=False, phase="both")
+    finally:
+        object.__setattr__(settings, "execution_mode", prev_mode)
+        set_armed(False)
+
+    assert client.trades_for("place_buy", f"ACC{mid}", "AAPL"), \
+        "buy must place once the poll finally sees the credited proceeds"
+    order = next(o for o in _mrow(summary, mid)["orders"]
+                 if o["symbol"] == "AAPL" and o["side"] == "buy")
+    assert order["status"] == "placed"
+
+
+def test_both_day_cash_account_keeps_single_quick_look(monkeypatch):
+    """A cash member's buying power is settled-only and never moves same-day —
+    the poll must not burn its full window on them (kv acct_type = cash keeps
+    one post-sell look, and the buy defers exactly as before)."""
+    from app.config import settings
+    from app.db import kv_set, set_armed
+
+    mid = _member("bothcash@x.com", alloc_value=50.0)
+    kv_set(f"acct_type:{mid}", "cash")
+    executor._record(90061, mid, "TSLA", 250.0, "bothcash-ref-1", "placed",
+                     place={"_concord_est_qty": 1.0})
+    closed = _closed_session(datetime.date(2026, 12, 31), mid, ["AAPL"])
+    client = LaggyProceedsClient(quotes={"AAPL": 100.0, "TSLA": 250.0},
+                                 positions=[("TSLA", "1.0")], buying_power=3.78,
+                                 bp_after_sell=253.0, credit_after_fetches=3)
+    _use_client(monkeypatch, client)
+
+    prev_mode = settings.execution_mode
+    object.__setattr__(settings, "execution_mode", "live")
+    set_armed(True)
+    try:
+        summary = executor.run(closed, force_dry_run=False, phase="both")
+    finally:
+        object.__setattr__(settings, "execution_mode", prev_mode)
+        set_armed(False)
+
+    order = next(o for o in _mrow(summary, mid)["orders"]
+                 if o["symbol"] == "AAPL" and o["side"] == "buy")
+    assert order["status"] == "skipped", "cash buys defer to the next buy day"
+    mine = [c for c in client.calls if c[0] == "get_portfolio" and c[1] == f"ACC{mid}"]
+    assert len(mine) == 2, "pre-sell snapshot + ONE quick post-sell look, no long poll"

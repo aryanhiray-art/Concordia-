@@ -8,10 +8,10 @@
 import { useState } from "react";
 import type { AdminBots, AdminMemberRowPlus } from "@/lib/api";
 import { Card, Pill, Toggle } from "@/components/ui";
-import { AcctTypeBadge, SectionLabel, exceptionTone, fmtAccuracy, fmtET, money, perfLine, stake } from "./util";
+import { AcctTypeBadge, SectionHead, TH_FONT, exceptionTone, fmtAccuracy, fmtET, money, perfLine, stake } from "./util";
 
-const TH = "label pb-2 pr-3 text-left font-semibold";
-const THR = "label pb-2 text-right font-semibold";
+const TH = `${TH_FONT} pr-3 text-left`;
+const THR = `${TH_FONT} text-right`;
 
 export function MembersPanel({ members, bots, botsErr, perf, onOpen }: {
   members: AdminMemberRowPlus[];
@@ -40,15 +40,14 @@ export function MembersPanel({ members, bots, botsErr, perf, onOpen }: {
 
   return (
     <Card>
-      <div className="flex flex-wrap items-center gap-3">
-        <SectionLabel>Members</SectionLabel>
-        <div className="mb-3 ml-auto flex items-center gap-2.5">
+      <SectionHead label="Members" right={
+        <>
           <span className="text-[12px] text-subtle">
             show {botRows.length > 0 ? botRows.length : ""} bots
           </span>
           <Toggle on={showBots} onChange={setShowBots} />
-        </div>
-      </div>
+        </>
+      } />
 
       <div className="mb-3 flex items-center gap-2.5 text-[13.5px]">
         <Pill tone={troubled.length === 0 ? "ok" : "warn"}>

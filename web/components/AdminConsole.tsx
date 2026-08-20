@@ -1,12 +1,17 @@
 "use client";
 
 // The ops console served at admin.voteconcordia.com — the club's whole
-// operational surface, and the LANDING page on that host (there is no other).
-// It answers "will the next 09:31 ET run place orders, and if not, why?" and
-// carries the levers to change the answer: arm/disarm (typed ARM confirm),
-// kill, close-vote, dry-run, live execute, per-member drilldown with password
-// recovery, and the morning digest on demand. Assembled from the panels in
-// components/admin/ — this file only fetches, holds state, and lays them out.
+// operational surface. It answers "will the next 09:31 ET run place orders,
+// and if not, why?" and carries the levers to change the answer: arm/disarm
+// (typed ARM confirm), kill, close-vote, dry-run, live execute, per-member
+// drilldown with password recovery, and the morning digest on demand.
+//
+// Multi-page: AppShell renders <AdminConsole /> for EVERY pathname on the
+// admin host, so this component reads usePathname() and routes internally —
+// / (overview) · /members · /cycle · /bots · /audit, unknown paths falling
+// back to Overview. Data fetching stays HOISTED here (mount + 60s poll +
+// window focus) and flows down into the page layouts, so switching tabs never
+// refetches and a slow poll never stacks.
 //
 // Freshness contract: /api/admin/panel is the page (its failure is the page's
 // error, stale data stays on screen with a why-it's-stale line); overview /
@@ -14,11 +19,13 @@
 // that predates those endpoints must dim a panel, never blank the console.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import { api, type AdminBots, type AdminOverview, type AdminSchedule } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { AdminPanel } from "@/lib/types";
-import { Button, Card, Logo, Pill } from "./ui";
-import { StatusBar } from "./admin/StatusBar";
+import { Button, Card, Logo } from "./ui";
+import { OpsHeader, pageKeyFor } from "./admin/OpsHeader";
+import { OverviewPage } from "./admin/OverviewPage";
 import { CyclePanel } from "./admin/CyclePanel";
 import { MembersPanel } from "./admin/MembersPanel";
 import { MemberDrawer } from "./admin/MemberDrawer";
@@ -65,6 +72,7 @@ export function AdminDenied() {
 
 export function AdminConsole() {
   const { member, logout } = useAuth();
+  const pathname = usePathname();
   const [panel, setPanel] = useState<AdminPanel | null>(null);
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [schedule, setSchedule] = useState<AdminSchedule | null>(null);
@@ -114,73 +122,79 @@ export function AdminConsole() {
   useEffect(() => {
     load(false);
     const id = setInterval(() => load(false), POLL_MS);
-    return () => clearInterval(id);
+    // coming back to the tab after a while = look again (inFlight dedupes)
+    const onFocus = () => load(false);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener("focus", onFocus);
+    };
   }, [load]);
 
+  const refresh = useCallback(() => load(true), [load]);
+  const page = pageKeyFor(pathname);
   const cadence = schedule?.cadence ?? overview?.schedule?.cadence ?? null;
 
   return (
-    <div className="mx-auto w-[min(1080px,100%)] px-4 pb-24 pt-8 sm:px-6">
-      {/* header — no Nav on the admin host, so refresh + logout live here */}
-      <header className="mb-6 flex flex-wrap items-center gap-3">
-        <Logo size={30} />
-        <b className="font-display text-[15px] font-bold tracking-tight text-[#8FD9C0]">concordia</b>
-        <Pill tone="teal">ops console</Pill>
-        <div className="ml-auto flex items-center gap-3">
-          <span className="text-[12px] text-subtle tnum">
-            {updatedAt ? `updated ${updatedAt.toLocaleTimeString(undefined, { hour12: false })}` : "loading…"}
-          </span>
-          <Button variant="glass" busy={busy} onClick={() => load(true)} className="!px-3.5 !py-2 !text-[12.5px]">
-            Refresh
-          </Button>
-          <button onClick={logout}
-            className="rounded-full border border-hair px-3 py-1.5 text-[12px] text-muted transition hover:text-ink">
-            Log out
-          </button>
-        </div>
-      </header>
+    <div className="min-h-screen pb-24">
+      <OpsHeader page={page} updatedAt={updatedAt} busy={busy}
+        onRefresh={refresh} onLogout={logout} />
 
-      {err && (
-        <div className="mb-4 flex items-center gap-3 rounded-[14px] border border-red/30 bg-red/[0.08] px-4 py-2.5 text-[13px] text-red">
-          <span>⚠ {err}{panel ? " — showing last good data" : ""}</span>
-        </div>
-      )}
-
-      {!panel ? (
-        !err && (
-          <div className="py-24 text-center text-[13px] text-subtle">loading admin panel…</div>
-        )
-      ) : (
-        <div className="space-y-4">
-          <StatusBar state={panel.state} cadence={cadence} onChanged={() => load(true)} />
-
-          <CyclePanel cycle={panel.cycle} schedule={schedule} scheduleErr={scheduleErr} />
-
-          <MembersPanel
-            members={panel.members}
-            bots={bots}
-            botsErr={botsErr}
-            perf={panel.money?.club_perf_cached}
-            onOpen={setSelected}
-          />
-
-          <SessionPanel overview={overview} err={overviewErr} />
-
-          <BotsPanel bots={bots} err={botsErr} onOpen={setSelected} />
-
-          <div className="grid gap-4 lg:grid-cols-[3fr,2fr]">
-            <AuditTail audit={panel.audit} />
-            <div className="space-y-4">
-              <AccessCard overview={overview} err={overviewErr} />
-              <DigestCard />
-            </div>
+      <main className="mx-auto w-[min(1180px,100%)] px-4 pt-5">
+        {err && (
+          <div className="mb-4 flex items-center gap-3 rounded-[14px] border border-red/30 bg-red/[0.08] px-4 py-2.5 text-[13px] text-red">
+            <span>⚠ {err}{panel ? " — showing last good data" : ""}</span>
           </div>
+        )}
 
-          <p className="text-center text-[11px] text-subtle">
-            ops console · signed in as {member?.email} · auto-refreshes every 60s
-          </p>
-        </div>
-      )}
+        {!panel ? (
+          !err && (
+            <div className="py-24 text-center text-[13px] text-subtle">loading admin panel…</div>
+          )
+        ) : (
+          <div key={page} className="space-y-4">
+            {page === "overview" && (
+              <OverviewPage panel={panel} schedule={schedule} scheduleErr={scheduleErr}
+                bots={bots} botsErr={botsErr} cadence={cadence} onChanged={refresh} />
+            )}
+
+            {page === "members" && (
+              <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr),320px]">
+                <MembersPanel
+                  members={panel.members}
+                  bots={bots}
+                  botsErr={botsErr}
+                  perf={panel.money?.club_perf_cached}
+                  onOpen={setSelected}
+                />
+                <AccessCard overview={overview} err={overviewErr} />
+              </div>
+            )}
+
+            {page === "cycle" && (
+              <>
+                <CyclePanel cycle={panel.cycle} schedule={schedule} scheduleErr={scheduleErr} />
+                <SessionPanel overview={overview} err={overviewErr} />
+              </>
+            )}
+
+            {page === "bots" && (
+              <BotsPanel bots={bots} err={botsErr} onOpen={setSelected} />
+            )}
+
+            {page === "audit" && (
+              <div className="grid items-start gap-4 lg:grid-cols-[3fr,2fr]">
+                <AuditTail audit={panel.audit} />
+                <DigestCard />
+              </div>
+            )}
+
+            <p className="pt-2 text-center text-[11px] text-subtle">
+              ops console · signed in as {member?.email} · auto-refreshes every 60s
+            </p>
+          </div>
+        )}
+      </main>
 
       {selected != null && <MemberDrawer memberId={selected} onClose={closeDrawer} />}
     </div>

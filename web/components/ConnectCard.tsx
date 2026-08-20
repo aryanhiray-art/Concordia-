@@ -20,18 +20,12 @@ function MarginBadge() {
       .catch(() => { /* quiet — the badge is informational */ });
     return () => { alive = false; };
   }, []);
-  if (!m?.connected || !m.account_type) return null;
-  if (m.account_type !== "cash") {
-    return (
-      <div className="mt-1.5 text-[12.5px] text-teal">
-        Limited margin — sale proceeds redeploy immediately, no settlement delays.
-      </div>
-    );
-  }
+  // Margin members see NOTHING here (owner call: once switched, stop talking
+  // about it) — the badge exists only to nudge cash accounts to the switch.
+  if (!m?.connected || !m.account_type || m.account_type !== "cash") return null;
   return (
     <div className="mt-1.5 text-[12.5px] text-amber">
-      Cash account — after each sell, proceeds settle the next business day before the
-      club can redeploy them.{" "}
+      Cash account — sale proceeds settle overnight before they redeploy.{" "}
       {m.upgrade && (
         <a
           className="underline hover:text-ink"
@@ -40,8 +34,7 @@ function MarginBadge() {
         >
           Switch to limited margin
         </a>
-      )}{" "}
-      <span className="text-subtle">(no borrowing, no leverage — just no waiting)</span>
+      )}
     </div>
   );
 }
@@ -178,11 +171,6 @@ export function ConnectCard({ member, onChange }: { member: Member; onChange: ()
             <div>
               <div className="font-display text-[15px] font-semibold">
                 {optedIn ? <span className="text-teal">Participating today</span> : "Sitting out today"}
-              </div>
-              <div className="mt-0.5 text-[12px] text-subtle">
-                {optedIn
-                  ? "Your stake trades with the basket each day."
-                  : "Flip on to vote and trade today."}
               </div>
             </div>
             <Toggle on={optedIn} onChange={toggle} />

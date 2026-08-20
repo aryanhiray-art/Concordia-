@@ -135,8 +135,8 @@ export function CinematicOverview() {
   const basket = ((session?.picks?.length ? session.picks : session?.tally) || []);
   const fallback = basket.length ? basket : lastPicks;
   const items = hold.length
-    ? hold.map((h) => ({ sym: h.symbol, name: h.symbol, val: h.value, pnl: h.pnl }))
-    : fallback.slice(0, 12).map((b) => ({ sym: b.symbol, name: b.name || b.symbol, val: b.weight || 1, pnl: null as number | null }));
+    ? hold.map((h) => ({ sym: h.symbol, name: h.symbol, val: h.value, pnl: h.pnl, club: h.club !== false }))
+    : fallback.slice(0, 12).map((b) => ({ sym: b.symbol, name: b.name || b.symbol, val: b.weight || 1, pnl: null as number | null, club: true }));
   const itemsLabel = hold.length ? "holdings" : basket.length ? "names" : "last basket";
   const itemsKey = items.map((i) => `${i.sym}:${i.val}:${i.pnl ?? ""}`).join(",");
   const closesAt = session?.closes_at ?? 0;
@@ -240,7 +240,7 @@ export function CinematicOverview() {
 
     // ── donut: holdings grouped by SECTOR; click a sector to morph into the
     //    individual stocks within it, "‹ All sectors" to morph back ──
-    type Slc = { key: string; label: string; sub: string; pc: number; c: string; drill: boolean };
+    type Slc = { key: string; label: string; sub: string; pc: number; c: string; drill: boolean; stock?: string };
     const bySector: Record<string, { sector: string; val: number; items: typeof items }> = {};
     for (const it of items) {
       const sec = sectorOf(it.sym);
@@ -268,8 +268,13 @@ export function CinematicOverview() {
           c.setAttribute("stroke", slices[i].c);
           c.setAttribute("stroke-dasharray", draw.toFixed(2) + " " + (CC - draw).toFixed(2));
           c.setAttribute("stroke-dashoffset", (-off).toFixed(2));
-          c.style.cursor = slices[i].drill ? "pointer" : "default";
-          c.onclick = slices[i].drill ? (e: any) => { e.stopPropagation(); drillInto(slices[i].key); } : null;
+          c.style.cursor = slices[i].drill || slices[i].stock ? "pointer" : "default";
+          // a sector slice drills in; a company slice opens that stock's detail
+          c.onclick = slices[i].drill
+            ? (e: any) => { e.stopPropagation(); drillInto(slices[i].key); }
+            : slices[i].stock
+              ? (e: any) => { e.stopPropagation(); openStock(slices[i].stock!); }
+              : null;
           off += len;
         } else { c.setAttribute("stroke-dasharray", "0 " + CC.toFixed(2)); c.onclick = null; }
       }
@@ -279,7 +284,7 @@ export function CinematicOverview() {
       setTimeout(() => {
         const back = sector ? `<button class="legback" data-back="1"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg>All sectors</button>` : "";
         legEl.innerHTML = back + slices.map((x) =>
-          `<div class="row" ${x.drill ? `data-sec="${x.key}"` : ""}><span class="sw" style="background:${x.c};color:${x.c}"></span><span class="nm">${x.label}${x.sub ? `<s>${x.sub}</s>` : ""}</span><span class="pc tnum">${x.pc}%</span></div>`).join("");
+          `<div class="row" ${x.drill ? `data-sec="${x.key}"` : x.stock ? `data-stock="${x.stock}"` : ""}><span class="sw" style="background:${x.c};color:${x.c}"></span><span class="nm">${x.label}${x.sub ? `<s>${x.sub}</s>` : ""}</span><span class="pc tnum">${x.pc}%</span></div>`).join("");
         legEl.style.opacity = "1";
         (legEl.querySelector("[data-back]") as HTMLElement | null)?.addEventListener("click", (e) => { e.stopPropagation(); renderSectors(); });
         legEl.querySelectorAll("[data-sec]").forEach((el: any) => el.addEventListener("click", (e: any) => { e.stopPropagation(); drillInto(el.getAttribute("data-sec")); }));
@@ -310,8 +315,13 @@ export function CinematicOverview() {
       const tot = g.val || sorted.reduce((a, x) => a + (x.val || 0), 0) || 1;
       const base = sectorColor(sector);
       const slices: Slc[] = sorted.map((it, i) => ({
-        key: it.sym, label: it.sym, sub: (it.name && it.name !== it.sym) ? it.name : "",
+        key: it.sym,
+        label: it.sym,
+        // personal positions are labeled as such — they share the account but
+        // the club never bought them (the VMRK confusion)
+        sub: it.club === false ? "personal" : (it.name && it.name !== it.sym) ? it.name : "",
         pc: pctOf(it.val || 0, tot), c: shade(base, i, sorted.length), drill: false,
+        stock: it.sym,
       }));
       $("#dctr").textContent = String(g.items.length);
       $("#dctrs").textContent = sector;
@@ -325,7 +335,7 @@ export function CinematicOverview() {
       ? `<span class="tnum" style="flex:1;text-align:right;font:600 14px/1 var(--font-outfit);color:var(--muted)">—</span>`
       : `<span class="tnum" style="flex:1;text-align:right;font:600 14px/1 var(--font-outfit);color:${p >= 0 ? "var(--green)" : "var(--red)"}">${p >= 0 ? "+" : "-"}$${Math.abs(p).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>`;
     $("#holdings").innerHTML = items.length
-      ? items.map((h) => `<div class="holdrow" data-stock="${h.sym}"><span class="htk">${h.sym}</span><div class="hn"><b>${h.name || h.sym}</b><s>${h.sym}</s></div>${hold.length ? pnlCell(h.pnl) : `<span style="flex:1"></span>`}${hold.length ? `<span class="hwt tnum">$${Math.round(h.val || 0).toLocaleString()}</span>` : ""}</div>`).join("")
+      ? items.map((h) => `<div class="holdrow" data-stock="${h.sym}"><span class="htk">${h.sym}</span><div class="hn"><b>${h.name || h.sym}</b><s>${h.sym}${h.club === false ? ` · <em class="ptag">personal</em>` : ""}</s></div>${hold.length ? pnlCell(h.pnl) : `<span style="flex:1"></span>`}${hold.length ? `<span class="hwt tnum">$${Math.round(h.val || 0).toLocaleString()}</span>` : ""}</div>`).join("")
       : `<div style="color:var(--subtle);font:500 13px/1.6 var(--font-inter);padding:8px 2px">No holdings yet. <a href="/vote" style="color:var(--teal)">Cast your vote →</a></div>`;
 
     renderSectors();
@@ -442,6 +452,7 @@ export function CinematicOverview() {
               points={chartPoints}
               height={chartH}
               interactive={slide === 1}
+              levels={false}
               labelMode={labelMode}
               onHover={setHover}
               ariaLabel={`account value, ${fmtDateTime(series[0].t)} to ${fmtDateTime(series[series.length - 1].t)}`}

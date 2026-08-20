@@ -10,7 +10,6 @@ import { useState } from "react";
 import { useAuth } from "@/lib/auth";
 import type { SessionView } from "@/lib/types";
 import { AllocSliders } from "@/components/AllocSliders";
-import { MemberKeys } from "@/components/MemberKeys";
 import { Button, Card, Countdown, LoadingScreen, Pill } from "@/components/ui";
 import { StockLink } from "@/components/StockLink";
 import { fmtTime, fmtTradeDate } from "@/lib/format";
@@ -61,7 +60,6 @@ export default function VotePage() {
   const { member, power, session, sessionError, refreshSession } = useAuth();
   const participating = Number(member?.settings?.opted_in) === 1;
   const [retrying, setRetrying] = useState(false);
-  const [showKeys, setShowKeys] = useState(false);
 
   // Ballot fetch failed — show an error + retry instead of spinning forever.
   if (!session && sessionError) {
@@ -148,17 +146,6 @@ export default function VotePage() {
             {anyMine && <p className="mt-3 text-[11px] text-subtle"><span className="text-teal">teal</span> = on your ballot</p>}
           </div>
 
-          {/* power-user surface, one click away instead of a card-sized block */}
-          {showKeys ? <MemberKeys /> : (
-            <button onClick={() => setShowKeys(true)}
-              className="flex w-full items-center gap-2 rounded-[14px] border border-hair bg-white/[0.03] px-4 py-3 text-left text-[12.5px] text-muted transition hover:border-teal/30 hover:text-ink">
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-none text-teal">
-                <circle cx="8" cy="15" r="4" /><path d="m10.8 12.2 6.2-6.2M15 8l2 2M18 5l2 2" />
-              </svg>
-              Vote via API — let your own bot cast this vote
-              <span className="ml-auto flex-none text-subtle">+</span>
-            </button>
-          )}
         </div>
       </div>
     </div>

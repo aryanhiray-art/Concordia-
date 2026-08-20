@@ -9,7 +9,7 @@
 import type { AdminOverview } from "@/lib/api";
 import { Card, Pill } from "@/components/ui";
 import { fmtTradeDate } from "@/lib/format";
-import { SectionLabel, execTone, fmtET, isDeferred, money } from "./util";
+import { SectionLabel, TH_FONT as TH, execTone, fmtET, isDeferred, money } from "./util";
 
 export function SessionPanel({ overview, err }: {
   overview: AdminOverview | null;
@@ -100,13 +100,14 @@ export function SessionPanel({ overview, err }: {
                 <div className="overflow-x-auto">
                   <table className="w-full min-w-[640px] text-[12.5px]">
                     <thead>
+                      {/* NOT .label on <th>: its display:block breaks table-cell layout */}
                       <tr>
-                        <th className="label pb-2 pr-3 text-left font-semibold">member</th>
-                        <th className="label pb-2 pr-3 text-left font-semibold">symbol</th>
-                        <th className="label pb-2 pr-3 text-left font-semibold">side</th>
-                        <th className="label pb-2 text-right font-semibold">amount</th>
-                        <th className="label pb-2 pl-4 text-left font-semibold">status</th>
-                        <th className="label pb-2 pl-4 text-left font-semibold">note</th>
+                        <th className={`${TH} pr-3 text-left`}>member</th>
+                        <th className={`${TH} pr-3 text-left`}>symbol</th>
+                        <th className={`${TH} pr-3 text-left`}>side</th>
+                        <th className={`${TH} text-right`}>amount</th>
+                        <th className={`${TH} pl-4 text-left`}>status</th>
+                        <th className={`${TH} pl-4 text-left`}>note</th>
                       </tr>
                     </thead>
                     <tbody>

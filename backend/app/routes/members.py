@@ -15,7 +15,7 @@ from ..config import settings
 from ..db import audit, db, kv_get, kv_set
 from ..robinhood import vault
 from ..security import hash_password, verify_password
-from ..services import accountsnap, alloc, apikeys, email_codes, equity_history, power
+from ..services import accountsnap, alloc, apikeys, email_codes, equity_history, positions, power
 from .deps import COOKIE_NAME, client_ip, load_member, require_member, require_session_member
 
 router = APIRouter(prefix="/api", tags=["member"])
@@ -191,9 +191,16 @@ def me_margin_ack(body: MarginAckBody, member: dict = Depends(require_member)):
 def me_holdings(member: dict = Depends(require_member)):
     """The member's long positions valued at the quote, from the same cached
     snapshot as /me/account — so Overview and Account together cost zero broker
-    calls instead of five."""
+    calls instead of five.
+
+    Each row carries `club`: whether the CLUB's ledger holds this symbol for
+    the member. False = a personal position that happens to live in the same
+    account (the owner's VMRK) — the UI labels those instead of implying the
+    basket bought them. DB-only; costs no broker call."""
     view = accountsnap.get(member["id"])
-    return {"holdings": view["holdings"], "as_of": view["as_of"], "stale": view["stale"]}
+    club_syms = {s for s, q in positions.club_shares(member["id"]).items() if q > 1e-6}
+    holdings = [{**h, "club": h.get("symbol") in club_syms} for h in view["holdings"]]
+    return {"holdings": holdings, "as_of": view["as_of"], "stale": view["stale"]}
 
 
 @router.get("/me/equity")

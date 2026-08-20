@@ -14,7 +14,7 @@ import { createPortal } from "react-dom";
 import { api, type AdminMemberDetail } from "@/lib/api";
 import { Button, Pill, Stat } from "@/components/ui";
 import { fmtTradeDate } from "@/lib/format";
-import { SectionLabel, execTone, isDeferred, money } from "./util";
+import { SectionLabel, TH_FONT as TH, execTone, isDeferred, money } from "./util";
 
 function CopyChip({ value }: { value: string }) {
   const [state, setState] = useState<"idle" | "done" | "failed">("idle");
@@ -262,13 +262,14 @@ export function MemberDrawer({ memberId, onClose }: { memberId: number; onClose:
                     <div className="overflow-x-auto">
                       <table className="w-full min-w-[420px] text-[12.5px]">
                         <thead>
+                          {/* NOT .label on <th>: its display:block breaks table-cell layout */}
                           <tr>
-                            <th className="label pb-2 pr-3 text-left font-semibold">symbol</th>
-                            <th className="label pb-2 text-right font-semibold">qty</th>
-                            <th className="label pb-2 text-right font-semibold">avg</th>
-                            <th className="label pb-2 text-right font-semibold">last</th>
-                            <th className="label pb-2 text-right font-semibold">value</th>
-                            <th className="label pb-2 text-right font-semibold">P&amp;L</th>
+                            <th className={`${TH} pr-3 text-left`}>symbol</th>
+                            <th className={`${TH} text-right`}>qty</th>
+                            <th className={`${TH} text-right`}>avg</th>
+                            <th className={`${TH} text-right`}>last</th>
+                            <th className={`${TH} text-right`}>value</th>
+                            <th className={`${TH} text-right`}>P&amp;L</th>
                           </tr>
                         </thead>
                         <tbody>
