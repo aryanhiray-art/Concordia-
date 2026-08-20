@@ -11,8 +11,8 @@
 // html,body{overflow-x:hidden}, which makes body a scroll context and silently
 // defeats every descendant position:sticky — the header just scrolled away.
 // The member site's .cnav is fixed for the same reason; this follows suit.
-// Heights are deterministic (rows are h-12 / h-11), so the spacer can match:
-// 48+44+1 with the wrapped tab row below lg, 48+1 inline at lg+.
+// Heights are deterministic (rows are h-11 / h-10), so the spacer can match:
+// 44+40+1 with the wrapped tab row below lg, 44+1 inline at lg+.
 
 import { Button, Logo } from "@/components/ui";
 import { AdminLink, OpsTag } from "./util";
@@ -53,7 +53,7 @@ export function OpsHeader({ page, updatedAt, busy, onRefresh, onLogout }: {
       <div className="mx-auto flex w-[min(1180px,100%)] flex-wrap items-center px-4">
         {/* brand cluster — wordmark + OPS tag (the env chip stays on the
             sign-in landing only; in-console it was just another word) */}
-        <AdminLink href="/" className="flex h-12 flex-none items-center gap-2">
+        <AdminLink href="/" className="flex h-11 flex-none items-center gap-2">
           <Logo size={22} />
           {/* wordmark yields on phones (member-nav precedent) so brand +
               Refresh/Log out share the first row; logo + ops tag stay */}
@@ -74,7 +74,7 @@ export function OpsHeader({ page, updatedAt, busy, onRefresh, onLogout }: {
                 key={t.key}
                 href={t.href}
                 aria-current={on ? "page" : undefined}
-                className={`relative flex h-11 flex-none items-center px-3 text-[12.5px] transition lg:h-12 ${
+                className={`relative flex h-10 flex-none items-center px-3 text-[12.5px] transition lg:h-11 ${
                   on ? "font-semibold text-ink" : "font-medium text-muted hover:text-ink"
                 }`}
               >
@@ -91,13 +91,13 @@ export function OpsHeader({ page, updatedAt, busy, onRefresh, onLogout }: {
         </nav>
 
         {/* freshness + global actions */}
-        <div className="ml-auto flex h-12 flex-none items-center gap-2.5 pl-3">
+        <div className="ml-auto flex h-11 flex-none items-center gap-2.5 pl-3">
           <span className="hidden font-mono text-[11px] text-subtle tnum md:block">
             {updatedAt
               ? `updated ${updatedAt.toLocaleTimeString(undefined, { hour12: false })}`
               : "loading…"}
           </span>
-          <Button variant="glass" busy={busy} onClick={onRefresh} className="!px-3 !py-1.5 !text-[12px]">
+          <Button variant="glass" busy={busy} onClick={onRefresh}>
             Refresh
           </Button>
           <button
@@ -110,7 +110,7 @@ export function OpsHeader({ page, updatedAt, busy, onRefresh, onLogout }: {
       </div>
     </header>
     {/* in-flow stand-in for the fixed header, so content starts below it */}
-    <div aria-hidden className="h-[93px] lg:h-[49px]" />
+    <div aria-hidden className="h-[85px] lg:h-[45px]" />
     </>
   );
 }

@@ -60,7 +60,10 @@ MAX_SANE_VALUE = 1e12
 # The 10-minute recorder keeps running precisely so 1D can come back once a
 # few real sessions exist.
 RANGE_DAYS: dict[str, int | None] = {
-    "1W": 7, "1M": 31, "3M": 92, "1Y": 366, "ALL": None,
+    # 1D exists again because the recorder has been keeping FINE_WINDOW_DAYS of
+    # raw 10-minute observations since 2026-08 — a 1-day window now slices real
+    # intraday points instead of fanning out invented ones.
+    "1D": 1, "1W": 7, "1M": 31, "3M": 92, "1Y": 366, "ALL": None,
 }
 DEFAULT_RANGE = "1M"
 

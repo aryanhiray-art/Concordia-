@@ -9,8 +9,7 @@
 
 import { useState } from "react";
 import type { AdminOverview } from "@/lib/api";
-import { Card } from "@/components/ui";
-import { SectionLabel } from "./util";
+import { OpsCard, SectionLabel } from "./util";
 
 export function AccessCard({ overview, err }: { overview: AdminOverview | null; err: string | null }) {
   const [copied, setCopied] = useState<null | "ok" | "fail">(null);
@@ -42,30 +41,28 @@ export function AccessCard({ overview, err }: { overview: AdminOverview | null; 
   }
 
   return (
-    <Card>
+    <OpsCard>
       <SectionLabel>Access</SectionLabel>
       <div className="flex flex-wrap items-center gap-2.5">
-        <span className="text-[12.5px] text-muted">Member invite code</span>
+        <span className="text-[12px] text-muted">Invite code</span>
         {code ? (
           <button onClick={copy} title="Copy invite code"
-            className="rounded-[9px] border border-teal/30 bg-teal/[0.07] px-2.5 py-1 font-mono text-[13px] font-semibold tracking-wide text-ink transition hover:border-teal/50">
+            className="rounded-[9px] border border-teal/30 bg-teal/[0.07] px-2.5 py-1 font-mono text-[12.5px] font-semibold tracking-wide text-ink transition hover:border-teal/50">
             {code}
           </button>
         ) : (
-          <span className="text-[12.5px] text-subtle">{err ? "unavailable — overview failed" : "…"}</span>
+          <span className="text-[12px] text-subtle">{err ? "unavailable — overview failed" : "…"}</span>
         )}
         {copied && (
-          <span className={`text-[12px] ${copied === "ok" ? "text-green" : "text-amber"}`}>
+          <span className={`text-[11.5px] ${copied === "ok" ? "text-green" : "text-amber"}`}>
             {copied === "ok" ? "copied" : "copy failed — select it manually"}
           </span>
         )}
       </div>
-      <p className="mt-2.5 text-[12.5px] leading-relaxed text-muted">
-        New members create their account at voteconcordia.com with this code. This
-        console has no code of its own: operators sign in with email + password,
-        and admin rights are granted per account. The demo and beta channels are
-        separate instances — each shows its own invite code on its own console.
+      <p className="mt-2 text-[11.5px] leading-snug text-subtle">
+        for new-member signup at voteconcordia.com — this console has no code
+        (operator roles are granted per account)
       </p>
-    </Card>
+    </OpsCard>
   );
 }

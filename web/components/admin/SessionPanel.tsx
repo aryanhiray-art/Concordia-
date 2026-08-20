@@ -7,9 +7,9 @@
 // settled buying power"), so this panel is where they become visible.
 
 import type { AdminOverview } from "@/lib/api";
-import { Card, Pill } from "@/components/ui";
+import { Pill } from "@/components/ui";
 import { fmtTradeDate } from "@/lib/format";
-import { SectionLabel, TH_FONT as TH, execTone, fmtET, isDeferred, money } from "./util";
+import { OpsCard, SectionLabel, TH_FONT as TH, execTone, fmtET, isDeferred, money } from "./util";
 
 export function SessionPanel({ overview, err }: {
   overview: AdminOverview | null;
@@ -17,12 +17,12 @@ export function SessionPanel({ overview, err }: {
 }) {
   if (!overview) {
     return (
-      <Card>
+      <OpsCard>
         <SectionLabel>Session</SectionLabel>
-        <div className="text-[12.5px] text-subtle">
+        <div className="text-[12px] text-subtle">
           session view unavailable{err ? ` — ${err}` : "…"}
         </div>
-      </Card>
+      </OpsCard>
     );
   }
 
@@ -39,16 +39,16 @@ export function SessionPanel({ overview, err }: {
   const tally = (s?.tally ?? []).filter((t) => t.votes > 0).slice(0, 12);
 
   return (
-    <Card>
+    <OpsCard>
       <SectionLabel>Session</SectionLabel>
       {!s ? (
-        <div className="text-[13.5px] text-muted">no session yet</div>
+        <div className="text-[13px] text-muted">no session yet</div>
       ) : (
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-center gap-2 text-[13.5px]">
-            <span className="font-display font-semibold">{fmtTradeDate(s.trade_date)}</span>
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2 text-[13px]">
+            <span className="font-display font-semibold tnum">{fmtTradeDate(s.trade_date)}</span>
             <Pill tone={s.status === "open" ? "ok" : s.status === "executed" ? "teal" : "neutral"}>{s.status}</Pill>
-            <span className="text-[12.5px] text-muted tnum">
+            <span className="text-[12px] text-muted tnum">
               {s.voters} voter{s.voters === 1 ? "" : "s"} · closes {fmtET(s.closes_at)}
             </span>
           </div>
@@ -59,7 +59,7 @@ export function SessionPanel({ overview, err }: {
               <div className="flex flex-wrap gap-1.5">
                 {s.picks.map((p) => (
                   <span key={p.symbol}
-                    className="rounded-[10px] border border-teal/30 bg-teal/[0.08] px-2.5 py-1 font-mono text-[12px]">
+                    className="rounded-[8px] border border-teal/30 bg-teal/[0.08] px-2 py-0.5 font-mono text-[11.5px]">
                     {p.symbol}<span className="ml-1.5 text-teal tnum">{p.votes}</span>
                   </span>
                 ))}
@@ -70,7 +70,7 @@ export function SessionPanel({ overview, err }: {
           {tally.length > 0 && (
             <div>
               <SectionLabel>Tally (top {tally.length})</SectionLabel>
-              <div className="flex flex-wrap gap-x-3.5 gap-y-1 font-mono text-[11.5px] text-muted">
+              <div className="flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11.5px] text-muted">
                 {tally.map((t) => (
                   <span key={t.symbol}>
                     {t.symbol}<span className="text-teal">·{t.votes}</span>
@@ -80,13 +80,13 @@ export function SessionPanel({ overview, err }: {
             </div>
           )}
 
-          <div className="border-t border-hair pt-3.5">
+          <div className="border-t border-hair pt-3">
             <SectionLabel>Order results</SectionLabel>
             {execs.length === 0 ? (
-              <div className="text-[13px] text-muted">no orders recorded for this session</div>
+              <div className="text-[12.5px] text-muted">no orders recorded for this session</div>
             ) : (
               <>
-                <div className="mb-3 flex flex-wrap items-center gap-2">
+                <div className="mb-2 flex flex-wrap items-center gap-1.5">
                   {deferred > 0 && (
                     <Pill tone="warn"><b>{deferred}</b> deferred</Pill>
                   )}
@@ -113,18 +113,18 @@ export function SessionPanel({ overview, err }: {
                     <tbody>
                       {execs.map((e, i) => (
                         <tr key={i} className="border-t border-hair">
-                          <td className="py-2 pr-3 text-muted">{e.display_name || "—"}</td>
-                          <td className="py-2 pr-3 font-mono font-semibold">{e.symbol}</td>
-                          <td className="py-2 pr-3 text-subtle">{e.side || "—"}</td>
-                          <td className="py-2 text-right text-muted tnum">
+                          <td className="py-1.5 pr-3 text-muted">{e.display_name || "—"}</td>
+                          <td className="py-1.5 pr-3 font-mono text-[12px] font-semibold">{e.symbol}</td>
+                          <td className="py-1.5 pr-3 text-subtle">{e.side || "—"}</td>
+                          <td className="py-1.5 text-right font-mono text-[12px] text-muted tnum">
                             {e.dollar_amount != null ? money(e.dollar_amount) : "—"}
                           </td>
-                          <td className="py-2 pl-4">
+                          <td className="py-1.5 pl-4">
                             <Pill tone={execTone(e.status, e.error)}>
                               {isDeferred(e.error) ? "deferred" : e.status}
                             </Pill>
                           </td>
-                          <td className="py-2 pl-4 text-[11.5px] text-subtle">{e.error || ""}</td>
+                          <td className="py-1.5 pl-4 text-[11px] text-subtle">{e.error || ""}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -135,6 +135,6 @@ export function SessionPanel({ overview, err }: {
           </div>
         </div>
       )}
-    </Card>
+    </OpsCard>
   );
 }

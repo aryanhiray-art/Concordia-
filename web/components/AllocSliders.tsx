@@ -84,7 +84,7 @@ export function AllocSliders({
 
   if (!participating) {
     return (
-      <div className="glass rise p-5 sm:p-6">
+      <div className="glass rise h-full p-5 sm:p-6">
         <span className="label">Your ballot</span>
         <p className="mt-3 text-[13.5px] text-muted">
           Participation is <b className="text-amber">off</b> — turn it on in{" "}
@@ -97,7 +97,7 @@ export function AllocSliders({
   const left = Math.max(0, 100 - Math.round(total));
   const full = left === 0;
   return (
-    <div className="glass rise p-4 sm:p-5">
+    <div className="glass rise flex h-full flex-col p-4 sm:p-5">
       <span className="glint" aria-hidden />
 
       <div className="flex items-baseline justify-between gap-3">

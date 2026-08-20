@@ -136,13 +136,13 @@ export function AdminConsole() {
   const cadence = schedule?.cadence ?? overview?.schedule?.cadence ?? null;
 
   return (
-    <div className="min-h-screen pb-24">
+    <div className="ops min-h-screen pb-14">
       <OpsHeader page={page} updatedAt={updatedAt} busy={busy}
         onRefresh={refresh} onLogout={logout} />
 
-      <main className="mx-auto w-[min(1180px,100%)] px-4 pt-5">
+      <main className="mx-auto w-[min(1180px,100%)] px-4 pt-3.5">
         {err && (
-          <div className="mb-4 flex items-center gap-3 rounded-[14px] border border-red/30 bg-red/[0.08] px-4 py-2.5 text-[13px] text-red">
+          <div className="mb-3 flex items-center gap-3 rounded-[12px] border border-red/30 bg-red/[0.08] px-3.5 py-2 text-[12.5px] text-red">
             <span>⚠ {err}{panel ? " — showing last good data" : ""}</span>
           </div>
         )}
@@ -152,7 +152,7 @@ export function AdminConsole() {
             <div className="py-24 text-center text-[13px] text-subtle">loading admin panel…</div>
           )
         ) : (
-          <div key={page} className="space-y-4">
+          <div key={page} className="space-y-3">
             {page === "overview" && (
               <OverviewPage panel={panel} schedule={schedule} scheduleErr={scheduleErr}
                 bots={bots} botsErr={botsErr} cadence={cadence} onChanged={refresh} />
@@ -163,7 +163,7 @@ export function AdminConsole() {
             )}
 
             {page === "members" && (
-              <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr),320px]">
+              <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,1fr),300px]">
                 <MembersPanel
                   members={panel.members}
                   bots={bots}

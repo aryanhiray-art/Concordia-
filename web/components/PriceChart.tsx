@@ -56,7 +56,7 @@ function labelOf(p: StockPricePoint, intraday: boolean, mode: ChartLabelMode = "
     if (!d) return "—";
     if (mode === "time") return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
     if (mode === "weekday") return `${d.toLocaleDateString(undefined, { weekday: "short" })} ${p2(d.getMonth() + 1)}/${p2(d.getDate())}`;
-    if (mode === "monthday") return `${p2(d.getMonth() + 1)}/${p2(d.getDate())}`;
+    if (mode === "monthday") return `${d.getMonth() + 1}/${d.getDate()}`;
     return `${p2(d.getMonth() + 1)}/${d.getFullYear()}`;   // "monthyear"
   }
   if (intraday && typeof p.t === "number") {
@@ -315,9 +315,12 @@ export function PriceChart({
             className="tnum" fill="rgba(255,255,255,0.52)" fontSize="10.5">{hiTxt}</text>
         )}
 
-        {/* date band — first left-anchored, last right-anchored, never past an edge */}
+        {/* date band — first left-anchored, last right-anchored, and inset from
+            the plot edges so the outer labels never sit flush against (or get
+            clipped by) the viewport (owner report: "don't keep the dates so
+            close to the edge"). */}
         {ticks.map((i, k) => (
-          <text key={i} x={X(i)} y={H - 6}
+          <text key={i} x={Math.min(Math.max(X(i), 16), W - 16)} y={H - 6}
             textAnchor={k === 0 ? "start" : k === ticks.length - 1 ? "end" : "middle"}
             className="tnum" fill="rgba(255,255,255,0.38)" fontSize="10.5">
             {labelOf(points[i], intraday, labelMode)}
@@ -330,6 +333,16 @@ export function PriceChart({
             <line x1={X(hover!)} x2={X(hover!)} y1={PAD_T} y2={plotB}
               stroke="rgba(255,255,255,0.22)" strokeWidth="1" />
             <circle cx={X(hover!)} cy={Y(hi.c)} r="3.5" fill={color} stroke="#0b0f14" strokeWidth="1.5" />
+            {/* delegated charts hand the VALUE readout to the parent, but the
+                DATE belongs on the crosshair itself (owner ask) — clamped so it
+                never runs past either edge near the ends of the plot. */}
+            {delegated && (
+              <text x={Math.min(Math.max(X(hover!), 34), W - 34)} y={PAD_T + 12}
+                textAnchor="middle" className="tnum"
+                fill="rgba(255,255,255,0.62)" fontSize="11">
+                {labelOf(hi, intraday, labelMode)}
+              </text>
+            )}
             {!delegated && (
               <text x={PAD_L} y={10} dominantBaseline="middle" textAnchor="start" className="tnum"
                 fill="rgba(255,255,255,0.72)" fontSize="11">

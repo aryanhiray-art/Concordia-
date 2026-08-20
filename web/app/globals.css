@@ -576,3 +576,19 @@ html, body { overscroll-behavior-x: none; }
   padding: 0 clamp(16px, 4vw, 56px);
 }
 .clubfill > * { width: min(660px, 100%); }
+
+/* ═══ Ops console (admin host) — compact terminal scale ═════════════════════
+   Additive + admin-scoped: every rule lives under .ops, the class carried by
+   the console root (AdminConsole) and the portaled MemberDrawer panel. The
+   member site never renders .ops, so its .pill/.btn are untouched. */
+.ops .pill { font-size: 11px; padding: 3px 8px; gap: 5px; }
+.ops .btn { font-size: 12px; padding: 6px 12px; border-radius: 10px; gap: 7px; }
+/* The console's uppercase mono micro-label — one size for section heads,
+   stat-tile labels and table headers (the door's OpsLabel is its twin). */
+.ops-label {
+  display: block;
+  font: 600 10.5px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--subtle);
+}

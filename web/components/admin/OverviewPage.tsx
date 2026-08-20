@@ -8,12 +8,12 @@
 
 import type { AdminBots, AdminPhase, AdminSchedule } from "@/lib/api";
 import type { AdminPanel } from "@/lib/types";
-import { Card, Countdown, Pill } from "@/components/ui";
+import { Countdown, Pill } from "@/components/ui";
 import { fmtTradeDate } from "@/lib/format";
 import { StatusBar } from "./StatusBar";
 import { OpenBallotBody, ScheduleStrip } from "./CyclePanel";
 import { AuditLines } from "./AuditTail";
-import { AdminLink, MoreLink, PhaseChip, SectionHead } from "./util";
+import { AdminLink, MoreLink, OpsCard, PhaseChip, SectionHead } from "./util";
 
 // ── stat tile: one number, one link, one destination ────────────────────────
 
@@ -27,10 +27,10 @@ function StatTile({ href, label, value, chip, sub, tone }: {
 }) {
   return (
     <AdminLink href={href}
-      className="glass glass-2 block rounded-[14px] px-3.5 py-2.5 transition hover:border-teal/40 hover:bg-white/[0.04]">
+      className="glass glass-2 block rounded-[13px] px-3 py-2 transition hover:border-teal/40 hover:bg-white/[0.04]">
       <div className="flex items-center justify-between gap-2">
-        <span className="label">{label}</span>
-        <span className="text-[12px] text-subtle" aria-hidden>→</span>
+        <span className="ops-label">{label}</span>
+        <span className="text-[11px] text-subtle" aria-hidden>→</span>
       </div>
       <div className="mt-1.5 flex flex-wrap items-center gap-2">
         <span className={`font-display text-[18px] font-bold leading-none tnum ${
@@ -40,7 +40,7 @@ function StatTile({ href, label, value, chip, sub, tone }: {
         </span>
         {chip}
       </div>
-      {sub && <div className="mt-1.5 text-[12px] text-subtle">{sub}</div>}
+      {sub && <div className="mt-1 text-[11.5px] leading-tight text-subtle">{sub}</div>}
     </AdminLink>
   );
 }
@@ -78,8 +78,10 @@ export function OverviewPage({ panel, schedule, scheduleErr, bots, botsErr, cade
       {/* the verdict + every lever — the reason this host exists */}
       <StatusBar state={panel.state} cadence={cadence} onChanged={onChanged} />
 
-      {/* stat tiles — each is a doorway into its page */}
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      {/* stat tiles — each is a doorway into its page (2-up even on phones:
+          they're small, and a 375px column of four full-width tiles is all
+          scroll) */}
+      <div className="grid grid-cols-2 gap-2.5 xl:grid-cols-4 xl:gap-3">
         <StatTile
           href="/members"
           label="Members ready"
@@ -87,7 +89,7 @@ export function OverviewPage({ panel, schedule, scheduleErr, bots, botsErr, cade
           tone={troubled === 0 ? "ok" : "warn"}
           sub={troubled > 0
             ? <span className="text-amber">{troubled} need{troubled === 1 ? "s" : ""} attention</span>
-            : "all accounts ready"}
+            : undefined}
         />
         <StatTile
           href="/cycle"
@@ -125,25 +127,25 @@ export function OverviewPage({ panel, schedule, scheduleErr, bots, botsErr, cade
       </div>
 
       {/* compact cycle strip | the open ballot */}
-      <div className="grid items-stretch gap-4 lg:grid-cols-2">
-        <Card>
+      <div className="grid items-stretch gap-3 lg:grid-cols-2">
+        <OpsCard>
           <SectionHead label="Cycle — next 3 days"
             right={<MoreLink href="/cycle">full calendar</MoreLink>} />
           <ScheduleStrip schedule={schedule} scheduleErr={scheduleErr} days={3} />
-        </Card>
-        <Card>
+        </OpsCard>
+        <OpsCard>
           <SectionHead label="Open ballot"
             right={<MoreLink href="/cycle">session detail</MoreLink>} />
           <OpenBallotBody cycle={panel.cycle} />
-        </Card>
+        </OpsCard>
       </div>
 
       {/* the last five audited actions */}
-      <Card>
+      <OpsCard>
         <SectionHead label="Audit — last 5"
           right={<MoreLink href="/audit">view all</MoreLink>} />
         <AuditLines audit={panel.audit} limit={5} />
-      </Card>
+      </OpsCard>
     </>
   );
 }

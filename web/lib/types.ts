@@ -36,7 +36,7 @@ export type HoldingsView = { holdings: Holding[]; as_of?: number | null; stale?:
 // a straight line is falser than the club-shaped path. Real observations are
 // never overridden, estimates retire as real sessions accumulate, and the
 // broker has no account-history endpoint so the past cannot be re-recorded.
-export type EquityRangeKey = "1W" | "1M" | "3M" | "1Y" | "ALL";  // 1D returns when a full session has been recorded
+export type EquityRangeKey = "1D" | "1W" | "1M" | "3M" | "1Y" | "ALL";
 export type EquityPoint = { t: number; v: number; est?: boolean };   // est = club-shaped gap-fill
 export type EquityHistory = {
   range: EquityRangeKey;

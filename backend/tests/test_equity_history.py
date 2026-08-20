@@ -427,10 +427,22 @@ def test_no_club_shape_means_no_invented_points(monkeypatch):
     assert len(pts) == 2 and not any(p.get("est") for p in pts)
 
 
-def test_1d_range_is_gone():
-    mid, tok = _mk_member("no-1d@aclub.test")
+def test_1d_range_returns_raw_last_day(monkeypatch):
+    """1D is BACK (owner ask, 2026-08-20): the recorder has kept raw 10-minute
+    points since FINE_WINDOW_DAYS landed, so a 1-day window slices real
+    intraday observations — and only the last day's."""
+    mid, tok = _mk_member("yes-1d@aclub.test")
+    now = int(time.time())
+    # two days of observations, a few per day
+    for off, v in [(2 * 86400, 100.0), (2 * 86400 - 600, 101.0),
+                   (3600, 110.0), (1800, 111.0), (600, 112.0)]:
+        equity_history.record(mid, v, ts=now - off)
     r = client.get("/api/me/equity?range=1D", headers=_hdrs(tok))
-    assert r.status_code == 400
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    vals = [p["v"] for p in body["points"]]
+    assert vals == [110.0, 111.0, 112.0]      # only the last 24h, oldest first
 
 
 def test_weekend_anchor_still_backfills(monkeypatch):

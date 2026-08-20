@@ -150,7 +150,7 @@ function BrandPane() {
 // its own type instead.
 function OpsLabel({ children }: { children: React.ReactNode }) {
   return (
-    <label className="mb-2 block font-mono text-[10.5px] font-semibold uppercase tracking-[0.16em] text-subtle">
+    <label className="mb-1.5 block font-mono text-[10.5px] font-semibold uppercase tracking-[0.16em] text-subtle">
       {children}
     </label>
   );
@@ -244,28 +244,27 @@ export function AuthGate({ onAuthed, notice }: { onAuthed: (m: Member) => void; 
   // of a confusing invite prompt.
   if (adminHost) {
     return (
-      <div className="mx-auto mt-[16vh] w-[min(720px,100%)] px-5 pb-16">
+      <div className="mx-auto mt-[15vh] w-[min(700px,100%)] px-5 pb-16">
         <div className="glass glass-glow shine flex flex-col md:flex-row">
           {/* Identity rail: who/where, nothing sellable. The purpose line
               anchors the rail's bottom edge on desktop so the two zones read
               as equal-height columns; on mobile the rail stacks above the
               form and the hairline turns horizontal. */}
-          <div className="flex flex-col gap-7 p-6 sm:p-8 md:w-[292px] md:flex-none md:justify-between md:bg-white/[0.02]">
+          <div className="flex flex-col gap-6 p-6 md:w-[280px] md:flex-none md:justify-between md:bg-white/[0.02]">
             <div>
               <div className="flex items-center gap-3">
-                <Logo size={42} />
+                <Logo size={40} />
                 <div className="flex min-w-0 items-baseline gap-2">
-                  <span className="font-display text-[23px] font-bold leading-none tracking-tight text-[#8FD9C0]">
+                  <span className="font-display text-[22px] font-bold leading-none tracking-tight text-[#8FD9C0]">
                     concordia
                   </span>
                   <OpsTag className="text-[11px]" />
                 </div>
               </div>
-              <div className="mt-4"><EnvChip /></div>
+              <div className="mt-3.5"><EnvChip /></div>
             </div>
-            <p className="text-[12.5px] leading-relaxed text-subtle">
-              Operations console for the Concordia voting club. Authorized
-              operators only.
+            <p className="text-[12px] leading-relaxed text-subtle">
+              Operations console — authorized operators only.
             </p>
           </div>
 
@@ -273,15 +272,15 @@ export function AuthGate({ onAuthed, notice }: { onAuthed: (m: Member) => void; 
 
           {/* Form zone — submits through adminLogin() above: the same login
               endpoint as the member card, role-gated after auth. */}
-          <div className="min-w-0 flex-1 p-6 sm:p-8">
+          <div className="min-w-0 flex-1 p-6 sm:p-7">
             {/* Idle-logout notice: no tabs here to dismiss it from, so it simply
                 stays until sign-in — an expired session is normal, never an error. */}
             {notice && (
-              <p className="mb-4 rounded-[12px] border border-white/10 bg-white/[0.04] px-3.5 py-2.5 text-[12.5px] leading-relaxed text-muted">
+              <p className="mb-3.5 rounded-[12px] border border-white/10 bg-white/[0.04] px-3.5 py-2.5 text-[12.5px] leading-relaxed text-muted">
                 {notice}
               </p>
             )}
-            <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); adminLogin(); }}>
+            <form className="space-y-3.5" onSubmit={(e) => { e.preventDefault(); adminLogin(); }}>
               <div>
                 <OpsLabel>Email</OpsLabel>
                 <input className="input" placeholder="you@email.com" type="email" value={email}
@@ -293,7 +292,7 @@ export function AuthGate({ onAuthed, notice }: { onAuthed: (m: Member) => void; 
                   onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
               </div>
               {err && <div className="text-[13px] text-red">⚠ {err}</div>}
-              <Button type="submit" variant="go" className="w-full !py-3.5" busy={busy}
+              <Button type="submit" variant="go" className="w-full !py-3" busy={busy}
                 disabled={!email.trim() || !password}>
                 Log in
               </Button>

@@ -8,8 +8,7 @@
 
 import type { AdminOverview } from "@/lib/api";
 import type { AdminPanel } from "@/lib/types";
-import { Card } from "@/components/ui";
-import { SectionLabel } from "./util";
+import { OpsCard, SectionHead } from "./util";
 
 type Pick = { symbol: string; name?: string | null; votes?: number | null; weight?: number | null };
 
@@ -19,17 +18,17 @@ function Rows({ picks }: { picks: Pick[] }) {
     <div className="mt-1">
       {picks.map((p, i) => (
         <div key={p.symbol}
-          className="flex items-center gap-3 border-t border-hair py-2 first:border-t-0">
-          <span className="w-5 flex-none text-right text-[11px] tnum text-subtle">{i + 1}</span>
-          <span className="w-14 flex-none font-mono text-[13px] font-semibold text-ink">{p.symbol}</span>
-          <span className="hidden min-w-0 flex-none basis-40 truncate text-[12px] text-muted sm:block">
+          className="flex items-center gap-3 border-t border-hair py-1.5 first:border-t-0">
+          <span className="w-4 flex-none text-right font-mono text-[10.5px] tnum text-subtle">{i + 1}</span>
+          <span className="w-14 flex-none font-mono text-[12.5px] font-semibold text-ink">{p.symbol}</span>
+          <span className="hidden min-w-0 flex-none basis-40 truncate text-[11.5px] text-muted sm:block">
             {p.name && p.name !== p.symbol ? p.name : ""}
           </span>
-          <div className="h-[5px] min-w-0 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
+          <div className="h-[4px] min-w-0 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
             <div className="h-full rounded-full bg-teal/60"
               style={{ width: `${((p.weight || 0) / maxW) * 100}%` }} />
           </div>
-          <span className="w-14 flex-none text-right text-[11.5px] tnum text-muted">
+          <span className="w-14 flex-none text-right font-mono text-[11.5px] tnum text-muted">
             {p.weight != null ? `$${Math.round(p.weight)}` : "—"}
           </span>
         </div>
@@ -48,36 +47,30 @@ export function BasketPage({ panel, overview, overviewErr }: {
   const open = overview?.session?.status === "open";
 
   return (
-    <div className="grid items-start gap-4 lg:grid-cols-2">
-      <Card>
-        <div className="flex items-baseline justify-between gap-3">
-          <SectionLabel>Standing basket</SectionLabel>
-          {standing && <span className="text-[11.5px] tnum text-subtle">decided {standing.trade_date}</span>}
-        </div>
+    <div className="grid items-start gap-3 lg:grid-cols-2">
+      <OpsCard>
+        <SectionHead label="Standing basket" right={standing &&
+          <span className="font-mono text-[11px] tnum text-subtle">decided {standing.trade_date}</span>} />
         {standing?.picks?.length ? (
           <Rows picks={standing.picks} />
         ) : (
-          <p className="text-[12.5px] text-subtle">no basket decided yet</p>
+          <p className="text-[12px] text-subtle">no basket decided yet</p>
         )}
-      </Card>
+      </OpsCard>
 
-      <Card>
-        <div className="flex items-baseline justify-between gap-3">
-          <SectionLabel>{open ? "Forming — open ballot" : "Last ballot tally"}</SectionLabel>
-          {overview?.session && (
-            <span className="text-[11.5px] tnum text-subtle">
-              {overview.session.voters ?? 0} voter{(overview.session.voters ?? 0) === 1 ? "" : "s"}
-            </span>
-          )}
-        </div>
+      <OpsCard>
+        <SectionHead label={open ? "Forming — open ballot" : "Last ballot tally"} right={overview?.session &&
+          <span className="font-mono text-[11px] tnum text-subtle">
+            {overview.session.voters ?? 0} voter{(overview.session.voters ?? 0) === 1 ? "" : "s"}
+          </span>} />
         {tally.length ? (
           <Rows picks={tally} />
         ) : (
-          <p className="text-[12.5px] text-subtle">
+          <p className="text-[12px] text-subtle">
             {overviewErr ? "unavailable — overview failed" : "no votes yet"}
           </p>
         )}
-      </Card>
+      </OpsCard>
     </div>
   );
 }

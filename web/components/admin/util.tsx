@@ -88,8 +88,17 @@ export function perfLine(p: unknown): string | null {
   return String(p);
 }
 
+/** The console card: same glass as the member site's Card, ops padding.
+ *  (ui.tsx Card is p-5/p-6 — member scale; the console is denser.) */
+export function OpsCard({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return <div className={`glass shine p-4 ${className}`}>{children}</div>;
+}
+
+/** Uppercase mono micro-label (.ops-label in globals.css) — NOT the member
+ *  site's .label: its `font:` shorthand lands after the Tailwind layers, so
+ *  no utility could re-size it. */
 export function SectionLabel({ children }: { children: React.ReactNode }) {
-  return <p className="label mb-3">{children}</p>;
+  return <p className="ops-label mb-2">{children}</p>;
 }
 
 /** Card header row: the uppercase section label + an optional right-aligned
@@ -102,7 +111,7 @@ export function SectionHead({ label, right }: {
   return (
     <div className="flex flex-wrap items-center gap-3">
       <SectionLabel>{label}</SectionLabel>
-      {right && <div className="mb-3 ml-auto flex items-center gap-2.5">{right}</div>}
+      {right && <div className="mb-2 ml-auto flex items-center gap-2">{right}</div>}
     </div>
   );
 }
@@ -110,7 +119,7 @@ export function SectionHead({ label, right }: {
 /** The teal "deeper page →" link that panel heads carry on the Overview. */
 export function MoreLink({ href, children }: { href: string; children: React.ReactNode }) {
   return (
-    <AdminLink href={href} className="text-[12px] font-medium text-teal hover:underline">
+    <AdminLink href={href} className="text-[11.5px] font-medium text-teal hover:underline">
       {children} →
     </AdminLink>
   );
@@ -119,7 +128,7 @@ export function MoreLink({ href, children }: { href: string; children: React.Rea
 /** Table-header micro-label. Deliberately NOT the .label class: it sets
  *  display:block, which knocks a <th> out of table-cell layout and stacks the
  *  header row into a diagonal stair. Compose alignment per column. */
-export const TH_FONT = "pb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-subtle";
+export const TH_FONT = "whitespace-nowrap pb-1.5 font-mono text-[10.5px] font-semibold uppercase tracking-[0.1em] text-subtle";
 
 // ── ops identity (shared by the console chrome AND the sign-in landing) ──────
 
@@ -187,6 +196,6 @@ export function PhaseChip({ phase }: { phase: string }) {
 export function AcctTypeBadge({ type }: { type?: string | null }) {
   if (!type) return <span className="text-subtle">—</span>;
   if (type === "limited_margin" || type === "margin") return <Pill tone="teal">margin</Pill>;
-  if (type === "cash") return <Pill tone="warn">cash — delayed</Pill>;
+  if (type === "cash") return <Pill tone="warn">cash T+1</Pill>;
   return <Pill tone="neutral">{type}</Pill>;
 }

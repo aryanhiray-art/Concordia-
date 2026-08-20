@@ -12,9 +12,24 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, type AdminMemberDetail } from "@/lib/api";
-import { Button, Pill, Stat } from "@/components/ui";
+import { Button, Pill } from "@/components/ui";
 import { fmtTradeDate } from "@/lib/format";
 import { SectionLabel, TH_FONT as TH, execTone, isDeferred, money } from "./util";
+
+/** Drawer-scale stat tile (ui.tsx Stat is the member site's 22px scale). */
+function DStat({ label, value, tone, sub }: {
+  label: string; value: React.ReactNode; tone?: "teal"; sub?: React.ReactNode;
+}) {
+  return (
+    <div className="glass glass-2 rounded-[12px] px-3 py-2">
+      <div className="ops-label">{label}</div>
+      <div className={`mt-1 font-display text-[16px] font-bold leading-none tnum ${tone === "teal" ? "text-teal" : "text-ink"}`}>
+        {value}
+      </div>
+      {sub && <div className="mt-1 text-[11px] text-subtle">{sub}</div>}
+    </div>
+  );
+}
 
 function CopyChip({ value }: { value: string }) {
   const [state, setState] = useState<"idle" | "done" | "failed">("idle");
@@ -125,14 +140,14 @@ export function MemberDrawer({ memberId, onClose }: { memberId: number; onClose:
   return createPortal(
     <>
       <div className="sbackdrop" onClick={onClose} aria-hidden />
-      <div ref={panelRef} className="spanel" role="dialog" aria-modal="true"
+      <div ref={panelRef} className="spanel ops" role="dialog" aria-modal="true"
         aria-label={m?.display_name ?? "Member detail"} tabIndex={-1}>
-        <div className="flex min-h-full flex-col p-5 sm:p-6">
+        <div className="flex min-h-full flex-col p-4 sm:p-5">
           {/* header: identity + close, always present */}
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2.5">
-                <h2 className="font-display text-[20px] font-bold leading-none tracking-tight">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="font-display text-[18px] font-bold leading-none tracking-tight">
                   {m?.display_name ?? `member #${memberId}`}
                 </h2>
                 {m && (isBot
@@ -140,9 +155,9 @@ export function MemberDrawer({ memberId, onClose }: { memberId: number; onClose:
                   : m.role !== "member" && <Pill tone="teal">{m.role}</Pill>)}
               </div>
               {m && (
-                <div className="mt-1.5 truncate text-[12.5px] text-muted">
+                <div className="mt-1 truncate text-[12px] text-muted">
                   {isBot
-                    ? <>{m.bot_strategy || "bot"} · <span className="font-mono text-[11.5px]">{m.bot_model || "?"}</span></>
+                    ? <>{m.bot_strategy || "bot"} · <span className="font-mono text-[11px]">{m.bot_model || "?"}</span></>
                     : m.email}
                 </div>
               )}
@@ -153,9 +168,9 @@ export function MemberDrawer({ memberId, onClose }: { memberId: number; onClose:
             </button>
           </div>
 
-          <div className="mt-5 flex-1 space-y-5">
+          <div className="mt-4 flex-1 space-y-4">
             {err && (
-              <div className="rounded-[14px] border border-red/30 bg-red/[0.07] p-4 text-[13px] text-red">
+              <div className="rounded-[12px] border border-red/30 bg-red/[0.07] px-3.5 py-2.5 text-[12.5px] text-red">
                 ⚠ {err}
               </div>
             )}
@@ -166,42 +181,41 @@ export function MemberDrawer({ memberId, onClose }: { memberId: number; onClose:
                 {/* password recovery — humans only; the temp password shows ONCE */}
                 {!isBot && (
                   <div>
-                    <Button variant="glass" busy={resetting} onClick={doReset}
-                      className="!px-3.5 !py-2 !text-[12.5px]">
+                    <Button variant="glass" busy={resetting} onClick={doReset}>
                       Reset password
                     </Button>
                     {reset && (
-                      <div className="mt-2.5 rounded-[12px] border border-teal/30 bg-teal/[0.06] p-3 text-[12.5px] leading-relaxed text-muted">
+                      <div className="mt-2 rounded-[11px] border border-teal/30 bg-teal/[0.06] p-2.5 text-[12px] leading-snug text-muted">
                         Temp password for <b className="text-ink">{reset.email}</b> — share once, they change it after login:
                         <div className="mt-1 flex items-center gap-2.5">
-                          <span className="font-mono text-[13.5px] font-semibold text-ink">{reset.temp_password}</span>
+                          <span className="font-mono text-[13px] font-semibold text-ink">{reset.temp_password}</span>
                           <CopyChip value={reset.temp_password} />
                         </div>
                       </div>
                     )}
-                    {resetErr && <div className="mt-2 text-[12.5px] text-red">⚠ {resetErr}</div>}
+                    {resetErr && <div className="mt-2 text-[12px] text-red">⚠ {resetErr}</div>}
                   </div>
                 )}
 
                 {isBot && data.bot_thesis && (
-                  <div className="rounded-[12px] border border-hair bg-white/[0.03] p-3">
+                  <div className="rounded-[11px] border border-hair bg-white/[0.03] p-2.5">
                     <SectionLabel>Today&apos;s thesis</SectionLabel>
-                    <p className="text-[13px] italic leading-relaxed text-muted">&ldquo;{data.bot_thesis}&rdquo;</p>
+                    <p className="text-[12.5px] italic leading-relaxed text-muted">&ldquo;{data.bot_thesis}&rdquo;</p>
                   </div>
                 )}
 
                 {/* balances — live broker read when available */}
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                  <Stat label="Voting power" value={money(data.power?.power)} tone="teal"
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  <DStat label="Power" value={money(data.power?.power)} tone="teal"
                     sub={<Delta d={data.power?.delta} />} />
-                  <Stat label="Account value" value={money(data.portfolio?.total_value)} />
-                  <Stat label="Buying power" value={money(data.portfolio?.buying_power)} />
+                  <DStat label="Acct value" value={money(data.portfolio?.total_value)} />
+                  <DStat label="Buying pwr" value={money(data.portfolio?.buying_power)} />
                 </div>
 
                 {hist.length > 1 && (
                   <div>
                     <SectionLabel>Voting power (weekly)</SectionLabel>
-                    <div className="flex flex-wrap gap-x-4 gap-y-1 font-mono text-[11.5px]">
+                    <div className="flex flex-wrap gap-x-3.5 gap-y-1 font-mono text-[11px]">
                       {hist.map((h) => (
                         <span key={h.week_start} className="text-subtle tnum">
                           {h.week_start.slice(5)}<span className="ml-1 text-ink">{money(h.power)}</span>
@@ -219,7 +233,7 @@ export function MemberDrawer({ memberId, onClose }: { memberId: number; onClose:
                     <div className="flex flex-wrap gap-1.5">
                       {picks.map((p) => (
                         <span key={p.symbol}
-                          className="rounded-[10px] border border-teal/30 bg-teal/[0.08] px-2.5 py-1 font-mono text-[12px]">
+                          className="rounded-[8px] border border-teal/30 bg-teal/[0.08] px-2 py-0.5 font-mono text-[11.5px]">
                           {p.symbol}<span className="ml-1.5 text-teal tnum">{p.weight}%</span>
                         </span>
                       ))}
@@ -230,19 +244,19 @@ export function MemberDrawer({ memberId, onClose }: { memberId: number; onClose:
                 {execs.length > 0 && (
                   <div>
                     <SectionLabel>Orders this session</SectionLabel>
-                    <div className="space-y-1.5">
+                    <div className="space-y-1">
                       {execs.map((e, i) => (
-                        <div key={i} className="flex flex-wrap items-center gap-2 text-[12.5px]">
-                          <span className="w-14 font-mono font-semibold">{e.symbol}</span>
+                        <div key={i} className="flex flex-wrap items-center gap-2 text-[12px]">
+                          <span className="w-12 font-mono font-semibold">{e.symbol}</span>
                           <span className="text-subtle">{e.side || "—"}</span>
-                          <span className="text-muted tnum">
+                          <span className="font-mono text-muted tnum">
                             {e.dollar_amount != null ? money(e.dollar_amount) : "—"}
                           </span>
                           <Pill tone={execTone(e.status, e.error)}>
                             {isDeferred(e.error) ? "deferred" : e.status}
                           </Pill>
                           {e.error && !isDeferred(e.error) && (
-                            <span className="text-[11.5px] text-subtle">{e.error}</span>
+                            <span className="text-[11px] text-subtle">{e.error}</span>
                           )}
                         </div>
                       ))}
@@ -253,14 +267,14 @@ export function MemberDrawer({ memberId, onClose }: { memberId: number; onClose:
                 <div>
                   <SectionLabel>Holdings</SectionLabel>
                   {data.rh_error ? (
-                    <div className="text-[12.5px] text-amber">{data.rh_error}</div>
+                    <div className="text-[12px] text-amber">{data.rh_error}</div>
                   ) : holdings.length === 0 ? (
-                    <div className="text-[12.5px] text-subtle">
+                    <div className="text-[12px] text-subtle">
                       {isBot ? "bots hold no positions" : "no long positions (or no broker read yet)"}
                     </div>
                   ) : (
                     <div className="overflow-x-auto">
-                      <table className="w-full min-w-[420px] text-[12.5px]">
+                      <table className="w-full min-w-[420px] text-[12px]">
                         <thead>
                           {/* NOT .label on <th>: its display:block breaks table-cell layout */}
                           <tr>
@@ -275,12 +289,12 @@ export function MemberDrawer({ memberId, onClose }: { memberId: number; onClose:
                         <tbody>
                           {holdings.map((h) => (
                             <tr key={h.symbol} className="border-t border-hair">
-                              <td className="py-2 pr-3 font-mono font-semibold">{h.symbol}</td>
-                              <td className="py-2 text-right text-muted tnum">{h.quantity}</td>
-                              <td className="py-2 text-right text-muted tnum">{money(h.avg_buy_price)}</td>
-                              <td className="py-2 text-right text-muted tnum">{h.last != null ? money(h.last) : "—"}</td>
-                              <td className="py-2 text-right tnum">{money(h.market_value)}</td>
-                              <td className={`py-2 text-right tnum ${h.pnl == null ? "text-subtle" : h.pnl >= 0 ? "text-green" : "text-red"}`}>
+                              <td className="py-1.5 pr-3 font-mono font-semibold">{h.symbol}</td>
+                              <td className="py-1.5 text-right font-mono text-muted tnum">{h.quantity}</td>
+                              <td className="py-1.5 text-right font-mono text-muted tnum">{money(h.avg_buy_price)}</td>
+                              <td className="py-1.5 text-right font-mono text-muted tnum">{h.last != null ? money(h.last) : "—"}</td>
+                              <td className="py-1.5 text-right font-mono tnum">{money(h.market_value)}</td>
+                              <td className={`py-1.5 text-right font-mono tnum ${h.pnl == null ? "text-subtle" : h.pnl >= 0 ? "text-green" : "text-red"}`}>
                                 {h.pnl != null ? money(h.pnl) : "—"}
                               </td>
                             </tr>
@@ -292,7 +306,7 @@ export function MemberDrawer({ memberId, onClose }: { memberId: number; onClose:
                 </div>
 
                 {data.member.robinhood?.status && (
-                  <p className="text-[11.5px] text-subtle">
+                  <p className="font-mono text-[11px] text-subtle">
                     robinhood: {data.member.robinhood.status}
                     {data.member.robinhood.account_number ? ` · acct ${data.member.robinhood.account_number}` : ""}
                     {data.power?.as_of_week ? ` · power as of week ${data.power.as_of_week}` : ""}

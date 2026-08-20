@@ -1,13 +1,13 @@
 "use client";
 
 // The last audited actions, newest first — arm flips, kills, resets, verify
-// verdicts. Mono + ET timestamps: this is the console's paper trail. The
-// bare lines are exported so the Overview page can show a 5-line teaser with
-// a "view all →" link without duplicating the row markup.
+// verdicts. Mono + ET timestamps in fixed-width columns: this is the
+// console's paper trail and it should read like a log. The bare lines are
+// exported so the Overview page can show a 5-line teaser with a "view all →"
+// link without duplicating the row markup.
 
 import type { AdminPanel } from "@/lib/types";
-import { Card } from "@/components/ui";
-import { SectionLabel, fmtET } from "./util";
+import { OpsCard, SectionLabel, fmtET } from "./util";
 
 export function AuditLines({ audit, limit = 20 }: {
   audit: AdminPanel["audit"];
@@ -15,14 +15,14 @@ export function AuditLines({ audit, limit = 20 }: {
 }) {
   const rows = (audit ?? []).slice().sort((a, b) => b.ts - a.ts).slice(0, limit);
   if (rows.length === 0) {
-    return <div className="text-[13px] text-muted">no audit entries</div>;
+    return <div className="text-[12.5px] text-muted">no audit entries</div>;
   }
   return (
-    <div className="space-y-1 overflow-x-auto">
+    <div className="space-y-[3px] overflow-x-auto">
       {rows.map((a, i) => (
-        <div key={i} className="flex gap-3 whitespace-nowrap font-mono text-[11.5px] leading-relaxed">
-          <span className="text-subtle tnum">{fmtET(a.ts, true)}</span>
-          <span className="text-teal">{a.actor}</span>
+        <div key={i} className="flex gap-3 whitespace-nowrap font-mono text-[11px] leading-normal">
+          <span className="w-[158px] flex-none text-subtle tnum">{fmtET(a.ts, true)}</span>
+          <span className="w-[118px] flex-none truncate text-teal" title={a.actor}>{a.actor}</span>
           <span className="text-ink">{a.action}</span>
           {a.target && <span className="text-muted">{a.target}</span>}
         </div>
@@ -33,9 +33,9 @@ export function AuditLines({ audit, limit = 20 }: {
 
 export function AuditTail({ audit }: { audit: AdminPanel["audit"] }) {
   return (
-    <Card>
+    <OpsCard>
       <SectionLabel>Audit</SectionLabel>
       <AuditLines audit={audit} />
-    </Card>
+    </OpsCard>
   );
 }

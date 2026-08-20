@@ -28,7 +28,7 @@ function ClosedBallot({ session }: { session: SessionView }) {
   const picks = session.my_picks || [];
   const total = picks.reduce((a, p) => a + (p.weight || 0), 0);
   return (
-    <div className="glass rise p-4 sm:p-5">
+    <div className="glass rise h-full p-4 sm:p-5">
       <div className="flex items-baseline justify-between gap-3">
         <span className="label">Your ballot</span>
         <span className="text-[11.5px] text-subtle">read-only · locked {fmtTime(session.closes_at)}</span>
@@ -110,7 +110,11 @@ export default function VotePage() {
           MIN-CONTENT, and a range input's is ~129px, so on a 375px phone the
           ballot card grew 33px past the column and only html{overflow-x:hidden}
           hid it. Zeroing the items' minimum lets the slider shrink instead. */}
-      <div className="grid items-start gap-5 [&>*]:min-w-0 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+      {/* items-STRETCH, deliberately: the two cards should always read as one
+          row of equal-height panels — when either side grows (a long ballot, a
+          full consensus list) the other stretches to match instead of leaving
+          a ragged bottom edge (owner call). */}
+      <div className="grid items-stretch gap-5 [&>*]:min-w-0 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
         {/* three distinct states: participation actually OFF → AllocSliders'
             turn-it-on-in-Account message; ON but the ballot closed → the
             read-only locked ballot; ON and open → the live ballot. */}
@@ -118,9 +122,10 @@ export default function VotePage() {
           ? <ClosedBallot session={session} />
           : <AllocSliders session={session} participating={participating} onVoted={() => refreshSession()} />}
 
-        <div className="space-y-3">
-          {/* forming basket — power-weighted consensus */}
-          <div className="glass shine rise p-4 sm:p-5">
+        <div className="flex flex-col gap-3">
+          {/* forming basket — power-weighted consensus; flex-1 so the card
+              matches the ballot card's height, whichever is taller */}
+          <div className="glass shine rise flex flex-1 flex-col p-4 sm:p-5">
             <div className="flex items-baseline justify-between gap-3">
               <span className="label !text-teal">Club consensus</span>
               <span className="text-[11.5px] text-subtle">
@@ -128,7 +133,7 @@ export default function VotePage() {
               </span>
             </div>
             {basket.length === 0 ? (
-              <p className="py-7 text-center text-[13px] text-subtle">No votes yet.</p>
+              <p className="my-auto py-7 text-center text-[13px] text-subtle">No votes yet.</p>
             ) : (
               <div className="mt-3.5 flex max-h-[min(46vh,400px)] flex-col gap-2.5 overflow-y-auto">
                 {basket.map((b) => (

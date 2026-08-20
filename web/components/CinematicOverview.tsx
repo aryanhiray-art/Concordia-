@@ -34,7 +34,7 @@ import type { EquityHistory, EquityPoint, EquityRangeKey } from "@/lib/types";
 // session exists yet and a 1D tab could only disappoint. The 10-minute
 // recorder keeps accumulating precisely so it can return with real intraday
 // shape.
-const RANGES: EquityRangeKey[] = ["1W", "1M", "3M", "1Y", "ALL"];
+const RANGES: EquityRangeKey[] = ["1D", "1W", "1M", "3M", "1Y", "ALL"];
 
 type Cache = Partial<Record<EquityRangeKey, EquityPoint[]>>;
 
@@ -63,7 +63,9 @@ function normalizeEquity(r: EquityHistory | null | undefined): EquityPoint[] {
  *  long as the club has been recording — MM/YYYY across a three-day record
  *  prints the same label at every tick. */
 function labelModeFor(range: EquityRangeKey, series: EquityPoint[]): ChartLabelMode {
-  if (range === "1W") return "weekday";
+  if (range === "1D") return "time";
+  // Numeric dates only ("8/20") — the owner dropped the weekday prefix.
+  if (range === "1W") return "monthday";
   if (range === "1M" || range === "3M") return "monthday";
   const span = series.length >= 2 ? series[series.length - 1].t - series[0].t : 0;
   if (span < 3 * 86400) return "time";
