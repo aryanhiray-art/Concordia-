@@ -475,12 +475,15 @@ export function AuthGate({ onAuthed, notice }: { onAuthed: (m: Member) => void; 
               </p>
             )}
 
-            {/* Demo included (owner call): demo.voteconcordia.com must be an
-                Authorized JavaScript origin on the Google OAuth client or GIS
-                refuses to render — the button only appears once the demo build
-                carries NEXT_PUBLIC_GOOGLE_CLIENT_ID, and works once the origin
-                is whitelisted in the owner's Google Cloud Console. */}
-            {googleEnabled && !adminHost && (
+            {/* Demo AND admin hosts included (owner call, 2026-08-20): every
+                host the gate renders on (voteconcordia.com, demo., admin.)
+                must be an Authorized JavaScript origin on the Google OAuth
+                client or GIS refuses to render its button — the code side is
+                just this gate plus NEXT_PUBLIC_GOOGLE_CLIENT_ID in the build.
+                The backend /api/auth/google flow matches by verified email, so
+                the owner logging in on the admin console lands on the same
+                owner account either way. */}
+            {googleEnabled && (
               <>
                 <GoogleButton onCredential={(c) =>
                   finishGoogle(c,
