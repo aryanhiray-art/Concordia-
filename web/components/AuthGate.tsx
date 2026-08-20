@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { usePathname } from "next/navigation";
 import { api, setToken } from "@/lib/api";
-import { isAdminHost, isDemoHost } from "@/lib/host";
+import { isAdminHost, isBetaHost, isDemoHost } from "@/lib/host";
 import type { Member } from "@/lib/types";
 import { Button, Card, Logo, Wordmark } from "./ui";
 import { GoogleButton, googleEnabled } from "./GoogleButton";
@@ -74,6 +74,10 @@ function HowRow({ n, title, body }: { n: number; title: string; body: string }) 
 // story. Below lg the stacked mobile header carries the tagline instead.
 function BrandPane() {
   const demo = isDemoHost();
+  // beta.* is the real club's staging channel: same story, same flows — the
+  // ONLY visible difference is the wordmark suffix, so nobody mistakes a
+  // staging tab for the live club when both are open.
+  const beta = isBetaHost();
   return (
     <div className="relative hidden min-w-0 lg:flex lg:flex-col lg:justify-center">
       <div className="authglow" aria-hidden />
@@ -83,7 +87,7 @@ function BrandPane() {
             <Logo size={76} />
           </span>
           <div className="font-display text-[52px] font-bold leading-none tracking-tight text-[#8FD9C0]">
-            concordia{demo && <span className="text-[0.62em] font-semibold text-teal/70">.demo</span>}
+            concordia{demo && <span className="text-[0.62em] font-semibold text-teal/70">.demo</span>}{beta && <span className="text-[0.62em] font-semibold text-teal/70">.beta</span>}
           </div>
         </div>
         {/* The slogan claims the FIGHT, never the result — "beating" would be
@@ -140,14 +144,19 @@ function BrandPane() {
 // an expired session is a normal event, never an error.
 export function AuthGate({ onAuthed, notice }: { onAuthed: (m: Member) => void; notice?: string | null }) {
   const pathname = usePathname();
-  // On admin.voteconcordia.com the same login card serves the ops console —
-  // but the GIS origin isn't authorized for the admin subdomain, so Google
-  // sign-in is hidden there (email/password only). AuthGate never renders
-  // server-side (AppShell gates it behind `ready`), so this is stable.
+  // admin.voteconcordia.com gets its own stripped-down sign-in (rendered
+  // below, before the member card): operators already have accounts, so the
+  // signup tab, invite field and brand story would only make the ops console
+  // look like the voting club. AuthGate never renders server-side (AppShell
+  // gates it behind `ready`), so these host checks are stable.
   const adminHost = isAdminHost();
   // demo.voteconcordia.com: fake-money playground — ".demo" branding, no
   // Google (origin unauthorized). Codes travel by REAL email, same as the club.
   const demoHost = isDemoHost();
+  // beta.voteconcordia.com: the club's staging channel — the member card runs
+  // exactly as on the live club, just wearing a ".beta" suffix. Real invites,
+  // real emails; only the wordmark differs (generic placeholders stay generic).
+  const betaHost = isBetaHost();
   const [mode, setMode] = useState<"signup" | "login">(notice ? "login" : "signup");
   // "You were signed out after 2 hours idle" explains ONE arrival at this
   // screen. Leaving the login tab means it has been read; without this it
@@ -188,6 +197,71 @@ export function AuthGate({ onAuthed, notice }: { onAuthed: (m: Member) => void; 
           <Wordmark />
         </a>
         {pathname === "/terms" ? <TermsDoc /> : <PrivacyDoc />}
+      </div>
+    );
+  }
+
+  // Admin sign-in submits through the exact same login path as the member
+  // card — the console's gate is the ROLE check after auth, not a separate
+  // credential system. This exists only so the minimal admin form doesn't
+  // have to thread through submit()'s signup branches.
+  async function adminLogin() {
+    setErr(null); setBusy(true);
+    try {
+      const res = await api.login(email.trim(), password);
+      setToken(res.token);
+      onAuthed(res.member);
+    } catch (e: any) {
+      setErr(e.message || "failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // ── Ops console sign-in: deliberately unlike the club's front door ──
+  // No signup tab, no invite field, no brand story, no Google (parked until
+  // the admin origin is whitelisted on the GIS client — see the member-card
+  // gate below). A member who lands here by typo gets pointed home instead
+  // of a confusing invite prompt.
+  if (adminHost) {
+    return (
+      <div className="mx-auto mt-[18vh] w-[min(400px,100%)] px-5">
+        <div className="mb-7 flex flex-col items-center text-center">
+          <Logo size={48} />
+          <div className="mt-4 font-display text-[26px] font-bold tracking-tight text-[#8FD9C0]">
+            concordia
+          </div>
+          <p className="label mt-2.5">Ops console</p>
+        </div>
+        <Card className="glass-glow">
+          {/* Idle-logout notice: no tabs here to dismiss it from, so it simply
+              stays until sign-in — an expired session is normal, never an error. */}
+          {notice && (
+            <p className="mb-4 rounded-[12px] border border-white/10 bg-white/[0.04] px-3.5 py-2.5 text-[12.5px] leading-relaxed text-muted">
+              {notice}
+            </p>
+          )}
+          <form className="space-y-3.5" onSubmit={(e) => { e.preventDefault(); adminLogin(); }}>
+            <div>
+              <label className="label mb-2">Email</label>
+              <input className="input" placeholder="you@email.com" type="email" value={email}
+                onChange={(e) => setEmail(e.target.value)} spellCheck={false} autoComplete="email" />
+            </div>
+            <div>
+              <label className="label mb-2">Password</label>
+              <input className="input" placeholder="Your password" type="password" value={password}
+                onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
+            </div>
+            {err && <div className="text-[13px] text-red">⚠ {err}</div>}
+            <Button type="submit" variant="go" className="w-full !py-3.5" busy={busy}
+              disabled={!email.trim() || !password}>
+              Log in
+            </Button>
+          </form>
+        </Card>
+        <p className="mt-4 text-center text-[11.5px] leading-relaxed text-subtle">
+          Authorized operators only. Members sign in at voteconcordia.com.
+        </p>
       </div>
     );
   }
@@ -320,7 +394,7 @@ export function AuthGate({ onAuthed, notice }: { onAuthed: (m: Member) => void; 
           <Logo size={56} />
         </span>
         <div className="mt-4 font-display text-[26px] font-bold tracking-tight text-[#8FD9C0]">
-          concordia{demoHost && <span className="text-[0.62em] font-semibold text-teal/70">.demo</span>}
+          concordia{demoHost && <span className="text-[0.62em] font-semibold text-teal/70">.demo</span>}{betaHost && <span className="text-[0.62em] font-semibold text-teal/70">.beta</span>}
         </div>
         <p className="mt-2.5 text-[17px] font-light leading-snug text-ink">
           Taking on Wall Street, <span className="text-teal">one vote at a time</span>.
@@ -335,9 +409,6 @@ export function AuthGate({ onAuthed, notice }: { onAuthed: (m: Member) => void; 
           </p>
         )}
       </div>
-
-      {/* obvious "you're on the ops console, not the member site" marker */}
-      {adminHost && <p className="label mb-3 text-center">Admin console</p>}
 
       <Card className="glass-glow">
         {gCred ? (
@@ -475,15 +546,14 @@ export function AuthGate({ onAuthed, notice }: { onAuthed: (m: Member) => void; 
               </p>
             )}
 
-            {/* Demo AND admin hosts included (owner call, 2026-08-20): every
-                host the gate renders on (voteconcordia.com, demo., admin.)
-                must be an Authorized JavaScript origin on the Google OAuth
-                client or GIS refuses to render its button — the code side is
-                just this gate plus NEXT_PUBLIC_GOOGLE_CLIENT_ID in the build.
-                The backend /api/auth/google flow matches by verified email, so
-                the owner logging in on the admin console lands on the same
-                owner account either way. */}
-            {googleEnabled && (
+            {/* Demo host included (owner call, 2026-08-20): every host that
+                shows this button must be an Authorized JavaScript origin on
+                the Google OAuth client or GIS refuses to render it — the code
+                side is just this gate plus NEXT_PUBLIC_GOOGLE_CLIENT_ID in
+                the build. Google on admin is parked until the admin origin is
+                whitelisted (the admin host renders its own card above anyway);
+                beta stays hidden too — its origin isn't authorized either. */}
+            {googleEnabled && !adminHost && !betaHost && (
               <>
                 <GoogleButton onCredential={(c) =>
                   finishGoogle(c,

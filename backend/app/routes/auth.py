@@ -100,7 +100,7 @@ def _log_event(member_id: int, kind: str, request: Request) -> None:
 def _issue(resp: Response, member: dict) -> dict:
     token = make_session(member["id"], int(member.get("session_version", 1)))
     resp.set_cookie(COOKIE_NAME, token, max_age=30 * 24 * 3600, httponly=True,
-                    secure=settings.app_env == "prod", samesite="lax")
+                    secure=settings.cookie_secure, samesite="lax")
     return {"token": token, "member": load_member(member["id"])}
 
 

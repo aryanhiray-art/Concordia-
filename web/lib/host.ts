@@ -17,3 +17,12 @@ export function isDemoHost(): boolean {
   if (typeof window === "undefined") return false;
   return window.location.hostname.startsWith("demo.");
 }
+
+/** beta.voteconcordia.com — the real club's staging channel: same code and
+ *  real broker flows, but its own database and execution locked to dry-run
+ *  on the server side. Branding gains a ".beta" suffix exactly like ".demo";
+ *  Google sign-in hides (GIS origin not authorized). Covers beta.localhost. */
+export function isBetaHost(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.location.hostname.startsWith("beta.");
+}

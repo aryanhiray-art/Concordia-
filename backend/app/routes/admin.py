@@ -11,7 +11,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from ..calendar_us import today_et
+from ..bots import ollama
+from ..calendar_us import cycle_phase, next_trading_day, today_et
 from ..config import settings
 from ..db import audit, db, is_armed, kv_get, kv_set, set_armed
 from ..robinhood import vault
@@ -58,6 +59,42 @@ def admin_panel(admin: dict = Depends(require_admin)):
     which the morning digest job shares so console and email never drift.)
     """
     return adminview.panel()
+
+
+@router.get("/schedule")
+def schedule(admin: dict = Depends(require_admin)):
+    """What the cadence does today + the next 7 trading days, pre-resolved.
+
+    The console shouldn't reimplement cycle_phase (weekday parity, holidays,
+    the mwf both/top-up split) in TypeScript — it renders exactly what the
+    executor's own calendar says. cycle_phase's None means "no trading today";
+    the payload says "idle" so the UI never branches on null-vs-string.
+    """
+    today = today_et()
+    upcoming = []
+    d = today
+    for _ in range(7):
+        d = next_trading_day(d)
+        upcoming.append({"date": d.isoformat(), "weekday": d.strftime("%a"),
+                         "phase": cycle_phase(d) or "idle"})
+    return {
+        "cadence": settings.cycle_cadence,
+        "today": {"date": today.isoformat(), "phase": cycle_phase(today) or "idle"},
+        "upcoming": upcoming,
+    }
+
+
+@router.get("/bots")
+def bots_status(admin: dict = Depends(require_admin)):
+    """The bot roster (power/accuracy/last picks) + whether their LLM is up.
+
+    The probe is a 2s GET against the Ollama base URL — on the live box that's
+    the SSH tunnel to Forge, so "unreachable" here almost always means the
+    tunnel dropped, not that the models broke. Kept out of /panel: the panel is
+    a DB-only fast path shared with the morning digest timer, and this row adds
+    a network wait.
+    """
+    return {"bots": bots.bots_view(), "llm": ollama.probe()}
 
 
 @router.get("/overview")

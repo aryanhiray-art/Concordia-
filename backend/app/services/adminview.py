@@ -92,6 +92,16 @@ def member_rows() -> list[dict]:
             "WHERE COALESCE(m.is_bot,0)=0 "
             "AND m.email NOT LIKE 'deleted-%@deleted.invalid' ORDER BY m.id"
         ).fetchall()
+        # Last-known broker account type per member ('cash' waits T+1 on
+        # settlement; 'limited_margin' redeploys same-day). Written by
+        # /me/margin-status when a member's wizard probes the broker — a kv
+        # read, so the panel stays DB-only. One LIKE scan instead of a kv_get
+        # per member; missing/empty (never probed) → null, not "".
+        acct_types = {
+            r["key"]: r["value"] for r in conn.execute(
+                "SELECT key, value FROM kv WHERE key LIKE 'acct_type:%'"
+            ).fetchall()
+        }
     out: list[dict] = []
     for r in rows:
         connected = bool(r["account_number"]) and r["rh_status"] == "connected"
@@ -123,6 +133,7 @@ def member_rows() -> list[dict]:
             "stake_type": r["alloc_type"] or "percent",
             "stake_value": stake_value,
             "voting_power": float(r["voting_power"] or 0),
+            "acct_type": acct_types.get(f"acct_type:{r['id']}") or None,
             "email_verified": email_verified,
             "exceptions": exceptions,
         })

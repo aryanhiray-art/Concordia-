@@ -172,7 +172,11 @@ export function PriceChart({
   // ── the box: plot rectangle + the bands that keep labels off the curve ────
   const delegated = typeof onHover === "function";   // parent draws the readout
   const HEAD = interactive && !delegated ? 18 : 0;   // hover readout band
-  const PAD_T = 12 + HEAD;
+  // 17, not 12: the high label's baseline sits at PAD_T - 5, so the pad must
+  // hold a full 10.5px line of text or the top of "$110.95" is shaved off at
+  // the viewBox edge (it was, on the account hero — the delegated case where
+  // HEAD contributes nothing).
+  const PAD_T = 17 + HEAD;
   const PAD_B = 22;                       // date band
   const PAD_L = 0;
   const hiTxt = fmtPrice(mx), loTxt = fmtPrice(mn);

@@ -1,0 +1,25 @@
+[Unit]
+Description=Concord member app — BETA channel (Next.js :3004)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=concord-web-beta
+Group=concord-web-beta
+WorkingDirectory=/opt/concord-web-beta
+Environment=NODE_ENV=production
+# Same build as the live app — beta.* branding comes from isBetaHost() at
+# runtime, not from a build flag. Only the backend it proxies to differs.
+Environment=FORGE_BACKEND=http://127.0.0.1:8782
+ExecStart=/opt/concord-web-beta/node_modules/.bin/next start -p 3004
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/concord-web-beta
+
+[Install]
+WantedBy=multi-user.target

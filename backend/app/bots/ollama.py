@@ -14,6 +14,22 @@ import requests
 from ..config import settings
 
 
+def probe(timeout: float = 2.0) -> dict:
+    """Cheap LLM reachability check for the admin console — GET / on the Ollama
+    server (it answers "Ollama is running" without loading a model, so this
+    never triggers a multi-second model load the way /api/chat would).
+
+    NEVER raises: the console must render "unreachable" as a status, not a 500 —
+    on the live box the endpoint is an SSH tunnel to Forge, and a dropped tunnel
+    is exactly the condition the owner opens this panel to diagnose.
+    """
+    try:
+        r = requests.get(settings.ollama_url, timeout=timeout)
+        return {"reachable": r.ok, "detail": f"HTTP {r.status_code} from {settings.ollama_url}"}
+    except requests.RequestException as e:
+        return {"reachable": False, "detail": f"{type(e).__name__}: {str(e)[:140]}"}
+
+
 def chat(model: str, system: str, user: str, temperature: float = 0.5) -> str:
     """One-shot chat completion against local Ollama. Returns the raw text.
 

@@ -79,6 +79,41 @@ def bot_members() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def bots_view() -> list[dict]:
+    """Per-bot console rows: power + accuracy + what each bot last voted for.
+
+    DB-only (the LLM probe is the route's job — a network call has no place in a
+    view builder other panels may reuse). last_vote_at comes from `votes` (the
+    canonical ballot record); last_picks from the bot's newest bot_picks session,
+    conviction-ordered — session ids are AUTOINCREMENT, so MAX(session_id) is the
+    most recent session the bot actually voted in.
+    """
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT m.id, m.display_name, s.voting_power, s.accuracy, "
+            "(SELECT MAX(v.created_at) FROM votes v WHERE v.member_id=m.id) AS last_vote_at "
+            "FROM members m LEFT JOIN member_settings s ON s.member_id=m.id "
+            "WHERE COALESCE(m.is_bot,0)=1 ORDER BY s.voting_power DESC, m.display_name"
+        ).fetchall()
+        picks = conn.execute(
+            "SELECT bp.member_id, bp.symbol FROM bot_picks bp "
+            "WHERE bp.session_id=(SELECT MAX(b2.session_id) FROM bot_picks b2 "
+            "                     WHERE b2.member_id=bp.member_id) "
+            "ORDER BY bp.member_id, bp.weight_pct DESC, bp.symbol"
+        ).fetchall()
+    by_member: dict[int, list[str]] = {}
+    for p in picks:
+        by_member.setdefault(p["member_id"], []).append(p["symbol"])
+    return [{
+        "id": r["id"],
+        "display_name": r["display_name"],
+        "voting_power": float(r["voting_power"] or 0),
+        "accuracy": float(r["accuracy"] or 0),
+        "last_vote_at": r["last_vote_at"],
+        "last_picks": by_member.get(r["id"], []),
+    } for r in rows]
+
+
 # ─── daily voting ────────────────────────────────────────────────────────────
 
 def _universe_with_prices() -> tuple[list[str], dict[str, float]]:

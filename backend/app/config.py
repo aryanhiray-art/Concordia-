@@ -197,12 +197,43 @@ class Settings:
     club_mirror_path: str = os.environ.get("CLUB_MIRROR_PATH", "")
 
     @property
+    def is_beta(self) -> bool:
+        # APP_ENV=beta = the beta.voteconcordia.com staging channel: the real
+        # code and real broker flows against its own database, but never real
+        # orders (see is_live below).
+        return self.app_env.strip().lower() == "beta"
+
+    @property
     def is_live(self) -> bool:
-        return self.execution_mode == "live" and not self.demo_mode
+        # Two hard locks sit in front of EXECUTION_MODE, at the single choke
+        # point every real-order path checks (will_place = is_live AND armed):
+        # demo_mode (the fake-broker sandbox) and app_env=beta (the staging
+        # channel holds real member tokens, so a mis-set EXECUTION_MODE=live in
+        # its .env — or an operator arming it — must still be incapable of
+        # spending real money). Neither lock can be overridden by any other knob.
+        return self.execution_mode == "live" and not self.demo_mode and not self.is_beta
 
     @property
     def is_prod(self) -> bool:
         return self.app_env.strip().lower() == "prod"
+
+    @property
+    def is_internet_facing(self) -> bool:
+        # Prod AND beta both sit on the public internet behind TLS with real
+        # member brokerage tokens in their vaults, so every secrets/transport
+        # hardening gate (insecure-defaults boot refusal, Secure cookies, the
+        # localhost CORS carve-out) must treat them identically. Only the
+        # trade lock (is_live) distinguishes them. Demo/dev stay relaxed:
+        # demo's vault is fake by construction and dev runs on plain HTTP.
+        return self.is_prod or self.is_beta
+
+    @property
+    def cookie_secure(self) -> bool:
+        # Secure attribute on the session cookie: on any internet-facing
+        # instance the cookie must never ride a cleartext request (beta's
+        # session guards real tokens just like prod's). Dev/demo sandboxes on
+        # http://localhost stay signin-able without TLS.
+        return self.is_internet_facing
 
     @property
     def fernet_keys(self) -> list[str]:
@@ -210,19 +241,21 @@ class Settings:
         return [k.strip() for k in self.fernet_keys_raw.split(",") if k.strip()]
 
 
-# Placeholder/insecure defaults that MUST NOT be used in production. Boot fails
-# closed (main.startup) if any of these is still in effect when app_env=prod.
+# Placeholder/insecure defaults that MUST NOT be used on an internet-facing
+# instance (prod OR beta — beta holds real member tokens too, and a default
+# SESSION_SECRET means anyone can mint an owner session and walk straight past
+# require_admin). Boot fails closed in main.startup.
 _INSECURE_SESSION_SECRETS = {"", "dev-insecure-session-secret", "change-me", "changeme"}
 _INSECURE_INVITE_CODES = {"", "concord", "change-me", "changeme"}
 
 
 def insecure_prod_config() -> list[str]:
-    """Names of critical secrets still at an insecure default while app_env=prod.
+    """Names of critical secrets still at an insecure default on prod/beta.
 
     Empty list = safe to boot. The Fernet key already fails closed in security._fernet;
     this covers the session secret (forgeable owner sessions) + the invite code.
     """
-    if not settings.is_prod:
+    if not settings.is_internet_facing:
         return []
     problems: list[str] = []
     if settings.session_secret.strip() in _INSECURE_SESSION_SECRETS:

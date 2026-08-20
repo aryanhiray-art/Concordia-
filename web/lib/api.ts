@@ -1,6 +1,6 @@
 "use client";
 
-import type { Member, SessionView, UniverseItem, ExecutionRow, PowerView, Account, HoldingsView, ApiKey, ResearchResult, PerfView, AdminPanel, ClubHistoryView, MyVotesView, StockDetail, StockHistory, StockRangeKey, StockSearchResult, EquityHistory, EquityRangeKey } from "./types";
+import type { Member, SessionView, UniverseItem, ExecutionRow, PowerView, Account, HoldingsView, ApiKey, ResearchResult, PerfView, AdminPanel, AdminMemberRow, ClubHistoryView, MyVotesView, StockDetail, StockHistory, StockRangeKey, StockSearchResult, EquityHistory, EquityRangeKey } from "./types";
 
 // Empty base = same-origin (Vercel rewrites /api + /oauth to the forge backend).
 // Local dev sets NEXT_PUBLIC_CONCORD_API=http://localhost:8780.
@@ -77,6 +77,136 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   }
   return res.status === 204 ? (undefined as T) : res.json();
 }
+
+// ── Admin console payload shapes (admin.voteconcordia.com only) ────────────
+// Colocated with their helpers instead of lib/types.ts on purpose: no
+// member-facing surface imports these, and the console reads every field
+// defensively — a web deploy can land before the backend that serves
+// /api/admin/schedule and /api/admin/bots, so panels must degrade, not crash.
+
+/** panel() member rows gained acct_type (kv `acct_type:{id}`); accuracy/P&L
+ *  are speculative extras. All optional so the console renders "—" against a
+ *  backend that predates them. voting_power has ALWAYS been in the payload
+ *  (adminview.member_rows) — lib/types.AdminMemberRow just never declared it
+ *  because the old console only read power via money.per_member. */
+export type AdminMemberRowPlus = AdminMemberRow & {
+  voting_power?: number | null;
+  acct_type?: string | null;
+  accuracy?: number | null;
+  pnl?: number | null;
+};
+
+/** GET /api/admin/schedule — the split-cycle calendar the executor honours.
+ *  "idle" is the backend's rendering of cycle_phase() returning None. */
+export type AdminPhase = "sell" | "buy" | "both" | "idle";
+export type AdminSchedule = {
+  cadence: string;
+  today: { date: string; phase: AdminPhase };
+  upcoming: { date: string; weekday: string; phase: AdminPhase }[];
+};
+
+/** GET /api/admin/bots — bot roster + a cheap LLM reachability probe.
+ *  accuracy = the last scored weekly return as a fraction (0.024 = +2.4%). */
+export type AdminBotRow = {
+  id: number;
+  display_name: string;
+  voting_power: number | null;
+  accuracy: number | null;
+  last_vote_at: number | null;
+  last_picks: string[];
+};
+export type AdminBots = {
+  bots: AdminBotRow[];
+  llm: { reachable: boolean; detail?: string | null };
+};
+
+/** One executions row (+ display_name where the query joins members). status
+ *  is kept open — deferrals ride inside `error` on skipped rows ("deferred —
+ *  beyond settled buying power") and new statuses must render, not fail to
+ *  compile. */
+export type AdminExecRow = {
+  member_id?: number;
+  display_name?: string;
+  symbol: string;
+  side?: string | null;
+  dollar_amount?: number | null;
+  status: string;
+  error?: string | null;
+};
+
+/** GET /api/admin/overview — the session + executions payload (the same one
+ *  the forge dashboard consumed via its proxy). Raw SQL rows, so SQLite 0/1
+ *  ints stand in for booleans. */
+export type AdminOverviewMember = {
+  id: number;
+  email: string | null;
+  display_name: string;
+  role: string;
+  is_bot?: number | null;
+  bot_strategy?: string | null;
+  bot_model?: string | null;
+  opted_in?: number | null;
+  voting_power?: number | null;
+  account_number?: string | null;
+  agentic_allowed?: number | null;
+  rh_status?: string | null;
+  power_delta?: number | null;
+};
+export type AdminOverview = {
+  armed: boolean;
+  halt: boolean;
+  execution_mode: string;
+  top_n: number;
+  total_voting_power: number;
+  bot_voting_power: number;
+  invite_code?: string | null;
+  owner_email?: string | null;
+  schedule?: { open?: string; close?: string; execute?: string; weekly_power?: string; cadence?: string };
+  members: AdminOverviewMember[];
+  session: SessionView | null;
+  executions: AdminExecRow[];
+};
+
+/** GET /api/admin/member/{id} — everything about one member. The live-broker
+ *  extras (portfolio/holdings) are best-effort: absent for bots and for any
+ *  member whose Robinhood read fails (rh_error says why). */
+export type AdminMemberDetail = {
+  member: {
+    id: number; email: string | null; display_name: string; role: string;
+    is_bot?: number | null; bot_strategy?: string | null; bot_model?: string | null;
+    settings?: {
+      opted_in?: number | null; voting_power?: number | null;
+      alloc_type?: string | null; alloc_value?: number | null;
+    } | null;
+    robinhood?: { status?: string | null; account_number?: string | null } | null;
+  };
+  power?: PowerView | null;
+  session_date?: string | null;
+  picks?: { symbol: string; weight: number }[];
+  bot_picks?: { symbol: string; weight_pct: number; entry_price?: number | null; thesis?: string | null }[];
+  bot_thesis?: string | null;
+  executions?: AdminExecRow[];
+  portfolio?: {
+    total_value: number | null; equity_value?: number | null;
+    cash?: number | null; buying_power: number | null;
+  } | null;
+  holdings?: {
+    symbol: string; quantity: number; avg_buy_price: number;
+    last: number | null; market_value: number; pnl: number | null;
+  }[];
+  rh_error?: string | null;
+};
+
+/** POST /api/admin/run/{phase} — the result is phase-shaped, so typed loose;
+ *  the console summarizes whatever orders/skips it finds. */
+export type AdminRunResult = {
+  mode?: string;
+  note?: string;
+  orders?: { symbol?: string; side?: string; status?: string; note?: string }[];
+  placed_total?: number;
+  skipped?: Record<string, number>;
+  [k: string]: unknown;
+};
 
 export const api = {
   base: BASE,
@@ -254,13 +384,34 @@ export const api = {
     req<ResearchResult>("/api/program/research-vote", {
       method: "POST", body: JSON.stringify({ dry_run: dry }),
     }),
-  // admin console (admin.voteconcordia.com) — read-only ops snapshot.
-  // Session-auth, owner/admin only; plain members get a 403 whose detail
-  // ("admin access required") surfaces through the normal ApiError path.
+  // admin console (admin.voteconcordia.com) — the ops surface. Session-auth,
+  // owner/admin only; plain members get a 403 whose detail ("admin access
+  // required") surfaces through the normal ApiError path. The console is now
+  // the primary ops surface (it replaced the forge-dashboard concordia page),
+  // so the owner/admin mutations live here too — every one is audited
+  // server-side, and the dangerous ones sit behind their own confirm
+  // affordances in components/admin/StatusBar.tsx.
   adminPanel: () => req<AdminPanel>("/api/admin/panel"),
-  // the console's ONLY mutation — arming lets real orders happen; audited server-side
+  adminOverview: () => req<AdminOverview>("/api/admin/overview"),
+  adminSchedule: () => req<AdminSchedule>("/api/admin/schedule"),
+  adminBots: () => req<AdminBots>("/api/admin/bots"),
+  adminMember: (id: number) => req<AdminMemberDetail>(`/api/admin/member/${id}`),
+  // arming lets real orders happen — the typed-ARM confirm lives in the UI
   adminArm: (armed: boolean) =>
     req<{ armed: boolean }>("/api/admin/arm", { method: "POST", body: JSON.stringify({ armed }) }),
-  // (owner/admin MUTATIONS stay off this app on purpose — arming real-money
-  // trading is a forge-dashboard/CLI action, never a web button here)
+  // halt + disarm in one shot — deliberately one click: stopping stays easy
+  adminKill: () => req<{ armed: boolean; halt: boolean }>("/api/admin/kill", { method: "POST" }),
+  // manual phase triggers — `execute` honours dry_run unless live+armed
+  adminRun: (phase: "open" | "close" | "execute" | "power" | "bots" | "reweight", dryRun = true) =>
+    req<AdminRunResult>(`/api/admin/run/${phase}?dry_run=${dryRun}`, { method: "POST" }),
+  // admin-mediated password recovery — the temp password is returned ONCE
+  adminResetPassword: (id: number) =>
+    req<{ ok: boolean; email: string; temp_password: string }>(
+      `/api/admin/member/${id}/reset-password`, { method: "POST" }),
+  // morning digest on demand — same builder the 08:00 ET timer uses
+  // (adminview.send_digest); printed=true means email is disabled and the
+  // body went to the server log instead.
+  adminSendDigest: () =>
+    req<{ subject: string; printed: boolean; sent: string[]; failed: string[] }>(
+      "/api/admin/digest", { method: "POST" }),
 };
