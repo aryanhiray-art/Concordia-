@@ -248,6 +248,29 @@ def connected_member_ids(opted_in_only: bool = True) -> list[int]:
         return [int(r["id"]) for r in conn.execute(sql + " ORDER BY m.id").fetchall()]
 
 
+def ensure_acct_type(mid: int) -> None:
+    """Backfill the kv `acct_type:{mid}` (cash/margin/limited_margin) when it is
+    MISSING — one get_accounts call, then cached forever. The member-side margin
+    probe keeps it fresh on changes; this exists so the admin console's ACCT
+    column never depends on a member happening to open their Account page
+    (Charlie's badge was blank for exactly that reason)."""
+    from ..db import kv_get, kv_set
+    from ..robinhood import vault
+    if kv_get(f"acct_type:{mid}"):
+        return
+    acct = vault.account_number_for(mid)
+    if not acct:
+        return
+    try:
+        client = vault.ensure_client(mid)
+        accounts = (client.get_accounts().get("data") or {}).get("accounts") or []
+        row = next((a for a in accounts if a.get("account_number") == acct), None)
+        if row and row.get("type"):
+            kv_set(f"acct_type:{mid}", row["type"])
+    except Exception:  # noqa: BLE001 — display metadata; next run retries
+        pass
+
+
 def refresh_all_connected(sleep_s: float = 1.0, opted_in_only: bool = True) -> dict:
     """Refresh every eligible member SEQUENTIALLY with a small gap between them —
     never a burst of parallel reads at the broker. Returns a summary for the job's
@@ -260,5 +283,6 @@ def refresh_all_connected(sleep_s: float = 1.0, opted_in_only: bool = True) -> d
         row = refresh(mid)
         if not row["ok"]:
             failed.append(mid)
+        ensure_acct_type(mid)
     return {"members": len(ids), "ok": len(ids) - len(failed), "failed": failed,
             "seconds": round(time.time() - started, 1)}
