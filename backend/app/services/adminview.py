@@ -82,10 +82,13 @@ def member_rows() -> list[dict]:
         rows = conn.execute(
             "SELECT m.id, m.email, m.display_name, m.role, m.email_verified_at, "
             "s.opted_in, s.alloc_type, s.alloc_value, s.voting_power, "
-            "a.account_number, a.agentic_allowed, a.status AS rh_status "
+            "s.accuracy, s.cycles_participated, "
+            "a.account_number, a.agentic_allowed, a.status AS rh_status, "
+            "snap.payload AS snap_payload "
             "FROM members m "
             "LEFT JOIN member_settings s ON s.member_id=m.id "
             "LEFT JOIN rh_accounts a ON a.member_id=m.id "
+            "LEFT JOIN account_snapshots snap ON snap.member_id=m.id "
             # self-service deletion ANONYMIZES rows in place (deleted-N@…) —
             # without this filter every departed member is a forever-exception
             # in the panel and the morning digest
@@ -134,10 +137,31 @@ def member_rows() -> list[dict]:
             "stake_value": stake_value,
             "voting_power": float(r["voting_power"] or 0),
             "acct_type": acct_types.get(f"acct_type:{r['id']}") or None,
+            # accuracy is REAL only once reputation has scored a cycle this
+            # member VOTED in — cycles=0 means "never cast a ballot", which the
+            # UI shows as —, not 0% (an unearned zero reads like a grade).
+            "accuracy": (float(r["accuracy"] or 0)
+                         if int(r["cycles_participated"] or 0) > 0 else None),
+            "cycles": int(r["cycles_participated"] or 0),
+            # club-slice unrealized P&L ($ + %), straight from the cached account
+            # snapshot the 10-min refresher maintains — the panel stays DB-only.
+            **_snap_pnl(r["snap_payload"]),
             "email_verified": email_verified,
             "exceptions": exceptions,
         })
     return out
+
+
+def _snap_pnl(payload_json) -> dict:
+    """{pnl, pnl_pct} from an account_snapshots.payload blob (nulls when the
+    member has no snapshot yet — the UI renders those as —)."""
+    try:
+        p = (json.loads(payload_json) or {}).get("pnl") or {}
+        if p.get("profit") is None or not (p.get("invested") or 0):
+            return {"pnl": None, "pnl_pct": None}
+        return {"pnl": p.get("profit"), "pnl_pct": p.get("profit_pct")}
+    except Exception:  # noqa: BLE001
+        return {"pnl": None, "pnl_pct": None}
 
 
 # ─── cycle: today's ballot + the last run that moved (or planned) orders ─────
@@ -235,7 +259,28 @@ def panel() -> dict:
         "cycle": cycle_view(),
         "money": money_view(members),
         "audit": audit_tail(),
+        "basket": standing_basket(),
     }
+
+
+def standing_basket() -> dict | None:
+    """The most recently DECIDED basket — the consensus the club is holding.
+
+    picks_json rows are [{symbol, name, votes, weight}] as stored at close.
+    None until the first close ever happens (fresh instance)."""
+    with db() as conn:
+        row = conn.execute(
+            "SELECT trade_date, picks_json FROM vote_sessions "
+            "WHERE picks_json IS NOT NULL AND picks_json != '[]' "
+            "ORDER BY trade_date DESC LIMIT 1"
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        picks = json.loads(row["picks_json"]) or []
+    except Exception:  # noqa: BLE001
+        return None
+    return {"trade_date": row["trade_date"], "picks": picks}
 
 
 # ─── the morning digest (email body shared with jobs/admin_digest.py) ────────

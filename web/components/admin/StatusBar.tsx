@@ -31,26 +31,25 @@ function ArmControl({ armed, isLive, onChanged }: { armed: boolean; isLive: bool
   }
 
   if (armed) {
+    // no sentence — the "armed" pill says it; the button is the control
     return (
-      <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-white/10 pt-4">
-        <span className="text-[12.5px] text-muted">
-          Trading is armed — the next eligible run places real orders.
-        </span>
-        <Button variant="danger" busy={busy} onClick={() => setArmed(false)}>Disarm</Button>
+      <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-white/10 pt-3">
+        <Button variant="danger" busy={busy} className="!px-3.5 !py-2 !text-[12.5px]"
+          onClick={() => setArmed(false)}>Disarm</Button>
         {err && <span className="text-[12.5px] text-red">⚠ {err}</span>}
       </div>
     );
   }
 
   return (
-    <div className="mt-4 border-t border-white/10 pt-4">
+    <div className="mt-3 border-t border-white/10 pt-3">
       {!confirming ? (
         <div className="flex flex-wrap items-center gap-3">
-          <span className="text-[12.5px] text-muted">
-            {isLive
-              ? "Mode is live — arming is the last gate before real orders."
-              : "Mode is dry_run — arming alone won't place orders until the mode is live."}
-          </span>
+          {!isLive && (
+            <span className="text-[12.5px] text-muted">
+              dry_run mode — arming alone places nothing
+            </span>
+          )}
           <Button variant="ok" onClick={() => { setConfirming(true); setErr(null); }}>
             Arm trading…
           </Button>
@@ -148,15 +147,15 @@ export function StatusBar({ state, cadence, onChanged }: {
 
   return (
     <div
-      className="glass glass-glow p-5 sm:p-6"
+      className="glass glass-glow p-4 sm:p-5"
       style={state.will_place_next
         ? { borderColor: "rgba(52, 227, 168, 0.4)", background: "rgba(52, 227, 168, 0.06)" }
         : { borderColor: "rgba(255, 107, 107, 0.4)", background: "rgba(255, 107, 107, 0.05)" }}
     >
       <div className="flex flex-wrap items-center gap-3">
-        <div className={`font-display text-[19px] font-bold sm:text-[21px] ${state.will_place_next ? "text-green" : "text-red"}`}>
+        <div className={`font-display text-[17px] font-bold sm:text-[19px] ${state.will_place_next ? "text-green" : "text-red"}`}>
           {state.will_place_next
-            ? "Next 09:31 ET run WILL place orders"
+            ? "Next run WILL place orders"
             : "Next run will NOT place orders"}
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -183,7 +182,7 @@ export function StatusBar({ state, cadence, onChanged }: {
           by construction (run/execute?dry_run=true simulates); the live
           execute stays disabled until the mode+arm+halt gate is actually
           open, so the button can't promise what the executor would refuse. */}
-      <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-white/10 pt-4">
+      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/10 pt-3">
         <Button variant="glass" busy={busy === "close"} className="!px-3.5 !py-2 !text-[12.5px]"
           onClick={closeVote}>Close vote</Button>
         <Button variant="glass" busy={busy === "dry"} className="!px-3.5 !py-2 !text-[12.5px]"
@@ -193,9 +192,6 @@ export function StatusBar({ state, cadence, onChanged }: {
         <span className="mx-1 hidden h-5 w-px bg-white/10 sm:block" aria-hidden />
         <Button variant="danger" busy={busy === "kill"} className="!px-3.5 !py-2 !text-[12.5px]"
           onClick={() => act("kill", () => api.adminKill(), "Kill")}>Kill</Button>
-        <span className="text-[11.5px] text-subtle">
-          real orders need live mode + armed · kill = halt + disarm
-        </span>
       </div>
 
       {result && <div className="mt-3 text-[12.5px] text-muted tnum">{result}</div>}

@@ -26,6 +26,7 @@ import type { AdminPanel } from "@/lib/types";
 import { Button, Card, Logo } from "./ui";
 import { OpsHeader, pageKeyFor } from "./admin/OpsHeader";
 import { OverviewPage } from "./admin/OverviewPage";
+import { BasketPage } from "./admin/BasketPage";
 import { CyclePanel } from "./admin/CyclePanel";
 import { MembersPanel } from "./admin/MembersPanel";
 import { MemberDrawer } from "./admin/MemberDrawer";
@@ -33,7 +34,6 @@ import { SessionPanel } from "./admin/SessionPanel";
 import { BotsPanel } from "./admin/BotsPanel";
 import { AuditTail } from "./admin/AuditTail";
 import { AccessCard } from "./admin/AccessCard";
-import { DigestCard } from "./admin/DigestCard";
 
 const POLL_MS = 60_000;
 
@@ -71,7 +71,7 @@ export function AdminDenied() {
 // ── the console ─────────────────────────────────────────────────────────────
 
 export function AdminConsole() {
-  const { member, logout } = useAuth();
+  const { logout } = useAuth();
   const pathname = usePathname();
   const [panel, setPanel] = useState<AdminPanel | null>(null);
   const [overview, setOverview] = useState<AdminOverview | null>(null);
@@ -158,6 +158,10 @@ export function AdminConsole() {
                 bots={bots} botsErr={botsErr} cadence={cadence} onChanged={refresh} />
             )}
 
+            {page === "basket" && (
+              <BasketPage panel={panel} overview={overview} overviewErr={overviewErr} />
+            )}
+
             {page === "members" && (
               <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr),320px]">
                 <MembersPanel
@@ -182,16 +186,7 @@ export function AdminConsole() {
               <BotsPanel bots={bots} err={botsErr} onOpen={setSelected} />
             )}
 
-            {page === "audit" && (
-              <div className="grid items-start gap-4 lg:grid-cols-[3fr,2fr]">
-                <AuditTail audit={panel.audit} />
-                <DigestCard />
-              </div>
-            )}
-
-            <p className="pt-2 text-center text-[11px] text-subtle">
-              ops console · signed in as {member?.email} · auto-refreshes every 60s
-            </p>
+            {page === "audit" && <AuditTail audit={panel.audit} />}
           </div>
         )}
       </main>

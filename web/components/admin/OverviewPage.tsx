@@ -27,13 +27,13 @@ function StatTile({ href, label, value, chip, sub, tone }: {
 }) {
   return (
     <AdminLink href={href}
-      className="glass glass-2 block rounded-[14px] px-4 py-3.5 transition hover:border-teal/40 hover:bg-white/[0.04]">
+      className="glass glass-2 block rounded-[14px] px-3.5 py-2.5 transition hover:border-teal/40 hover:bg-white/[0.04]">
       <div className="flex items-center justify-between gap-2">
         <span className="label">{label}</span>
         <span className="text-[12px] text-subtle" aria-hidden>→</span>
       </div>
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        <span className={`font-display text-[21px] font-bold leading-none tnum ${
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+        <span className={`font-display text-[18px] font-bold leading-none tnum ${
           tone === "ok" ? "text-green" : tone === "warn" ? "text-amber" : "text-ink"
         }`}>
           {value}

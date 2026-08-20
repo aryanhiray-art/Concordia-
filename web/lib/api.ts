@@ -93,7 +93,9 @@ export type AdminMemberRowPlus = AdminMemberRow & {
   voting_power?: number | null;
   acct_type?: string | null;
   accuracy?: number | null;
+  cycles?: number | null;
   pnl?: number | null;
+  pnl_pct?: number | null;
 };
 
 /** GET /api/admin/schedule — the split-cycle calendar the executor honours.

@@ -88,7 +88,14 @@ export function MembersPanel({ members, bots, botsErr, perf, onOpen }: {
                 <td className="py-2.5 pl-4"><AcctTypeBadge type={m.acct_type} /></td>
                 <td className="py-2.5">{m.opted_in ? "✓" : "—"}</td>
                 <td className={`py-2.5 text-right tnum ${m.pnl == null ? "text-subtle" : m.pnl >= 0 ? "text-green" : "text-red"}`}>
-                  {m.pnl == null ? "—" : money(m.pnl)}
+                  {m.pnl == null ? "—" : (
+                    <>
+                      {m.pnl >= 0 ? "+" : ""}{money(m.pnl)}
+                      {m.pnl_pct != null && (
+                        <span className="ml-1 text-[11px] opacity-75">{m.pnl_pct >= 0 ? "+" : ""}{m.pnl_pct.toFixed(1)}%</span>
+                      )}
+                    </>
+                  )}
                 </td>
                 <td className="py-2.5 pl-4">
                   {m.exceptions?.length ? (

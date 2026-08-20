@@ -15,13 +15,14 @@
 // 48+44+1 with the wrapped tab row below lg, 48+1 inline at lg+.
 
 import { Button, Logo } from "@/components/ui";
-import { AdminLink, EnvChip, OpsTag } from "./util";
+import { AdminLink, OpsTag } from "./util";
 
-export type AdminPageKey = "overview" | "members" | "cycle" | "bots" | "audit";
+export type AdminPageKey = "overview" | "basket" | "members" | "cycle" | "bots" | "audit";
 
 /** Route → page. Unknown paths render Overview (per the host contract). */
 export function pageKeyFor(pathname: string | null | undefined): AdminPageKey {
   switch (pathname) {
+    case "/basket": return "basket";
     case "/members": return "members";
     case "/cycle": return "cycle";
     case "/bots": return "bots";
@@ -32,6 +33,7 @@ export function pageKeyFor(pathname: string | null | undefined): AdminPageKey {
 
 const TABS: { key: AdminPageKey; href: string; label: string }[] = [
   { key: "overview", href: "/", label: "Overview" },
+  { key: "basket", href: "/basket", label: "Basket" },
   { key: "members", href: "/members", label: "Members" },
   { key: "cycle", href: "/cycle", label: "Cycle" },
   { key: "bots", href: "/bots", label: "Bots" },
@@ -49,7 +51,8 @@ export function OpsHeader({ page, updatedAt, busy, onRefresh, onLogout }: {
     <>
     <header className="fixed inset-x-0 top-0 z-50 border-b border-hair bg-[rgba(7,10,14,0.82)] backdrop-blur-xl">
       <div className="mx-auto flex w-[min(1180px,100%)] flex-wrap items-center px-4">
-        {/* brand cluster — same wordmark + OPS tag + env chip the landing wears */}
+        {/* brand cluster — wordmark + OPS tag (the env chip stays on the
+            sign-in landing only; in-console it was just another word) */}
         <AdminLink href="/" className="flex h-12 flex-none items-center gap-2">
           <Logo size={22} />
           {/* wordmark yields on phones (member-nav precedent) so brand +
@@ -57,7 +60,6 @@ export function OpsHeader({ page, updatedAt, busy, onRefresh, onLogout }: {
           <b className="hidden font-display text-[14px] font-bold tracking-tight text-[#8FD9C0] sm:block">concordia</b>
           <OpsTag />
         </AdminLink>
-        <EnvChip className="ml-2.5" />
 
         {/* page tabs — second row that scrolls sideways on narrow screens,
             inline on desktop; active tab gets the teal underline */}

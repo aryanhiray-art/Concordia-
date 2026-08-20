@@ -34,7 +34,7 @@ if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
 fi
 echo "→ deploying $(git rev-parse --short HEAD) to $HOST"
 
-tar czf - --exclude .git --exclude backend/.venv --exclude backend/demo.db \
+tar czf - --exclude .git --exclude backend/.venv --exclude backend/data --exclude backend/demo.db \
     --exclude web/node_modules --exclude web/.next . \
 | ssh "$HOST" "set -e
   tar xzf - -C /root/concordia
@@ -49,7 +49,7 @@ tar czf - --exclude .git --exclude backend/.venv --exclude backend/demo.db \
   fi
   if [ ${DO_BACKEND} -eq 1 ]; then
     # never sync .env or the database
-    rsync -a --exclude '.venv' --exclude 'concord.db*' --exclude '.env' \
+    rsync -a --exclude '.venv' --exclude 'data' --exclude 'concord.db*' --exclude '.env' \
       /root/concordia/backend/ /opt/concord/backend/
     chown -R concord:concord /opt/concord/backend
   fi
