@@ -453,6 +453,7 @@ export function CinematicOverview() {
               height={chartH}
               interactive={slide === 1}
               levels={false}
+              extremes={false}
               labelMode={labelMode}
               onHover={setHover}
               ariaLabel={`account value, ${fmtDateTime(series[0].t)} to ${fmtDateTime(series[series.length - 1].t)}`}

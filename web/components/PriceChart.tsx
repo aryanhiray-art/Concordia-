@@ -91,7 +91,7 @@ function linePath(pts: [number, number][]): string {
 
 export function PriceChart({
   points, height = 160, interactive = false, labelMode = "auto", onHover, ariaLabel,
-  levels = true,
+  levels = true, extremes = true,
 }: {
   points: StockPricePoint[];
   height?: number;
@@ -101,6 +101,10 @@ export function PriceChart({
    *  The hi/lo price labels and dot markers stay. Owner call for the account
    *  hero: just the line. */
   levels?: boolean;
+  /** false = no high/low price labels or their dot markers either — nothing
+   *  but the line and the date band. Owner call for the account hero (the
+   *  gutter $ figures read as clutter on the full-bleed stage). */
+  extremes?: boolean;
   /** Axis/readout label format. Default "auto" = infer from the series shape. */
   labelMode?: ChartLabelMode;
   /** Delegate the readout: when given, the hovered index is reported to the
@@ -296,7 +300,7 @@ export function PriceChart({
           strokeLinecap="round" strokeLinejoin="round" />
 
         {/* high / low markers + their gutter labels */}
-        {!flat && (
+        {extremes && !flat && (
           <>
             <circle cx={X(hiIdx)} cy={Y(mx)} r="2.5" fill={color} />
             <circle cx={X(loIdx)} cy={Y(mn)} r="2.5" fill={color} />
@@ -306,7 +310,7 @@ export function PriceChart({
               className="tnum" fill="rgba(255,255,255,0.52)" fontSize="10.5">{loTxt}</text>
           </>
         )}
-        {flat && (
+        {extremes && flat && (
           <text x={W - 6} y={PAD_T + plotH / 2 - 6} textAnchor="end"
             className="tnum" fill="rgba(255,255,255,0.52)" fontSize="10.5">{hiTxt}</text>
         )}
