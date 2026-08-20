@@ -97,7 +97,12 @@ class Settings:
     # 'mwf': Mon/Wed/Fri vote days run sell+buy in one session (limited-margin
     # members complete same-day via unsettled-funds buying power; cash members'
     # remainders defer) and Tue/Thu are top-up days for settled cash.
-    power_cadence: str = os.environ.get("POWER_CADENCE", "weekly").strip().lower()      # weekly|monthly
+    # 'weekly' (production): ONE cycle a week — Monday runs both legs (same
+    # margin/cash split as mwf), Tuesday is the deferred-cash top-up, Wed–Fri idle.
+    power_cadence: str = os.environ.get("POWER_CADENCE", "weekly").strip().lower()      # weekly|biweekly|monthly
+    # biweekly = every other Sunday, anchored here (must be a date the power
+    # timer actually fires on — a Sunday).
+    power_anchor: str = os.environ.get("POWER_ANCHOR", "2026-08-23").strip()
     cycle_anchor: str = os.environ.get("CYCLE_ANCHOR", "2026-06-23").strip()            # parity anchor; Tue 6/23 = first sell day
     cycle_start_date: str = os.environ.get("CYCLE_START_DATE", "2026-06-23").strip()    # cadence dormant before this (Mon 6/22 = fresh-start liquidation only)
 

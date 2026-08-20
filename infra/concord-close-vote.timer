@@ -2,7 +2,7 @@
 Description=Concord — close voting 1h before open (08:30 ET, weekdays); job is holiday-gated
 
 [Timer]
-OnCalendar=Mon-Fri 08:30 America/New_York
+OnCalendar=Mon-Fri 09:15 America/New_York
 Persistent=true
 
 [Install]

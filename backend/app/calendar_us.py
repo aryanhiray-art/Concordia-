@@ -130,9 +130,16 @@ def cycle_phase(d: _dt.date | None = None) -> str | None:
     if cad == "daily":
         return "both"
     if cad == "weekly":
+        # One cycle a week, traded on MONDAY (or the week's first trading day
+        # when Monday is a holiday). Same per-member split the mwf cadence
+        # proved out: the vote day runs BOTH legs in one session — limited-
+        # margin members complete same-day via unsettled-proceeds buying power
+        # (executor polls for the credit), cash members' remainders defer —
+        # and the NEXT trading day (Tuesday) is the top-up where deferred
+        # cash buys land with settled proceeds. Wed–Fri are idle.
         first = _first_trading_day_of_week(d)
         if d == first:
-            return "sell"
+            return "both"
         if d == next_trading_day(first):
             return "buy"
         return None
@@ -177,4 +184,12 @@ def is_power_day(d: _dt.date | None = None) -> bool:
     d = d or today_et()
     if settings.power_cadence == "monthly":
         return d.day <= 7   # the first occurrence of this weekday in the month
+    if settings.power_cadence == "biweekly":
+        # Every OTHER Sunday, anchored so the schedule is deterministic. A bad
+        # anchor falls back to weekly (more frequent = the safe failure mode).
+        try:
+            y, m, dd = (int(x) for x in settings.power_anchor.split("-"))
+            return ((d - _dt.date(y, m, dd)).days // 7) % 2 == 0
+        except Exception:  # noqa: BLE001
+            return True
     return True             # weekly
