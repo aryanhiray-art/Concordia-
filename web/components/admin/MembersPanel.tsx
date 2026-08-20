@@ -64,7 +64,10 @@ export function MembersPanel({ members, bots, botsErr, perf, onOpen }: {
               <th className={THR}>accuracy</th>
               <th className={`${TH} pl-4`}>acct</th>
               <th className={TH}>opt</th>
-              <th className={THR}>P&amp;L</th>
+              {/* "open": unrealized on CURRENT positions only — broker cost
+                  basis resets every rebalance, so this is not a lifetime
+                  return (the owner read it as one; see 08/20 exchange) */}
+              <th className={THR}>open P&amp;L</th>
               <th className={`${TH} pl-4`}>status</th>
             </tr>
           </thead>
