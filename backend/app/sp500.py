@@ -21,7 +21,9 @@ SP500: list[tuple[str, str]] = [
     ("APP", "AppLovin"), ("APTV", "Aptiv"), ("ACGL", "Arch Capital Group"), ("ADM", "Archer Daniels Midland"),
     ("ARES", "Ares Management"), ("ANET", "Arista Networks"), ("AJG", "Arthur J. Gallagher & Co."), ("AIZ", "Assurant"),
     ("T", "AT&T"), ("ATO", "Atmos Energy"), ("ADSK", "Autodesk"), ("ADP", "Automatic Data Processing"),
-    ("AZO", "AutoZone"), ("AVB", "AvalonBay Communities"), ("AVY", "Avery Dennison"), ("AXON", "Axon Enterprise"),
+    # AVB → VMRK 2026-08: AvalonBay renamed to Vivmark Residential, keeping its
+    # index slot (see services/renames.py for the ledger migration machinery)
+    ("AZO", "AutoZone"), ("VMRK", "Vivmark Residential"), ("AVY", "Avery Dennison"), ("AXON", "Axon Enterprise"),
     ("BKR", "Baker Hughes"), ("BALL", "Ball Corporation"), ("BAC", "Bank of America"), ("BAX", "Baxter International"),
     ("BDX", "Becton Dickinson"), ("BRK.B", "Berkshire Hathaway"), ("BBY", "Best Buy"), ("TECH", "Bio-Techne"),
     ("BIIB", "Biogen"), ("BLK", "BlackRock"), ("BX", "Blackstone Inc."), ("XYZ", "Block, Inc."),

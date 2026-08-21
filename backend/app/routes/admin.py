@@ -84,6 +84,28 @@ def schedule(admin: dict = Depends(require_admin)):
     }
 
 
+class RenameBody(BaseModel):
+    old: str
+    new: str
+    name: str | None = None
+
+
+@router.post("/rename-symbol")
+def rename_symbol(body: RenameBody, admin: dict = Depends(require_admin)):
+    """Owner-confirmed ticker-change repair (the AVB→VMRK machinery).
+
+    Renames the ledger's execution rows, trues each member's share count to the
+    live account with an append-only $0 adjustment, and swaps the universe row
+    so the new ticker is votable. The panel's `drift` list is what surfaces the
+    candidates; this is the one-click acceptance."""
+    from ..services import renames
+    try:
+        return renames.migrate(body.old, body.new, name=body.name,
+                               actor=f"admin:{admin['id']}")
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
 @router.get("/bots")
 def bots_status(admin: dict = Depends(require_admin)):
     """The bot roster (power/accuracy/last picks) + whether their LLM is up.

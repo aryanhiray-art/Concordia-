@@ -196,6 +196,11 @@ export type AdminPanel = {
     club_perf_cached?: unknown;
   };
   audit: { ts: number; actor: string; action: string; target?: string | null }[];
+  /** Latest decided basket (optional — older backends omit it). */
+  basket?: { trade_date: string; picks: { symbol: string; name?: string | null; votes?: number | null; weight?: number | null }[] } | null;
+  /** Probable ticker renames: a ledger phantom paired with an unledgered live
+   *  position on the same account(s). Rendered as a migrate control. */
+  drift?: { old: string; new: string; members: string[]; live_value: number }[];
 };
 
 // ── History split ──────────────────────────────────────────────────────────

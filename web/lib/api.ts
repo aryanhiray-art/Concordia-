@@ -403,6 +403,12 @@ export const api = {
     req<{ armed: boolean }>("/api/admin/arm", { method: "POST", body: JSON.stringify({ armed }) }),
   // halt + disarm in one shot — deliberately one click: stopping stays easy
   adminKill: () => req<{ armed: boolean; halt: boolean }>("/api/admin/kill", { method: "POST" }),
+  /** Ticker-change repair: rename ledger rows old→new, true share counts to the
+   *  account, swap the universe row. Surfaced by panel.drift; owner-confirmed. */
+  adminRenameSymbol: (old_: string, new_: string) =>
+    req<{ old: string; new: string; execution_rows: number }>(
+      "/api/admin/rename-symbol",
+      { method: "POST", body: JSON.stringify({ old: old_, new: new_ }) }),
   // manual phase triggers — `execute` honours dry_run unless live+armed
   adminRun: (phase: "open" | "close" | "execute" | "power" | "bots" | "reweight", dryRun = true) =>
     req<AdminRunResult>(`/api/admin/run/${phase}?dry_run=${dryRun}`, { method: "POST" }),

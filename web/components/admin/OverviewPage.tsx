@@ -6,9 +6,10 @@
 // ballot two-up, then the last five audit lines. Every tile renders sensibly
 // when its enrichment endpoint is missing (dim note, never blank).
 
-import type { AdminBots, AdminPhase, AdminSchedule } from "@/lib/api";
+import { useState } from "react";
+import { api, type AdminBots, type AdminPhase, type AdminSchedule } from "@/lib/api";
 import type { AdminPanel } from "@/lib/types";
-import { Countdown, Pill } from "@/components/ui";
+import { Button, Countdown, Pill } from "@/components/ui";
 import { fmtTradeDate } from "@/lib/format";
 import { StatusBar } from "./StatusBar";
 import { OpenBallotBody, ScheduleStrip } from "./CyclePanel";
@@ -79,6 +80,13 @@ export function OverviewPage({ panel, schedule, scheduleErr, bots, botsErr, cade
       {/* the verdict + every lever — the reason this host exists */}
       <StatusBar state={panel.state} cadence={cadence} inviteCode={inviteCode} onChanged={onChanged} />
 
+      {/* corporate-action drift: a ledger phantom paired with an unledgered
+          live position = probable ticker rename (the AVB→VMRK class of bug).
+          One click repairs the ledger; until then the position is unsellable. */}
+      {(panel.drift ?? []).map((d) => (
+        <DriftAlert key={`${d.old}-${d.new}`} d={d} onChanged={onChanged} />
+      ))}
+
       {/* stat tiles — each is a doorway into its page (2-up even on phones:
           they're small, and a 375px column of four full-width tiles is all
           scroll) */}
@@ -148,5 +156,43 @@ export function OverviewPage({ panel, schedule, scheduleErr, bots, botsErr, cade
         <AuditLines audit={panel.audit} limit={5} />
       </OpsCard>
     </>
+  );
+}
+
+// ── ticker-rename repair banner ─────────────────────────────────────────────
+function DriftAlert({ d, onChanged }: {
+  d: { old: string; new: string; members: string[]; live_value: number };
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function migrate() {
+    if (!window.confirm(
+      `Migrate the club ledger ${d.old} → ${d.new}?\n\n` +
+      `Renames the execution history, trues share counts to each account, and makes ` +
+      `${d.new} votable. The position becomes sellable again at the next rebalance.`
+    )) return;
+    setBusy(true); setErr(null);
+    try {
+      await api.adminRenameSymbol(d.old, d.new);
+      onChanged();
+    } catch (e: any) {
+      setErr(e?.message || "migration failed");
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-[14px] border border-amber/30 bg-amber/[0.07] px-4 py-2.5 text-[12.5px] text-amber">
+      <span>
+        ticker change detected: <b className="font-mono">{d.old}</b> → <b className="font-mono">{d.new}</b>
+        {" "}· {d.members.join(", ")} · ${d.live_value.toFixed(2)} unsellable until migrated
+      </span>
+      <Button variant="glass" busy={busy} onClick={migrate}
+        className="!ml-auto !px-3 !py-1.5 !text-[12px]">
+        Migrate ledger
+      </Button>
+      {err && <span className="text-red">⚠ {err}</span>}
+    </div>
   );
 }

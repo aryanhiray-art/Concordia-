@@ -260,7 +260,18 @@ def panel() -> dict:
         "money": money_view(members),
         "audit": audit_tail(),
         "basket": standing_basket(),
+        # probable ticker renames (ledger phantom paired with an unledgered
+        # account position) — the console renders a migrate control per pair
+        "drift": _drift_safe(),
     }
+
+
+def _drift_safe() -> list[dict]:
+    from . import renames
+    try:
+        return renames.detect()
+    except Exception:  # noqa: BLE001 — detection must never break the panel
+        return []
 
 
 def standing_basket() -> dict | None:
