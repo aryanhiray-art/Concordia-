@@ -354,11 +354,13 @@ body { background: transparent; }
 .cnav-tabs { display: flex; gap: 3px; }
 .ctab { font: 500 13px/1 var(--font-inter), sans-serif; color: var(--muted); padding: 8px 11px; border-radius: 9px; transition: color .2s, background .2s; position: relative; cursor: pointer; white-space: nowrap; }
 .ctab:hover { color: var(--ink); background: rgba(255,255,255,0.04); }
-/* No default blue focus box on the nav (owner report: SPA route changes leave
-   the clicked tab focused and Chrome draws its UA ring). Keyboard focus stays
-   visible via the hover treatment instead of an outline. */
-.cnav a:focus, .cnav button:focus { outline: none; }
-.cnav a:focus-visible, .cnav button:focus-visible { outline: none; background: rgba(255,255,255,0.06); color: var(--ink); }
+/* No default blue focus box ANYWHERE (owner call, after it surfaced on the
+   nav and again on the admin tabs): SPA clicks leave the pressed control
+   focused and Chrome draws its UA ring on it. Links and buttons drop the
+   outline app-wide; keyboard focus keeps a subtle glass highlight instead.
+   Text inputs are untouched — they carry their own :focus border styles. */
+a:focus, button:focus, a:focus-visible, button:focus-visible { outline: none; }
+a:focus-visible, button:focus-visible { background: rgba(255,255,255,0.06); }
 .ctab.on { color: var(--ink); font-weight: 600; }
 .ctab.on::after { content: ""; position: absolute; left: 11px; right: 11px; bottom: -9px; height: 2px; border-radius: 2px; background: linear-gradient(90deg, var(--teal), var(--teal-deep)); box-shadow: 0 0 10px rgba(45,212,191,0.6); }
 
