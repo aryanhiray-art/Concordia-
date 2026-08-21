@@ -235,10 +235,31 @@ export function AuthGate({ onAuthed, notice }: { onAuthed: (m: Member) => void; 
     }
   }
 
+  // Google on the ops door signs in EXISTING accounts only — no invite, no
+  // consent step. A Google email with no Concordia account gets pointed at the
+  // member site instead of a signup flow this door deliberately doesn't have.
+  // (Works once admin.voteconcordia.com is an authorized JS origin on the
+  // OAuth client; until then GIS refuses to render/verify on this host.)
+  async function adminGoogle(credential: string) {
+    setErr(null); setBusy(true);
+    try {
+      const res = await api.googleLogin(credential);
+      setToken(res.token);
+      onAuthed(res.member);
+    } catch (e: any) {
+      const msg = String(e?.message || "Google sign-in failed");
+      setErr(/invite|agreement/i.test(msg)
+        ? "no Concordia account for that Google email — members join at voteconcordia.com"
+        : msg);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   // ── Ops console sign-in: deliberately unlike the club's front door ──
-  // No signup tab, no invite field, no brand story, no Google (parked until
-  // the admin origin is whitelisted on the GIS client — see the member-card
-  // gate below). One wide card, two zones split by a hairline: an identity
+  // No signup tab, no invite field, no brand story. Google IS offered (owner
+  // ask) but only as a login for existing accounts — adminGoogle above.
+  // One wide card, two zones split by a hairline: an identity
   // rail that says WHICH door this is (wordmark + OPS tag + PROD/LOCAL chip),
   // then the form. A member who lands here by typo gets pointed home instead
   // of a confusing invite prompt.
@@ -296,6 +317,16 @@ export function AuthGate({ onAuthed, notice }: { onAuthed: (m: Member) => void; 
                 disabled={!email.trim() || !password}>
                 Log in
               </Button>
+              {googleEnabled && (
+                <>
+                  <div className="flex items-center gap-3 py-0.5" aria-hidden>
+                    <span className="h-px flex-1 bg-white/10" />
+                    <span className="text-[10.5px] uppercase tracking-wider text-subtle">or</span>
+                    <span className="h-px flex-1 bg-white/10" />
+                  </div>
+                  <GoogleButton onCredential={adminGoogle} />
+                </>
+              )}
             </form>
           </div>
         </div>

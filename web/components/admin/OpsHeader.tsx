@@ -50,7 +50,7 @@ export function OpsHeader({ page, updatedAt, busy, onRefresh, onLogout }: {
   return (
     <>
     <header className="fixed inset-x-0 top-0 z-50 border-b border-hair bg-[rgba(7,10,14,0.82)] backdrop-blur-xl">
-      <div className="mx-auto flex w-[min(1180px,100%)] flex-wrap items-center px-4">
+      <div className="flex w-full flex-wrap items-center px-4 sm:px-6">
         {/* brand cluster — wordmark + OPS tag (the env chip stays on the
             sign-in landing only; in-console it was just another word) */}
         <AdminLink href="/" className="flex h-11 flex-none items-center gap-2">

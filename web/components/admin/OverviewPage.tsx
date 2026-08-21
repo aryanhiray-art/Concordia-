@@ -57,13 +57,14 @@ function nextRun(schedule: AdminSchedule | null):
 
 // ── the page ────────────────────────────────────────────────────────────────
 
-export function OverviewPage({ panel, schedule, scheduleErr, bots, botsErr, cadence, onChanged }: {
+export function OverviewPage({ panel, schedule, scheduleErr, bots, botsErr, cadence, inviteCode, onChanged }: {
   panel: AdminPanel;
   schedule: AdminSchedule | null;
   scheduleErr: string | null;
   bots: AdminBots | null;
   botsErr: string | null;
   cadence: string | null;
+  inviteCode?: string | null;
   onChanged: () => void;
 }) {
   const members = panel.members;
@@ -76,7 +77,7 @@ export function OverviewPage({ panel, schedule, scheduleErr, bots, botsErr, cade
   return (
     <>
       {/* the verdict + every lever — the reason this host exists */}
-      <StatusBar state={panel.state} cadence={cadence} onChanged={onChanged} />
+      <StatusBar state={panel.state} cadence={cadence} inviteCode={inviteCode} onChanged={onChanged} />
 
       {/* stat tiles — each is a doorway into its page (2-up even on phones:
           they're small, and a 375px column of four full-width tiles is all

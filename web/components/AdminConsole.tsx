@@ -140,7 +140,8 @@ export function AdminConsole() {
       <OpsHeader page={page} updatedAt={updatedAt} busy={busy}
         onRefresh={refresh} onLogout={logout} />
 
-      <main className="mx-auto w-[min(1180px,100%)] px-4 pt-3.5">
+      {/* full-bleed (owner call): the ops console uses the whole viewport */}
+      <main className="w-full px-4 pt-3.5 sm:px-6">
         {err && (
           <div className="mb-3 flex items-center gap-3 rounded-[12px] border border-red/30 bg-red/[0.08] px-3.5 py-2 text-[12.5px] text-red">
             <span>⚠ {err}{panel ? " — showing last good data" : ""}</span>
@@ -155,7 +156,8 @@ export function AdminConsole() {
           <div key={page} className="space-y-3">
             {page === "overview" && (
               <OverviewPage panel={panel} schedule={schedule} scheduleErr={scheduleErr}
-                bots={bots} botsErr={botsErr} cadence={cadence} onChanged={refresh} />
+                bots={bots} botsErr={botsErr} cadence={cadence}
+                inviteCode={overview?.invite_code ?? null} onChanged={refresh} />
             )}
 
             {page === "basket" && (

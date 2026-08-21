@@ -107,14 +107,31 @@ function summarizeRun(r: AdminRunResult): string {
 }
 
 // ── the bar ─────────────────────────────────────────────────────────────────
-export function StatusBar({ state, cadence, onChanged }: {
+export function StatusBar({ state, cadence, inviteCode, onChanged }: {
   state: AdminPanel["state"];
   cadence: string | null;
+  /** club invite code — rendered as a click-to-copy chip (owner: on Overview too) */
+  inviteCode?: string | null;
   onChanged: () => void;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  async function copyInvite() {
+    if (!inviteCode) return;
+    try { await navigator.clipboard.writeText(inviteCode); setCopied(true); }
+    catch {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = inviteCode; ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.select();
+        document.execCommand("copy"); ta.remove(); setCopied(true);
+      } catch { /* leave chip as-is — /members has the fallback card */ }
+    }
+    setTimeout(() => setCopied(false), 1500);
+  }
 
   async function act(key: string, fn: () => Promise<AdminRunResult | Record<string, unknown>>, label: string) {
     setBusy(key); setErr(null); setResult(null);
@@ -163,6 +180,11 @@ export function StatusBar({ state, cadence, onChanged }: {
           <Pill tone={state.armed ? "ok" : "warn"}>{state.armed ? "armed" : "disarmed"}</Pill>
           {state.halt && <Pill tone="danger">HALT</Pill>}
           {cadence && <Pill tone="neutral">cadence <b>{cadence}</b></Pill>}
+          {inviteCode && (
+            <button onClick={copyInvite} title="Copy invite code" className="pill pill-teal">
+              invite <b className="font-mono">{copied ? "copied ✓" : inviteCode}</b>
+            </button>
+          )}
         </div>
       </div>
 

@@ -15,6 +15,15 @@ const config: Config = {
         green: "#34E3A8",
         red: "#FF6B6B",
         amber: "#F5C451",
+        // was MISSING: every `border-hair` in the app silently fell back to
+        // preflight's #e5e7eb — a near-WHITE 1px line on a near-black page
+        // (the owner's "white line" under the ops header, bright table rules).
+        hair: "rgba(255,255,255,0.1)",
+      },
+      // and make an unqualified `border` default to the same hairline, so a
+      // future missing color class fails faint, not white
+      borderColor: {
+        DEFAULT: "rgba(255,255,255,0.1)",
       },
       fontFamily: {
         sans: ["var(--font-inter)", "system-ui", "sans-serif"],
