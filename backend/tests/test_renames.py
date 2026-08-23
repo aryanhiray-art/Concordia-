@@ -122,3 +122,55 @@ def test_ambiguous_members_do_not_pair():
         {"symbol": "MYSTERY2", "quantity": 0.3, "value": 7.0, "pnl": 0.0},
     ])
     assert not any(p["old"] == "GONE1" for p in renames.detect())
+
+
+def test_value_match_disambiguates_among_personal_positions():
+    """v2: the owner's account holds personal positions alongside the renamed
+    one — the phantom must pair with the stray whose value matches the club's
+    net dollars in, not fail on ambiguity (v1 did, and the incident was only
+    visible via a member with a clean account)."""
+    sid = _session()
+    m = _member("rename-owner@x.test")
+    _buy(sid, m, "GONE2", qty=0.05, usd=5.00)
+    _snapshot(m, [
+        {"symbol": "FOUND2", "quantity": 0.075, "value": 4.90, "pnl": 0.0},   # fits 0.5–2× of $5
+        {"symbol": "PERSNL", "quantity": 1.0, "value": 60.0, "pnl": 0.0},     # way outside the band
+    ])
+    pairs = renames.detect()
+    hit = next(p for p in pairs if p["old"] == "GONE2")
+    assert hit["new"] == "FOUND2"
+
+
+def test_two_plausible_strays_refuse_to_pair():
+    """Two strays inside the value band = genuinely ambiguous — guess nothing."""
+    sid = _session()
+    m = _member("rename-ambig2@x.test")
+    _buy(sid, m, "GONE3", qty=0.05, usd=5.00)
+    _snapshot(m, [
+        {"symbol": "MAYBE1", "quantity": 0.07, "value": 4.80, "pnl": 0.0},
+        {"symbol": "MAYBE2", "quantity": 0.08, "value": 5.20, "pnl": 0.0},
+    ])
+    assert not any(p["old"] == "GONE3" for p in renames.detect())
+
+
+def test_check_and_alert_fires_once_per_pair(capsys):
+    """The refresher-path watch: first sighting audits + announces (stdout when
+    email is off), repeats stay quiet, and a migrated pair clears its dedup."""
+    from app.db import db as _db, kv_get
+
+    found = renames.check_and_alert()
+    assert any(p["old"] == "GONE2" for p in found)
+    out1 = capsys.readouterr().out
+    assert "GONE2" in out1 and "FOUND2" in out1
+    assert kv_get("rename_alerted:GONE2>FOUND2")
+    with _db() as conn:
+        row = conn.execute("SELECT 1 FROM audit_log WHERE action='rename_detected' "
+                           "AND target='GONE2->FOUND2'").fetchone()
+    assert row is not None
+
+    renames.check_and_alert()
+    assert "GONE2" not in capsys.readouterr().out, "second sighting must not re-announce"
+
+    renames.migrate("GONE2", "FOUND2")
+    renames.check_and_alert()   # pair resolved → dedup key cleared for any future re-emergence
+    assert not kv_get("rename_alerted:GONE2>FOUND2")

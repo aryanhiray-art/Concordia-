@@ -45,6 +45,18 @@ def main() -> int:
               f"in {res['seconds']}s"
               + (f" — failed: {res['failed']}" if res["failed"] else ""))
 
+        # Corporate-action watch: the snapshots just refreshed are exactly what
+        # rename detection reads, so this is the earliest moment a ticker
+        # change (AVB→VMRK, 2026-08) becomes visible. Alerts once per pair.
+        try:
+            from app.services import renames
+            drift = renames.check_and_alert()
+            if drift:
+                print(f"[refresh_accounts] possible ticker rename(s): "
+                      + ", ".join(f"{d['old']}->{d['new']}" for d in drift))
+        except Exception:  # noqa: BLE001 — the watch must never break the refresher
+            traceback.print_exc()
+
         # Retention: every point for the last equity_history.FINE_WINDOW_DAYS
         # days, one per day before that (see the policy comment in that module).
         try:

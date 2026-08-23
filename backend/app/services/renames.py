@@ -46,13 +46,48 @@ def _live_holdings(conn, member_id: int) -> dict[str, dict]:
         return {}
 
 
-def detect() -> list[dict]:
-    """[{old, new, members: [names], live_value}] — probable ticker renames.
+def _net_invested(conn, member_id: int, symbol: str) -> float:
+    """Net club dollars into a symbol (buys − sells) — the phantom's expected
+    value, used to pick the right stray when an account has several."""
+    row = conn.execute(
+        "SELECT COALESCE(SUM(CASE WHEN side='sell' THEN -COALESCE(dollar_amount,0) "
+        "ELSE COALESCE(dollar_amount,0) END), 0) v "
+        "FROM executions WHERE member_id=? AND symbol=? AND status='placed'",
+        (member_id, symbol)).fetchone()
+    return float(row["v"] or 0)
 
-    Only unambiguous per-member pairs count (exactly one ledger phantom AND
-    exactly one unledgered position), so a member's personal stock picks never
-    pair with an unrelated phantom.
+
+def _pair_for_member(conn, mid: int, phantoms: list[str],
+                     strays: dict[str, float]) -> list[tuple[str, str]]:
+    """Bijective phantom↔stray matches for ONE member.
+
+    The trivial case (one of each) pairs directly. With several strays — the
+    common case for an owner who also holds personal positions — a phantom
+    pairs with the ONE stray whose live value sits within a generous market-
+    drift band (0.5×–2×) of the club's net dollars into the phantom; if zero
+    or several strays fit, no pair (ambiguity must fail silent, never guess).
+    v2 of the detector: v1 required exactly-one-of-each, which meant the
+    AVB→VMRK incident was invisible on the owner's own account and only
+    surfaced via a member with a clean account.
     """
+    out: list[tuple[str, str]] = []
+    if len(phantoms) == 1 and len(strays) == 1:
+        return [(phantoms[0], next(iter(strays)))]
+    claimed: set[str] = set()
+    for x in phantoms:
+        expect = _net_invested(conn, mid, x)
+        if expect <= _DUST_USD:
+            continue
+        fits = [s for s, v in strays.items()
+                if s not in claimed and 0.5 * expect <= v <= 2.0 * expect]
+        if len(fits) == 1:
+            out.append((x, fits[0]))
+            claimed.add(fits[0])
+    return out
+
+
+def detect() -> list[dict]:
+    """[{old, new, members: [names], live_value}] — probable ticker renames."""
     with db() as conn:
         members = conn.execute(
             "SELECT m.id, m.display_name FROM members m "
@@ -65,18 +100,63 @@ def detect() -> list[dict]:
                 continue
             ledger = {s: q for s, q in positions.club_shares(m["id"]).items() if q > _DUST_SH}
             phantoms = [s for s in ledger if s not in live]
-            strays = [s for s, h in live.items()
-                      if s not in ledger and float(h.get("value") or 0) > _DUST_USD]
-            if len(phantoms) == 1 and len(strays) == 1:
-                key = (phantoms[0], strays[0])
-                agg = pairs.setdefault(key, {"old": key[0], "new": key[1],
-                                             "members": [], "live_value": 0.0})
+            strays = {s: float(h.get("value") or 0) for s, h in live.items()
+                      if s not in ledger and float(h.get("value") or 0) > _DUST_USD}
+            if not phantoms or not strays:
+                continue
+            for old, new in _pair_for_member(conn, m["id"], phantoms, strays):
+                agg = pairs.setdefault((old, new), {"old": old, "new": new,
+                                                    "members": [], "live_value": 0.0})
                 agg["members"].append(m["display_name"])
-                agg["live_value"] += float(live[key[1]].get("value") or 0)
+                agg["live_value"] += strays[new]
     out = sorted(pairs.values(), key=lambda p: -len(p["members"]))
     for p in out:
         p["live_value"] = round(p["live_value"], 2)
     return out
+
+
+def check_and_alert() -> list[dict]:
+    """Scheduled-path detection (rides the 10-min account refresher): audit +
+    email the owner/admins ONCE per newly-seen pair, so a ticker change is
+    announced within minutes of the broker converting the shares — not
+    whenever someone happens to open the console. kv-deduped; a pair alerts
+    again only if it disappears (migrated) and later re-emerges."""
+    from ..config import settings
+    from ..db import kv_get, kv_set
+    from . import adminview, mailer
+
+    found = detect()
+    seen_keys = {f"rename_alerted:{p['old']}>{p['new']}" for p in found}
+    for p in found:
+        key = f"rename_alerted:{p['old']}>{p['new']}"
+        if kv_get(key):
+            continue
+        kv_set(key, str(int(time.time())))
+        audit("system", "rename_detected", f"{p['old']}->{p['new']}",
+              {"members": p["members"], "live_value": p["live_value"]})
+        subject = f"Concordia: ticker change detected — {p['old']} → {p['new']}"
+        body = (f"{p['old']} looks renamed to {p['new']} "
+                f"(held by {', '.join(p['members'])}, ${p['live_value']:.2f}).\n\n"
+                f"The club ledger still tracks {p['old']}, so this position is "
+                f"unsellable until migrated. One click on the admin console's "
+                f"Overview banner repairs it (or POST /api/admin/rename-symbol).")
+        if settings.email_enabled:
+            for r in adminview.digest_recipients():
+                try:
+                    mailer.send(r["email"], subject,
+                                f"<pre style=\"font-family:monospace\">{body}</pre>", body)
+                except Exception:  # noqa: BLE001 — alerting must never break the refresher
+                    pass
+        else:
+            print(f"[renames] {subject}\n{body}", flush=True)
+    # a migrated/vanished pair may alert again if it ever re-appears
+    with db() as conn:
+        stale = conn.execute(
+            "SELECT key FROM kv WHERE key LIKE 'rename_alerted:%'").fetchall()
+    for row in stale:
+        if row["key"] not in seen_keys:
+            kv_set(row["key"], "")
+    return found
 
 
 def migrate(old: str, new: str, name: str | None = None, actor: str = "admin") -> dict:
