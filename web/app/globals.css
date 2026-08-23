@@ -52,6 +52,24 @@ body { background: transparent; }
     radial-gradient(820px 600px at 108vw 31vh, rgba(56, 134, 221, 0.12), transparent 60%),
     var(--bg);
 }
+/* top wash: the radial glows centre above the screen and are nearly gone by
+   y=0, so phones showed a flat-black band at the very top (and iOS Safari
+   extends that flat colour into its browser chrome — the "black bar"). A soft
+   teal wash pinned across the viewport's top edge (the element starts 35vh
+   above it) carries the tint to y=0 and through the overscroll bounce. */
+.bgfx::before {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  height: calc(35vh + 340px);
+  background: linear-gradient(180deg,
+    rgba(45, 212, 191, 0.10) 0,
+    rgba(45, 212, 191, 0.10) 35vh,
+    rgba(45, 212, 191, 0.045) calc(35vh + 150px),
+    transparent 100%);
+  pointer-events: none;
+}
+
 /* fine film-grain: desaturated feTurbulence tile (stitched, 180px — no visible
    repeat) blended at whisper opacity. Behind everything at z -2, so the glass
    cards' backdrop-blur wipes it clean off their surfaces. */
@@ -201,7 +219,10 @@ body { background: transparent; }
 /* ── Living background (slow aurora drift) ──────────────────────────────── */
 .aurora { position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
 .aurora::before, .aurora::after {
-  content: ""; position: absolute; width: 48vw; height: 48vw; border-radius: 50%;
+  /* size FLOOR: 48vw is 180px on a phone — the blurred orbs shrank into dots
+     and drifted off the top edge, leaving a raw black band up there (owner's
+     mobile report). Desktop keeps its vw scale; phones get real coverage. */
+  content: ""; position: absolute; width: max(48vw, 460px); height: max(48vw, 460px); border-radius: 50%;
   filter: blur(90px); opacity: 0.45;
 }
 .aurora::before {

@@ -125,13 +125,35 @@ export function AdminConsole() {
     load(false);
     const id = setInterval(() => load(false), POLL_MS);
     // coming back to the tab after a while = look again (inFlight dedupes)
-    const onFocus = () => load(false);
+    const onFocus = () => { load(false); void checkForNewBuild(); };
     window.addEventListener("focus", onFocus);
     return () => {
       clearInterval(id);
       window.removeEventListener("focus", onFocus);
     };
   }, [load]);
+
+  // ── stale-bundle self-heal ────────────────────────────────────────────────
+  // The console polls DATA forever but never reloads CODE, so a tab left open
+  // across a deploy runs yesterday's UI indefinitely (the owner hit exactly
+  // this: "i dont see the updated admin ui"). On tab FOCUS (never mid-use) we
+  // refetch the page shell and compare its Next chunk references with the ones
+  // this tab booted from — any difference means a new build is being served,
+  // and reloading right as the operator returns is the least disruptive moment.
+  const bootChunks = useRef<string | null>(null);
+  const checkForNewBuild = useCallback(async () => {
+    try {
+      const html = await (await fetch("/", { cache: "no-store" })).text();
+      const chunks = (html.match(/\/_next\/static\/[^"']+\.js/g) || []).sort().join("|");
+      if (!chunks) return;
+      if (bootChunks.current === null) {
+        bootChunks.current = chunks;
+      } else if (bootChunks.current !== chunks) {
+        window.location.reload();
+      }
+    } catch { /* offline blip — the data poll's error banner covers it */ }
+  }, []);
+  useEffect(() => { void checkForNewBuild(); }, [checkForNewBuild]);
 
   const refresh = useCallback(() => load(true), [load]);
   const page = pageKeyFor(pathname);
