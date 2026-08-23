@@ -75,6 +75,12 @@ def test_buy_phase_refuses_the_stale_session_without_placing(monkeypatch):
 
     import app.calendar_us as cal
     monkeypatch.setattr(cal, "cycle_phase", lambda *_a, **_k: "buy")
+    # Pin the clock inside the execute window: the missed-window guard (G1)
+    # stands scheduled runs down after 15:45 ET, and THIS test is about the
+    # stale-basket refusal — it must not depend on when the suite runs.
+    today = cal.today_et()
+    monkeypatch.setattr(cal, "now_et", lambda: dt.datetime(
+        today.year, today.month, today.day, 10, 30, tzinfo=cal.ET))
 
     called = {"run": False}
 

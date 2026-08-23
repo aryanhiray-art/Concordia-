@@ -3,7 +3,11 @@ Description=Concord — execute at the open (09:31 ET, weekdays); job is holiday
 
 [Timer]
 OnCalendar=Mon-Fri 10:15 America/New_York
-Persistent=false
+# Persistent=true: a reboot spanning Mon 10:15 must NOT silently skip the
+# week's trade — the missed fire re-runs on boot. The executor itself refuses
+# scheduled fires past EXECUTE_CATCHUP_UNTIL (15:45 ET), so a multi-day outage
+# can never trade a stale morning consensus into the close.
+Persistent=true
 
 [Install]
 WantedBy=timers.target

@@ -679,6 +679,9 @@ def test_both_day_refreshes_buying_power_after_sells(monkeypatch):
 
     prev_mode = settings.execution_mode
     object.__setattr__(settings, "execution_mode", "live")
+    # single-name test basket: waive the thin-basket floor (G2) — this test is
+    # about buying-power mechanics, not basket breadth (conftest restores)
+    object.__setattr__(settings, "min_basket_size", 1)
     set_armed(True)
     try:
         summary = executor.run(closed, force_dry_run=False, phase="both")
@@ -761,6 +764,9 @@ def test_both_day_polls_past_slow_proceeds_credit(monkeypatch):
 
     prev_mode = settings.execution_mode
     object.__setattr__(settings, "execution_mode", "live")
+    # single-name test basket: waive the thin-basket floor (G2) — this test is
+    # about buying-power mechanics, not basket breadth (conftest restores)
+    object.__setattr__(settings, "min_basket_size", 1)
     set_armed(True)
     try:
         summary = executor.run(closed, force_dry_run=False, phase="both")
@@ -794,6 +800,9 @@ def test_both_day_cash_account_keeps_single_quick_look(monkeypatch):
 
     prev_mode = settings.execution_mode
     object.__setattr__(settings, "execution_mode", "live")
+    # single-name test basket: waive the thin-basket floor (G2) — this test is
+    # about buying-power mechanics, not basket breadth (conftest restores)
+    object.__setattr__(settings, "min_basket_size", 1)
     set_armed(True)
     try:
         summary = executor.run(closed, force_dry_run=False, phase="both")

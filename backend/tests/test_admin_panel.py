@@ -140,7 +140,9 @@ def test_panel_shape_and_dry_run_disarmed_reasons():
     _, tok = _mk_member("shape-admin@aclub.test", role="admin",
                         verified_at=int(time.time()))
     p = _panel(tok)
-    assert set(p) == {"state", "members", "cycle", "money", "audit", "basket", "drift"}
+    assert set(p) == {"state", "members", "cycle", "money", "audit", "basket", "drift",
+                      "alerts"}
+    assert isinstance(p["alerts"], list)   # active watchdog findings (kv-backed)
     st = p["state"]
     assert st["execution_mode"] == "dry_run" and st["is_live"] is False
     assert st["armed"] is False and st["halt"] is False

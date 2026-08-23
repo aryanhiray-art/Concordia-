@@ -273,6 +273,23 @@ CREATE TABLE IF NOT EXISTS equity_points (
 -- idempotent (INSERT OR IGNORE) and the retention prune exact.
 CREATE UNIQUE INDEX IF NOT EXISTS ix_equity_points_member_ts
     ON equity_points(member_id, ts);
+
+-- Suspected member cash flows (deposits/withdrawals), recorded by the watchdog
+-- (W9): an equity step >2% with no club executions in the surrounding window.
+-- Detection only for now — return math stays flow-naive; this table is the
+-- foundation for deposit-aware returns. UNIQUE(member_id, ts) makes the
+-- once-per-step dedupe an INSERT OR IGNORE.
+CREATE TABLE IF NOT EXISTS member_flows (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    member_id INTEGER NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+    ts        INTEGER NOT NULL,             -- epoch of the equity point AFTER the step
+    amount    REAL,                         -- signed $ (deposit > 0, withdrawal < 0)
+    kind      TEXT NOT NULL DEFAULT 'suspected',
+    source    TEXT NOT NULL DEFAULT 'auto',
+    note      TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_member_flows_member_ts
+    ON member_flows(member_id, ts);
 """
 
 

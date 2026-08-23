@@ -61,6 +61,13 @@ def will_place_state() -> dict:
         humans = voting.human_voter_count(sess["id"])
         if humans < settings.min_human_voters:
             reasons.append(f"human quorum not met ({humans} < {settings.min_human_voters})")
+        # Thin-basket floor (executor G2 mirror): a CLOSED basket below
+        # MIN_BASKET_SIZE picks downgrades the run to review-only. An open
+        # ballot has no decided basket yet, so it is never judged here.
+        if sess.get("picks_json"):
+            n_picks = len(voting.session_picks(sess))
+            if n_picks < settings.min_basket_size:
+                reasons.append(f"basket too thin ({n_picks} < {settings.min_basket_size})")
     if not calendar_covers(today_et()):
         reasons.append("holiday calendar lapsed")
     return {
@@ -263,7 +270,37 @@ def panel() -> dict:
         # probable ticker renames (ledger phantom paired with an unledgered
         # account position) — the console renders a migrate control per pair
         "drift": _drift_safe(),
+        # currently-ACTIVE watchdog findings — read straight from the kv rows
+        # the sweep maintains (services/watchdog.py). No probes here: the
+        # panel stays DB-only; dismissal is fixing the condition.
+        "alerts": watchdog_alerts(),
     }
+
+
+def watchdog_alerts() -> list[dict]:
+    """[{key, severity, message, since}] for every active 'wd:*' kv row.
+
+    The watchdog stores each announced condition as JSON {severity, message,
+    since} and empties the value when the condition clears — so this is a pure
+    kv read, safe for every panel build. Crits sort first, oldest first."""
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT key, value FROM kv WHERE key LIKE 'wd:%' AND value != ''"
+        ).fetchall()
+    out: list[dict] = []
+    for r in rows:
+        try:
+            p = json.loads(r["value"]) or {}
+        except Exception:  # noqa: BLE001 — an unreadable row is not an alert
+            continue
+        if not isinstance(p, dict) or not p.get("message"):
+            continue
+        out.append({"key": r["key"][3:],
+                    "severity": p.get("severity") or "warn",
+                    "message": p.get("message"),
+                    "since": p.get("since")})
+    out.sort(key=lambda a: (a["severity"] != "crit", a["since"] or 0))
+    return out
 
 
 def _drift_safe() -> list[dict]:

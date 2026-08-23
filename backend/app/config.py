@@ -131,6 +131,23 @@ class Settings:
     # review-only, so a basket chosen by the bots alone (zero/low human turnout)
     # is never bought with real money (finding #10).
     min_human_voters: int = _int("MIN_HUMAN_VOTERS", 1)
+    # Missed-window catch-up cutoff (ET wall clock). concord-execute.timer is
+    # Persistent=true, so a reboot spanning the 10:15 fire re-runs the job on
+    # boot — safe in the morning (self-healed close + fresh basket), but a fire
+    # after this time is trading a stale morning consensus into the close.
+    # Scheduled runs past the cutoff stand down (audit 'missed_execute');
+    # manual triggers bypass — the human is the judgment.
+    execute_catchup_until: str = os.environ.get("EXECUTE_CATCHUP_UNTIL", "15:45").strip()
+    # Thin-basket floor: the fewest consensus picks a closed basket may carry
+    # before the executor places REAL orders. A near-empty ballot (one human
+    # voting one stock) must not liquidate every member's portfolio into a
+    # 1-2 name concentration — below the floor the run downgrades to
+    # review-only. Dry-runs still simulate.
+    min_basket_size: int = _int("MIN_BASKET_SIZE", 5)
+    # Post-run member receipts (G5a): after a LIVE run, each traded member gets
+    # one plain-English email of what happened in their account. Fully fenced —
+    # can never fail or delay a run (services/notify.py).
+    member_run_emails: bool = _bool("MEMBER_RUN_EMAILS", True)
     # Size each buy against what the member's account ACTUALLY holds right now
     # (live positions), not the club's reconstructed ledger — so ledger drift, a
     # partial fill, or a manual sale can never mis-size a buy, and a liquidated

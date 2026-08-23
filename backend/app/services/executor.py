@@ -308,6 +308,14 @@ def run(session: dict, force_dry_run: bool = False, phase: str = "both",
     report.setdefault("trade_date", trade_date)
     report.setdefault("phase", phase)
     runreports.persist(report, trigger=trigger, started_at=started_at)
+    # Member trade receipts (G5a) — strictly AFTER the report is persisted, and
+    # fully fenced: notification can never fail or delay a run (notify fences
+    # every member's email again on its own).
+    try:
+        from . import notify
+        notify.send_run_emails(report)
+    except Exception:  # noqa: BLE001
+        pass
     return summary
 
 
@@ -328,6 +336,13 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
     quorum_blocked = False
     if will_place and voting.human_voter_count(session["id"]) < settings.min_human_voters:
         will_place, quorum_blocked = False, True
+    # Thin-basket floor (G2): a near-empty ballot (one human voting one stock)
+    # must never become a live 1-2 name "basket" — the sell leg would exit the
+    # whole portfolio into a concentration. Below MIN_BASKET_SIZE picks the run
+    # downgrades to review-only; dry-runs still simulate.
+    thin_basket = False
+    if will_place and len(picks) < settings.min_basket_size:
+        will_place, thin_basket = False, True
     # Calendar-coverage guard (finding #17): if the hand-maintained holiday table
     # has lapsed past its last covered year we can't know today is a trading day —
     # refuse to place REAL orders (review-only) rather than risk trading a closed
@@ -360,6 +375,10 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
     if quorum_blocked:
         summary["quorum_blocked"] = True
         summary["note"] = (f"human quorum not met (< {settings.min_human_voters} human voter(s)) — "
+                           f"review only, no real orders placed")
+    if thin_basket:
+        summary["thin_basket"] = True
+        summary["note"] = (f"basket too thin ({len(picks)} < {settings.min_basket_size}) — "
                            f"review only, no real orders placed")
     if calendar_stale:
         summary["calendar_stale"] = True
@@ -938,6 +957,49 @@ def _run_today_locked(force_dry_run: bool = False, trigger: str = "schedule") ->
     if phase is None:
         return _idle({"ok": True, "note": "idle day — no sell or buy phase scheduled today",
                       "phase": "none", "orders": []})
+    # Missed-window guard (G1): the execute timer is Persistent=true, so a
+    # reboot spanning the scheduled fire re-runs this on boot. Inside the
+    # trading morning that is exactly what we want (self-healed close + fresh
+    # basket make a late fire safe); PAST the catch-up cutoff the day is gone —
+    # trading the morning's consensus into the close is not the mandate.
+    # Scheduled runs stand down and leave a loud trail; manual triggers bypass
+    # (the human pressing the button is the judgment).
+    if trigger == "schedule":
+        import datetime as _dt
+        from ..calendar_us import at_et, now_et
+        try:
+            cutoff = at_et(today_et(), settings.execute_catchup_until)
+        except Exception:  # noqa: BLE001 — a bad knob must not block trading
+            cutoff = at_et(today_et(), "15:45")
+        # A cutoff at/before the scheduled fire time would stand down the
+        # NORMAL run every cycle day — a misconfigured knob must never block
+        # the week's trade. Give the on-time fire a 30-minute grace instead.
+        try:
+            exec_t = at_et(today_et(), settings.execute_at)
+        except Exception:  # noqa: BLE001
+            exec_t = None
+        if exec_t is not None and cutoff <= exec_t:
+            cutoff = exec_t + _dt.timedelta(minutes=30)
+        now = now_et()
+        if now >= cutoff:
+            td = today_et().isoformat()
+            note = (f"missed execute window — scheduled fire arrived at "
+                    f"{now.strftime('%H:%M')} ET, past the "
+                    f"{cutoff.strftime('%H:%M')} catch-up cutoff; no orders. "
+                    "Run manually from the console if today's cycle should still trade.")
+            # Audit ONCE per trade date: Persistent replays / repeated unit
+            # starts must not storm the audit log (every fire still leaves its
+            # own run_reports row via _idle — that is the proof it fired).
+            with db() as conn:
+                seen = conn.execute(
+                    "SELECT 1 FROM audit_log WHERE action='missed_execute' "
+                    "AND target=? LIMIT 1", (td,)).fetchone()
+            if not seen:
+                audit("system", "missed_execute", td,
+                      {"phase": phase, "fired_at": now.strftime("%H:%M"),
+                       "cutoff": cutoff.strftime("%H:%M")})
+            return _idle({"ok": True, "note": note, "phase": phase,
+                          "trade_date": td, "missed_window": True, "orders": []})
     if phase == "buy":
         session = voting.latest_session("closed")   # the basket sold on the prior sell day
         if not session:

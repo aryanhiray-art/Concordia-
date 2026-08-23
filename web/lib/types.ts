@@ -201,6 +201,9 @@ export type AdminPanel = {
   /** Probable ticker renames: a ledger phantom paired with an unledgered live
    *  position on the same account(s). Rendered as a migrate control. */
   drift?: { old: string; new: string; members: string[]; live_value: number }[];
+  /** Currently-active watchdog findings (optional — older backends omit it).
+   *  Informational banners only; dismissal is fixing the condition. */
+  alerts?: { key: string; severity: "warn" | "crit"; message: string; since?: number | string | null }[];
 };
 
 // ── History split ──────────────────────────────────────────────────────────

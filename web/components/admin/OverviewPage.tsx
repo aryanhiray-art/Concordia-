@@ -13,7 +13,7 @@ import { Button, Countdown, Pill } from "@/components/ui";
 import { fmtTradeDate } from "@/lib/format";
 import { OpenBallotBody, ScheduleStrip } from "./CyclePanel";
 import { AuditLines } from "./AuditTail";
-import { AdminLink, MoreLink, OpsCard, PhaseChip, SectionHead } from "./util";
+import { AdminLink, MoreLink, OpsCard, PhaseChip, SectionHead, fmtET } from "./util";
 
 // ── stat tile: one number, one link, one destination ────────────────────────
 
@@ -79,6 +79,16 @@ export function OverviewPage({ panel, schedule, scheduleErr, bots, botsErr, cade
       {/* one-line state strip — the verdict at a glance; the levers live on
           /controls now (owner call: the full panel was eating the Overview) */}
       <StateStrip state={panel.state} cadence={cadence} inviteCode={inviteCode} />
+
+      {/* watchdog findings — informational banners in the drift grammar
+          (red crit above amber warn, no button: dismissal is fixing the
+          condition). Older backends omit panel.alerts → renders nothing.
+          Defensive: tolerate a non-array payload and partial entries — a
+          malformed alert must never take down the Overview. */}
+      {(Array.isArray(panel.alerts) ? panel.alerts : [])
+        .filter((a) => a != null && typeof a === "object" && (a.message != null || a.key != null))
+        .sort((x, y) => Number(y.severity === "crit") - Number(x.severity === "crit"))
+        .map((a, i) => <WatchdogBanner key={a.key ?? `wd-${i}`} a={a} />)}
 
       {/* corporate-action drift: a ledger phantom paired with an unledgered
           live position = probable ticker rename (the AVB→VMRK class of bug).
@@ -207,6 +217,23 @@ function StateStrip({ state, cadence, inviteCode }: {
           Controls →
         </AdminLink>
       </span>
+    </div>
+  );
+}
+
+// ── watchdog finding banner (informational — no action control) ─────────────
+function WatchdogBanner({ a }: { a: NonNullable<AdminPanel["alerts"]>[number] }) {
+  const crit = a.severity === "crit";
+  return (
+    <div className={`flex flex-wrap items-center gap-3 rounded-[14px] border px-4 py-2.5 text-[12.5px] ${
+      crit ? "border-red/30 bg-red/[0.07] text-red" : "border-amber/30 bg-amber/[0.07] text-amber"
+    }`}>
+      <span className="min-w-0 break-words">{String(a.message ?? a.key)}</span>
+      {a.since != null && (
+        <span className="ml-auto flex-none font-mono text-[10.5px] opacity-70 tnum">
+          since {fmtET(a.since, true)}
+        </span>
+      )}
     </div>
   );
 }
