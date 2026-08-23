@@ -22,5 +22,24 @@ const nextConfig = {
       { source: "/demo/:path*", destination: `${FORGE}/demo/:path*` },
     ];
   },
+  // ── document caching ──────────────────────────────────────────────────────
+  // Next serves statically-optimized pages with `s-maxage=31536000,
+  // stale-while-revalidate`. `s-maxage` binds SHARED caches only, and with no
+  // `max-age` a browser has no explicit freshness lifetime — Safari (iOS
+  // especially) then applies heuristic caching and holds the document for
+  // days. Because that document names the content-HASHED css/js bundles, a
+  // phone keeps requesting last week's asset hashes and never sees a deploy:
+  // the owner hit this twice ("i dont see the updated admin ui", then the
+  // mobile tint fix). Documents must always revalidate; the hashed assets
+  // under /_next/static keep their immutable one-year cache (excluded below),
+  // so this costs one conditional request per navigation, not re-downloads.
+  async headers() {
+    return [
+      {
+        source: "/((?!_next/static|_next/image|icon.svg|favicon.ico).*)",
+        headers: [{ key: "Cache-Control", value: "no-cache, must-revalidate" }],
+      },
+    ];
+  },
 };
 export default nextConfig;
