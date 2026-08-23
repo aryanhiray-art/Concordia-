@@ -1,0 +1,16 @@
+[Unit]
+Description=Concord — nightly product-metrics aggregation (daily_metrics upsert)
+
+[Service]
+Type=oneshot
+User=concord
+Group=concord
+WorkingDirectory=/opt/concord/backend
+EnvironmentFile=/opt/concord/.env
+ExecStart=/opt/concord/backend/.venv/bin/python jobs/daily_metrics.py
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/concord
+# app-created files (DB, WAL) default to 0600, not 0644
+UMask=077

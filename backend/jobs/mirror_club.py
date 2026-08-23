@@ -30,11 +30,15 @@ import time
 from app.config import settings
 from app.services import performance, voting
 
-# Member-scoped keys must never appear in a mirrored row. club_history is not
-# supposed to emit any of these; this is a belt-and-braces check so a future
-# change to that payload cannot silently start leaking into a public demo.
+# Member-scoped OR operational keys must never appear in a mirrored row.
+# club_history is not supposed to emit any of these; this is a belt-and-braces
+# check so a future change to that payload cannot silently start leaking into a
+# public demo. voters/human_voters/orders joined the list with the member/admin
+# split: the member-facing record is date · status · basket only, and voter
+# counts + order tallies are admin-console material (GET /api/admin/cycles).
 _FORBIDDEN = {"email", "display_name", "member_id", "members", "name", "votes_by",
-              "holdings", "account_number", "token", "password_hash"}
+              "holdings", "account_number", "token", "password_hash",
+              "voters", "human_voters", "orders"}
 
 
 def _assert_clean(rows: list[dict]) -> None:

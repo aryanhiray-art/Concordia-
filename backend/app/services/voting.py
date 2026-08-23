@@ -411,20 +411,6 @@ def session_picks(session: dict) -> list[dict]:
     return []
 
 
-def execution_order_counts(session_id: int) -> dict:
-    """Aggregate execution counts by status (e.g. {'placed': 4, 'error': 1}).
-
-    Counts only — never per-member rows. This feeds the club-shared history,
-    which must not identify members.
-    """
-    with db() as conn:
-        rows = conn.execute(
-            "SELECT status, COUNT(*) AS n FROM executions WHERE session_id=? GROUP BY status",
-            (session_id,),
-        ).fetchall()
-    return {r["status"]: r["n"] for r in rows}
-
-
 # An 'open' row whose close time is more than a day past was abandoned
 # mid-cycle — prod carries one from 2026-06-22. It is cruft, not a live ballot.
 STALE_OPEN_AFTER_SECS = 86400
@@ -478,7 +464,11 @@ def club_history(limit: int = 30) -> list[dict]:
 
     The fund's history is not unique per person — every member sees the same
     record, so nothing here may identify a member (no emails, names, ids, or
-    per-member execution rows). Capped at 60 sessions.
+    per-member execution rows). It is also OPERATIONS-FREE by contract: no
+    voter counts, no human-vs-bot split, no per-status order counts — a member
+    sees the clean club record (date · status · basket) and nothing about how
+    the sausage was made. The operational per-cycle view lives at
+    GET /api/admin/cycles (admin-only). Capped at 60 sessions.
     """
     limit = max(1, min(int(limit), 60))
     with db() as conn:
@@ -494,9 +484,6 @@ def club_history(limit: int = 30) -> list[dict]:
         "status": s["status"],
         "status_display": _status_display(s, latest_decided),
         "basket": [p["symbol"] for p in session_picks(dict(s))],
-        "voters": voter_count(s["id"]),
-        "human_voters": human_voter_count(s["id"]),
-        "orders": execution_order_counts(s["id"]),
     } for s in rows]
 
 
@@ -579,7 +566,11 @@ def session_public(session: dict, member_id: int | None) -> dict:
         "status": session["status"],
         "closes_at": session["closes_at"],
         "top_n": session["top_n"],
-        "voters": voter_count(session["id"]) + live_voters,
+        # HUMAN voters only: the raw count includes bot members (test
+        # scaffolding), and a bot-inflated number on every member's Vote page
+        # was an operational tell. Total-with-bots stays admin-only
+        # (adminview cycle_view / GET /api/admin/cycles).
+        "voters": human_voter_count(session["id"]) + live_voters,
         "tally": _merge_tallies(live_tally, tally(session["id"])),
         "my_picks": member_picks(session["id"], member_id) if member_id else [],
         "picks": session_picks(session),

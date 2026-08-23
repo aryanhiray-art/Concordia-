@@ -33,8 +33,10 @@ def club_performance(force: bool = False, member: dict = Depends(require_member)
 def club_history(limit: int = 30, member: dict = Depends(require_member)):
     """The club's decided sessions, newest first — the SHARED fund record.
 
-    Identical for every member (nothing member-identifying); a member's own
-    ballots live at GET /api/me/votes instead.
+    Identical for every member (nothing member-identifying) and operations-free
+    (no voter counts, no order tallies — that detail is admin-only at
+    GET /api/admin/cycles); a member's own ballots live at GET /api/me/votes
+    instead.
 
     On the DEMO instance this serves the REAL club's cycles from the mirror file
     — the fund's record is shared and non-identifying, so the demo shows the

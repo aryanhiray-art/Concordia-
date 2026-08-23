@@ -42,6 +42,9 @@ def mirror_file():
     os.close(fd)
     payload = {
         "mirrored_at": 1785300000,
+        # deliberately a LEGACY row: mirror files written before the member/admin
+        # split still carry voters/human_voters/orders on disk — clubmirror must
+        # strip them (the demo shows members nothing a real member can't see)
         "history": [{"id": 1, "trade_date": "2026-07-28", "status": "executed",
                      "status_display": "executed", "basket": ["AAPL"], "voters": 3,
                      "human_voters": 3, "orders": {"placed": 24}}],
@@ -84,6 +87,9 @@ def test_demo_serves_the_mirrored_club(mirror_file):
     rows = clubmirror.history(30)
     assert rows and rows[0]["trade_date"] == "2026-07-28"
     assert rows[0]["basket"] == ["AAPL"]
+    # legacy operational keys in an old mirror file are stripped on read —
+    # the demo's club record is date · status · basket, same as the real one
+    assert not {"voters", "human_voters", "orders"} & set(rows[0])
     perf = clubmirror.performance()
     assert perf["n_sessions"] == 5 and perf["club_pct"] == 1.5
     assert clubmirror.mirrored_at() == 1785300000
@@ -106,14 +112,21 @@ def test_mirror_job_refuses_to_run_on_a_demo_instance():
         mirror_club.build()
 
 
-def test_mirror_job_refuses_member_scoped_rows():
-    """If club_history ever starts emitting identity, publishing must FAIL."""
+def test_mirror_job_refuses_member_scoped_or_operational_rows():
+    """If club_history ever starts emitting identity OR operational detail
+    (voter counts, order tallies — admin-only since the member/admin split),
+    publishing must FAIL."""
     from jobs import mirror_club
     with pytest.raises(SystemExit):
         mirror_club._assert_clean([{"trade_date": "2026-07-28", "email": "a@b.c"}])
     with pytest.raises(SystemExit):
         mirror_club._assert_clean([{"trade_date": "2026-07-28", "member_id": 2}])
-    mirror_club._assert_clean([{"trade_date": "2026-07-28", "basket": ["AAPL"], "voters": 3}])
+    with pytest.raises(SystemExit):
+        mirror_club._assert_clean([{"trade_date": "2026-07-28", "voters": 3}])
+    with pytest.raises(SystemExit):
+        mirror_club._assert_clean([{"trade_date": "2026-07-28", "orders": {"placed": 2}}])
+    mirror_club._assert_clean([{"trade_date": "2026-07-28", "basket": ["AAPL"],
+                                "status": "executed"}])
 
 
 def test_mirror_write_is_atomic_and_group_readable(tmp_path):

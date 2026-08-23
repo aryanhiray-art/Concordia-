@@ -290,6 +290,36 @@ CREATE TABLE IF NOT EXISTS member_flows (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ix_member_flows_member_ts
     ON member_flows(member_id, ts);
+
+-- TRACKING LAYER: one row per ET calendar day of product/ops aggregates,
+-- written by the nightly job (jobs/daily_metrics.py → services/metrics.py).
+-- Pure derivations over rows other tables already hold (members, login_events,
+-- votes, vote_sessions, executions, voting_power_history) — nothing here is a
+-- source of truth, so the whole table can always be rebuilt via the job's
+-- backfill mode. Upserts are idempotent: rerunning a day replaces the row.
+-- NULL-able columns mean "not applicable / unknown that day" (no ballot, no
+-- waitlist table), never zero.
+CREATE TABLE IF NOT EXISTS daily_metrics (
+    date                  TEXT PRIMARY KEY,           -- YYYY-MM-DD (ET)
+    member_count          INTEGER NOT NULL DEFAULT 0, -- non-bot, non-deleted, signed up by EOD
+    activation_count      INTEGER NOT NULL DEFAULT 0, -- connected + opted in + stake set
+    dau                   INTEGER NOT NULL DEFAULT 0, -- distinct humans who logged in or voted
+    wau                   INTEGER NOT NULL DEFAULT 0, -- same, trailing 7 days ending this day
+    voters                INTEGER,                    -- human voters on this day's ballot
+    eligible              INTEGER,                    -- humans who could have voted
+    ballot_participation  REAL,                       -- voters/eligible; NULL on no-ballot days
+    committed_capital_usd REAL NOT NULL DEFAULT 0,    -- latest weekly equity sum as of this day
+    executed_notional_usd REAL NOT NULL DEFAULT 0,    -- $ placed by the executor this day
+    error_count           INTEGER NOT NULL DEFAULT 0, -- execution errors this day
+    waitlist_count        INTEGER,                    -- NULL until a waitlist table exists
+    computed_at           INTEGER NOT NULL            -- epoch of the last (re)computation
+);
+
+-- The nightly aggregation (and its first-run backfill) scans events by
+-- timestamp; these covering indexes keep it a range read, not a table scan.
+CREATE INDEX IF NOT EXISTS ix_login_events_ts ON login_events(ts);
+CREATE INDEX IF NOT EXISTS ix_exec_created ON executions(created_at);
+CREATE INDEX IF NOT EXISTS ix_votes_created ON votes(created_at);
 """
 
 

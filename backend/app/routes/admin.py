@@ -147,6 +147,95 @@ def run_detail(run_id: int, admin: dict = Depends(require_admin)):
     return out
 
 
+# ── per-cycle operational record ────────────────────────────────────────────
+# Everything the member-facing GET /api/club/history deliberately no longer
+# carries lives here instead: voter counts (human vs bot split), order counts
+# by TRUE outcome, and the per-member drilldown.
+
+def _order_bucket(status: str, error: str | None) -> str:
+    """The honest display bucket for one executions row.
+
+    A settled-cash deferral is RECORDED as status='skipped' with an error whose
+    stem is "defer…" (executor.py: "deferred — beyond settled buying power") —
+    it is not a real skip, the buy just waits for proceeds to settle. The
+    relabel happens HERE, at aggregation time only; historical rows are never
+    rewritten (same doctrine as status_display on vote_sessions).
+    """
+    if status == "skipped" and "defer" in (error or "").lower():
+        return "deferred"
+    return status
+
+
+@router.get("/cycles")
+def cycles_list(limit: int = 30, admin: dict = Depends(require_admin)):
+    """Per-cycle ops view of the club's decided sessions, newest first.
+
+    Per cycle: the member-visible identity (date/status/basket) plus the
+    operational detail members must not see — voters split human/bot, order
+    counts keyed by _order_bucket (placed / deferred / skipped / error /
+    anything else verbatim), and a per-member drilldown (name, counts, the
+    deferred symbols + dollar amounts, skip and error reasons).
+    Member-identifying by design → require_admin. DB-only; `limit` capped 60.
+    """
+    limit = max(1, min(int(limit), 60))
+    with db() as conn:
+        sessions = conn.execute(
+            "SELECT * FROM vote_sessions WHERE status IN ('closed','executed') "
+            "ORDER BY trade_date DESC LIMIT ?", (limit,)).fetchall()
+        latest_decided = svc._latest_decided_session_id()
+        out = []
+        for s in sessions:
+            sid = s["id"]
+            v = conn.execute(
+                "SELECT COUNT(DISTINCT v.member_id) AS total, "
+                "COUNT(DISTINCT CASE WHEN COALESCE(m.is_bot,0)=0 "
+                "THEN v.member_id END) AS humans "
+                "FROM votes v JOIN members m ON m.id=v.member_id "
+                "WHERE v.session_id=?", (sid,)).fetchone()
+            total, humans = int(v["total"] or 0), int(v["humans"] or 0)
+            execs = conn.execute(
+                "SELECT e.member_id, m.display_name AS name, e.symbol, "
+                "e.dollar_amount, e.status, e.error "
+                "FROM executions e JOIN members m ON m.id=e.member_id "
+                "WHERE e.session_id=? ORDER BY m.display_name, e.symbol",
+                (sid,)).fetchall()
+            counts: dict[str, int] = {}
+            members: dict[int, dict] = {}
+            for e in execs:
+                bucket = _order_bucket(e["status"], e["error"])
+                counts[bucket] = counts.get(bucket, 0) + 1
+                row = members.setdefault(e["member_id"], {
+                    "member_id": e["member_id"], "name": e["name"],
+                    "placed": 0, "deferred": 0, "skipped": 0, "errors": 0,
+                    "deferred_orders": [], "skips": [], "error_orders": [],
+                })
+                if bucket == "placed":
+                    row["placed"] += 1
+                elif bucket == "deferred":
+                    row["deferred"] += 1
+                    row["deferred_orders"].append(
+                        {"symbol": e["symbol"], "amount": e["dollar_amount"]})
+                elif bucket == "skipped":
+                    row["skipped"] += 1
+                    row["skips"].append({"symbol": e["symbol"], "reason": e["error"]})
+                elif bucket == "error":
+                    row["errors"] += 1
+                    row["error_orders"].append(
+                        {"symbol": e["symbol"], "reason": e["error"]})
+            out.append({
+                "id": sid,
+                "trade_date": s["trade_date"],
+                "status": s["status"],
+                "status_display": svc._status_display(s, latest_decided),
+                "basket": [p["symbol"] for p in svc.session_picks(dict(s))],
+                "voters": {"total": total, "humans": humans, "bots": total - humans},
+                "orders": counts,
+                "members": sorted(members.values(),
+                                  key=lambda r: (r["name"] or "").lower()),
+            })
+    return {"cycles": out}
+
+
 @router.get("/audit")
 def audit_browse(limit: int = 50, before: int | None = None,
                  action: str | None = None, actor: str | None = None,

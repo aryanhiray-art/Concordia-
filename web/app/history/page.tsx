@@ -26,19 +26,6 @@ function sessionTone(s: string): "teal" | "warn" | "neutral" {
   return "neutral";
 }
 
-// Render order counts in lifecycle order; unknown statuses trail alphabetically.
-const ORDER_STATUS_ORDER = ["placed", "planned", "reviewed", "skipped", "error"];
-function orderedCounts(orders: Record<string, number>): [string, number][] {
-  return Object.entries(orders).sort(([a], [b]) => {
-    const ia = ORDER_STATUS_ORDER.indexOf(a);
-    const ib = ORDER_STATUS_ORDER.indexOf(b);
-    if (ia === -1 && ib === -1) return a.localeCompare(b);
-    if (ia === -1) return 1;
-    if (ib === -1) return -1;
-    return ia - ib;
-  });
-}
-
 // A pick chip for the "Your votes" tab: hits (made the basket) keep the teal
 // chip language, misses go quiet — same shape, neutral hairline. Clicking one
 // opens the stock detail panel (StockLink unstyled keeps this custom skin).
@@ -55,8 +42,10 @@ function VoteChip({ symbol, weight, hit }: { symbol: string; weight: number; hit
   );
 }
 
+// The clean club record: date · status chip · the basket. Deliberately NOTHING
+// operational here (voter counts, order tallies) — that detail is the admin
+// console's Cycles page, and the backend no longer even sends it to members.
 function ClubCycleRow({ s }: { s: ClubHistorySession }) {
-  const counts = orderedCounts(s.orders ?? {});
   // status_display is presentation-only: stale closed cycles arrive as
   // "executed"; only the latest closed row keeps "closed" (and the note).
   const shown = s.status_display ?? s.status;
@@ -68,9 +57,6 @@ function ClubCycleRow({ s }: { s: ClubHistorySession }) {
         {shown === "closed" && (
           <span className="text-[11px] text-amber/80">sell settled, buy pending</span>
         )}
-        <span className="ml-auto whitespace-nowrap text-[12px] text-muted tnum">
-          {s.voters} voter{s.voters === 1 ? "" : "s"} ({s.human_voters} human)
-        </span>
       </div>
       {s.basket.length > 0 ? (
         <div className="mt-2.5 flex flex-wrap gap-1.5">
@@ -78,15 +64,6 @@ function ClubCycleRow({ s }: { s: ClubHistorySession }) {
         </div>
       ) : (
         <p className="mt-2 text-[12px] text-subtle">no basket</p>
-      )}
-      {counts.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11.5px] text-subtle tnum">
-          {counts.map(([st, n]) => (
-            <span key={st} className={st === "error" && n > 0 ? "font-semibold text-red" : ""}>
-              {n} {st}
-            </span>
-          ))}
-        </div>
       )}
     </div>
   );

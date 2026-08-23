@@ -139,6 +139,34 @@ export type AdminExecRow = {
 /** GET /api/admin/overview — the session + executions payload (the same one
  *  the forge dashboard consumed via its proxy). Raw SQL rows, so SQLite 0/1
  *  ints stand in for booleans. */
+// ── /api/admin/metrics — the tracking layer (daily series + snapshot + cohorts)
+export type AdminMetricsDay = {
+  date: string;                         // YYYY-MM-DD (ET)
+  member_count: number;                 // non-bot, non-deleted humans by EOD
+  activation_count: number;             // connected + opted in + stake set
+  dau: number;
+  wau: number;
+  voters: number | null;                // NULL on days with no ballot
+  eligible: number | null;
+  ballot_participation: number | null;  // voters/eligible, 0..1
+  committed_capital_usd: number;
+  executed_notional_usd: number;
+  error_count: number;
+  waitlist_count: number | null;        // NULL until a waitlist exists
+  computed_at: number;
+};
+export type AdminMetricsCohort = {
+  cohort: string;                       // Monday (ET) of the signup week
+  size: number;
+  retention: (number | null)[];         // fraction voting in week n; NULL = not elapsed
+};
+export type AdminMetrics = {
+  series: AdminMetricsDay[];            // oldest first; [] until the nightly job runs
+  snapshot: AdminMetricsDay & { as_of: number };  // today, computed live
+  cohorts: AdminMetricsCohort[];
+  generated_at: number;
+};
+
 export type AdminOverviewMember = {
   id: number;
   email: string | null;
@@ -259,6 +287,35 @@ export type AdminRunSummary = {
   [k: string]: unknown;
 };
 export type AdminRunDetail = AdminRunRow & { summary: AdminRunSummary | null };
+
+/** GET /api/admin/cycles — the per-cycle operational record the member-facing
+ *  club history deliberately no longer carries: voters split human/bot, order
+ *  counts by TRUE outcome ("deferred" = settled-cash defers relabelled from
+ *  their recorded status='skipped' + "deferred — …" error at aggregation time),
+ *  and a per-member drilldown. Admin-only; fields read defensively (a web
+ *  deploy can precede the backend that serves this). */
+export type AdminCycleMember = {
+  member_id: number;
+  name: string | null;
+  placed: number;
+  deferred: number;
+  skipped: number;
+  errors: number;
+  deferred_orders: { symbol: string; amount: number | null }[];
+  skips: { symbol: string; reason: string | null }[];
+  error_orders: { symbol: string; reason: string | null }[];
+};
+export type AdminCycleRow = {
+  id: number;
+  trade_date: string;
+  status: string;
+  status_display?: string;
+  basket: string[];
+  voters: { total: number; humans: number; bots: number };
+  /** placed / deferred / skipped / error, plus any raw status verbatim. */
+  orders: Record<string, number>;
+  members: AdminCycleMember[];
+};
 
 /** GET /api/admin/audit — the browsable trail. detail = parsed detail_json
  *  (shape varies per action) or null. */
@@ -491,6 +548,10 @@ export const api = {
     req<{ runs: AdminRunRow[] }>(
       `/api/admin/runs?limit=30${before != null ? `&before=${before}` : ""}`),
   adminRun: (id: number) => req<AdminRunDetail>(`/api/admin/runs/${id}`),
+  // the per-cycle operational record (voters human/bot split, honest order
+  // buckets, per-member drilldown) — see AdminCycleRow above
+  adminCycles: (limit = 60) =>
+    req<{ cycles: AdminCycleRow[] }>(`/api/admin/cycles?limit=${limit}`),
   // the browsable audit trail — filters are optional and combinable; before =
   // pagination cursor. (panel.audit stays the Overview's 20-line teaser.)
   adminAudit: (params: { limit?: number; before?: number; action?: string; actor?: string } = {}) => {
@@ -501,6 +562,9 @@ export const api = {
     return req<{ entries: AdminAuditEntry[] }>(`/api/admin/audit?${q}`);
   },
   adminLogins: () => req<{ logins: AdminLoginRow[] }>("/api/admin/logins?limit=30"),
+  // the tracking layer — daily aggregates written by the nightly job, plus a
+  // live "now" snapshot and weekly voting-retention cohorts. DB-only, fast.
+  adminMetrics: (days = 90) => req<AdminMetrics>(`/api/admin/metrics?days=${days}`),
   // admin-mediated password recovery — the temp password is returned ONCE
   adminResetPassword: (id: number) =>
     req<{ ok: boolean; email: string; temp_password: string }>(

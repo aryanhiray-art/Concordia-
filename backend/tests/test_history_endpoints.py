@@ -2,10 +2,11 @@
 
 Contract:
 - GET /api/club/history (any member): DECIDED sessions only (closed|executed),
-  newest trade_date first, limit capped at 60; per session {id, trade_date,
-  status, basket, voters, human_voters, orders} where orders = aggregate
-  execution counts by status. NOTHING member-identifying — two different
-  members get byte-identical payloads.
+  newest trade_date first, limit capped at 60; per session EXACTLY {id,
+  trade_date, status, status_display, basket}. NOTHING member-identifying — two
+  different members get byte-identical payloads — and NOTHING operational:
+  voter counts, the human/bot split and per-status order tallies are admin-only
+  (GET /api/admin/cycles, tests/test_admin_cycles.py).
 - GET /api/me/votes: only the CALLER's ballots as {id, trade_date, status,
   my_allocations, basket, hits}; open sessions appear for their owner with
   basket []/hits [] (nobody's votes leak pre-close — same rule as
@@ -147,20 +148,23 @@ def test_club_history_shape_order_and_no_member_data():
     assert ids.index(s_closed) < ids.index(s_exec)
 
     ex = by_id[s_exec]
-    assert set(ex) == {"id", "trade_date", "status", "status_display", "basket",
-                       "voters", "human_voters", "orders"}
+    assert set(ex) == {"id", "trade_date", "status", "status_display", "basket"}
     assert ex["trade_date"] == "2026-06-01" and ex["status"] == "executed"
     assert ex["basket"] == ["AAPL", "MSFT"]          # the DECIDED picks, in order
-    assert ex["voters"] == 2 and ex["human_voters"] == 1
-    assert ex["orders"] == {"placed": 2, "error": 1}  # aggregate — no member rows
     cl = by_id[s_closed]
-    assert cl["basket"] == ["NVDA"] and cl["orders"] == {}
-    assert cl["voters"] == 0 and cl["human_voters"] == 0
+    assert cl["basket"] == ["NVDA"]
 
     # NOTHING member-identifying anywhere in the payload
     assert "hclub.test" not in r.text                # no emails
     assert "hist-alice" not in r.text and "hist-bob" not in r.text  # no names
     assert "member_id" not in r.text
+
+    # NOTHING operational either: voter counts, the human/bot split and order
+    # tallies are ops detail — members see date · status · basket ONLY (the
+    # detail lives at GET /api/admin/cycles, admin-only)
+    for row in sessions:
+        assert not {"voters", "human_voters", "orders"} & set(row)
+    assert "voters" not in r.text and "orders" not in r.text
 
     # the record is shared: two different members get byte-identical payloads
     r_b = client.get("/api/club/history?limit=60", headers=_hdrs(tok_b))

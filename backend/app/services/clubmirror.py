@@ -65,6 +65,14 @@ def payload() -> dict | None:
     return data
 
 
+# Operational keys older mirror files still carry (voter counts, the human-vs-
+# bot split, per-status order tallies). club_history stopped emitting them —
+# the member record is date · status · basket only — but the mirror file on
+# disk lags the deploy, so strip them here too: the demo must never show
+# operational detail a real member no longer sees.
+_OPERATIONAL_KEYS = frozenset({"voters", "human_voters", "orders"})
+
+
 def history(limit: int) -> list[dict] | None:
     data = payload()
     if not data:
@@ -72,7 +80,9 @@ def history(limit: int) -> list[dict] | None:
     rows = data.get("history")
     if not isinstance(rows, list):
         return None
-    return rows[: max(1, min(int(limit), 60))]
+    return [{k: v for k, v in row.items() if k not in _OPERATIONAL_KEYS}
+            if isinstance(row, dict) else row
+            for row in rows[: max(1, min(int(limit), 60))]]
 
 
 def performance() -> dict | None:

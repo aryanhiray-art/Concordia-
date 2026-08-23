@@ -73,6 +73,8 @@ export type SessionView = {
   status: "open" | "closed" | "executed";
   closes_at: number;
   top_n: number;
+  /** HUMAN voters only — bot ballots are containment scaffolding and never
+   *  inflate the member-visible count. */
   voters: number;
   tally: TallyRow[];
   my_picks: Alloc[];
@@ -207,8 +209,9 @@ export type AdminPanel = {
 };
 
 // ── History split ──────────────────────────────────────────────────────────
-// GET /api/club/history — one row per cycle, club-shared, NO member identities.
-// `orders` maps execution status → count (e.g. {placed: 12, error: 1}).
+// GET /api/club/history — one row per cycle, club-shared, NO member identities
+// and NO operational detail (voter counts, order tallies and the human/bot
+// split moved to the admin console's Cycles page — GET /api/admin/cycles).
 export type ClubHistorySession = {
   id: number;
   trade_date: string;
@@ -219,9 +222,6 @@ export type ClubHistorySession = {
    *  compiles (and falls back to `status`) before the backend ships it. */
   status_display?: string;
   basket: string[];
-  voters: number;
-  human_voters: number;
-  orders: Record<string, number>;
 };
 export type ClubHistoryView = { sessions: ClubHistorySession[] };
 

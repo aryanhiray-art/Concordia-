@@ -8,8 +8,8 @@
 //
 // Multi-page: AppShell renders <AdminConsole /> for EVERY pathname on the
 // admin host, so this component reads usePathname() and routes internally —
-// / (overview) · /controls · /basket · /members · /cycle · /runs · /bots ·
-// /audit, unknown paths falling back to Overview. Data fetching stays HOISTED here (mount + 60s poll +
+// / (overview) · /controls · /basket · /members · /cycle · /cycles · /runs ·
+// /bots · /audit, unknown paths falling back to Overview. Data fetching stays HOISTED here (mount + 60s poll +
 // window focus) and flows down into the page layouts, so switching tabs never
 // refetches and a slow poll never stacks.
 //
@@ -29,11 +29,13 @@ import { OverviewPage } from "./admin/OverviewPage";
 import { BasketPage } from "./admin/BasketPage";
 import { ControlsPage } from "./admin/ControlsPage";
 import { CyclePanel } from "./admin/CyclePanel";
+import { CyclesPage } from "./admin/CyclesPage";
 import { MembersPanel } from "./admin/MembersPanel";
 import { MemberDrawer } from "./admin/MemberDrawer";
 import { SessionPanel } from "./admin/SessionPanel";
 import { BotsPanel } from "./admin/BotsPanel";
 import { RunsPage } from "./admin/RunsPage";
+import { MetricsPanel } from "./admin/MetricsPanel";
 import { AuditPage } from "./admin/AuditTail";
 import { AccessCard } from "./admin/AccessCard";
 
@@ -213,11 +215,15 @@ export function AdminConsole() {
               </>
             )}
 
+            {page === "cycles" && <CyclesPage />}
+
             {page === "runs" && <RunsPage />}
 
             {page === "bots" && (
               <BotsPanel bots={bots} err={botsErr} onOpen={setSelected} />
             )}
+
+            {page === "metrics" && <MetricsPanel />}
 
             {page === "audit" && <AuditPage panelAudit={panel.audit} />}
           </div>

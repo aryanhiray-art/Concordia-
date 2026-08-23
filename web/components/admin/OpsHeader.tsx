@@ -17,7 +17,7 @@
 import { Button, Logo } from "@/components/ui";
 import { AdminLink, OpsTag } from "./util";
 
-export type AdminPageKey = "overview" | "controls" | "basket" | "members" | "cycle" | "runs" | "bots" | "audit";
+export type AdminPageKey = "overview" | "controls" | "basket" | "members" | "cycle" | "cycles" | "runs" | "bots" | "metrics" | "audit";
 
 /** Route → page. Unknown paths render Overview (per the host contract). */
 export function pageKeyFor(pathname: string | null | undefined): AdminPageKey {
@@ -26,8 +26,10 @@ export function pageKeyFor(pathname: string | null | undefined): AdminPageKey {
     case "/basket": return "basket";
     case "/members": return "members";
     case "/cycle": return "cycle";
+    case "/cycles": return "cycles";
     case "/runs": return "runs";
     case "/bots": return "bots";
+    case "/metrics": return "metrics";
     case "/audit": return "audit";
     default: return "overview";
   }
@@ -39,8 +41,13 @@ const TABS: { key: AdminPageKey; href: string; label: string }[] = [
   { key: "basket", href: "/basket", label: "Basket" },
   { key: "members", href: "/members", label: "Members" },
   { key: "cycle", href: "/cycle", label: "Cycle" },
+  // Cycle = the LIVE cycle's state; Cycles = the per-cycle operational
+  // history (the detail stripped from the member-facing club record).
+  { key: "cycles", href: "/cycles", label: "Cycles" },
   { key: "runs", href: "/runs", label: "Runs" },
   { key: "bots", href: "/bots", label: "Bots" },
+  // Metrics = the tracking layer (daily_metrics aggregates + retention).
+  { key: "metrics", href: "/metrics", label: "Metrics" },
   { key: "audit", href: "/audit", label: "Audit" },
 ];
 
