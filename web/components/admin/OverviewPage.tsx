@@ -11,7 +11,6 @@ import { api, type AdminBots, type AdminPhase, type AdminSchedule } from "@/lib/
 import type { AdminPanel } from "@/lib/types";
 import { Button, Countdown, Pill } from "@/components/ui";
 import { fmtTradeDate } from "@/lib/format";
-import { StatusBar } from "./StatusBar";
 import { OpenBallotBody, ScheduleStrip } from "./CyclePanel";
 import { AuditLines } from "./AuditTail";
 import { AdminLink, MoreLink, OpsCard, PhaseChip, SectionHead } from "./util";
@@ -77,8 +76,9 @@ export function OverviewPage({ panel, schedule, scheduleErr, bots, botsErr, cade
 
   return (
     <>
-      {/* the verdict + every lever — the reason this host exists */}
-      <StatusBar state={panel.state} cadence={cadence} inviteCode={inviteCode} onChanged={onChanged} />
+      {/* one-line state strip — the verdict at a glance; the levers live on
+          /controls now (owner call: the full panel was eating the Overview) */}
+      <StateStrip state={panel.state} cadence={cadence} inviteCode={inviteCode} />
 
       {/* corporate-action drift: a ledger phantom paired with an unledgered
           live position = probable ticker rename (the AVB→VMRK class of bug).
@@ -156,6 +156,58 @@ export function OverviewPage({ panel, schedule, scheduleErr, bots, botsErr, cade
         <AuditLines audit={panel.audit} limit={5} />
       </OpsCard>
     </>
+  );
+}
+
+// ── one-line verdict strip (no controls — those moved to /controls) ─────────
+function StateStrip({ state, cadence, inviteCode }: {
+  state: AdminPanel["state"];
+  cadence: string | null;
+  inviteCode?: string | null;
+}) {
+  const [copied, setCopied] = useState(false);
+  async function copyInvite(e: React.MouseEvent) {
+    e.preventDefault();
+    if (!inviteCode) return;
+    try { await navigator.clipboard.writeText(inviteCode); setCopied(true); }
+    catch {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = inviteCode; ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.select();
+        document.execCommand("copy"); ta.remove(); setCopied(true);
+      } catch { /* Members page has the fallback card */ }
+    }
+    setTimeout(() => setCopied(false), 1500);
+  }
+  return (
+    <div
+      className="flex flex-wrap items-center gap-2.5 rounded-[13px] border px-3.5 py-2"
+      style={state.will_place_next
+        ? { borderColor: "rgba(52, 227, 168, 0.35)", background: "rgba(52, 227, 168, 0.05)" }
+        : { borderColor: "rgba(255, 107, 107, 0.35)", background: "rgba(255, 107, 107, 0.04)" }}
+    >
+      <span className={`text-[13px] font-semibold ${state.will_place_next ? "text-green" : "text-red"}`}>
+        {state.will_place_next ? "next run places orders" : "next run places nothing"}
+      </span>
+      {!state.will_place_next && state.reasons?.length > 0 && (
+        <span className="text-[12px] text-red/80">· {state.reasons.join(" · ")}</span>
+      )}
+      <span className="ml-auto flex flex-wrap items-center gap-2">
+        <Pill tone={state.is_live ? "teal" : "neutral"}>mode <b>{state.execution_mode}</b></Pill>
+        <Pill tone={state.armed ? "ok" : "warn"}>{state.armed ? "armed" : "disarmed"}</Pill>
+        {state.halt && <Pill tone="danger">HALT</Pill>}
+        {cadence && <Pill tone="neutral">{cadence}</Pill>}
+        {inviteCode && (
+          <button onClick={copyInvite} title="Copy invite code" className="pill pill-teal">
+            invite <b className="font-mono">{copied ? "copied ✓" : inviteCode}</b>
+          </button>
+        )}
+        <AdminLink href="/controls" className="text-[12px] font-medium text-teal hover:underline">
+          Controls →
+        </AdminLink>
+      </span>
+    </div>
   );
 }
 

@@ -17,11 +17,12 @@
 import { Button, Logo } from "@/components/ui";
 import { AdminLink, OpsTag } from "./util";
 
-export type AdminPageKey = "overview" | "basket" | "members" | "cycle" | "bots" | "audit";
+export type AdminPageKey = "overview" | "controls" | "basket" | "members" | "cycle" | "bots" | "audit";
 
 /** Route → page. Unknown paths render Overview (per the host contract). */
 export function pageKeyFor(pathname: string | null | undefined): AdminPageKey {
   switch (pathname) {
+    case "/controls": return "controls";
     case "/basket": return "basket";
     case "/members": return "members";
     case "/cycle": return "cycle";
@@ -33,6 +34,7 @@ export function pageKeyFor(pathname: string | null | undefined): AdminPageKey {
 
 const TABS: { key: AdminPageKey; href: string; label: string }[] = [
   { key: "overview", href: "/", label: "Overview" },
+  { key: "controls", href: "/controls", label: "Controls" },
   { key: "basket", href: "/basket", label: "Basket" },
   { key: "members", href: "/members", label: "Members" },
   { key: "cycle", href: "/cycle", label: "Cycle" },

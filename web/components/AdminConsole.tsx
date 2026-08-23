@@ -27,6 +27,7 @@ import { Button, Card, Logo } from "./ui";
 import { OpsHeader, pageKeyFor } from "./admin/OpsHeader";
 import { OverviewPage } from "./admin/OverviewPage";
 import { BasketPage } from "./admin/BasketPage";
+import { ControlsPage } from "./admin/ControlsPage";
 import { CyclePanel } from "./admin/CyclePanel";
 import { MembersPanel } from "./admin/MembersPanel";
 import { MemberDrawer } from "./admin/MemberDrawer";
@@ -157,6 +158,11 @@ export function AdminConsole() {
             {page === "overview" && (
               <OverviewPage panel={panel} schedule={schedule} scheduleErr={scheduleErr}
                 bots={bots} botsErr={botsErr} cadence={cadence}
+                inviteCode={overview?.invite_code ?? null} onChanged={refresh} />
+            )}
+
+            {page === "controls" && (
+              <ControlsPage state={panel.state} cadence={cadence}
                 inviteCode={overview?.invite_code ?? null} onChanged={refresh} />
             )}
 
