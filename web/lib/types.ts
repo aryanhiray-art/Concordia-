@@ -1,7 +1,11 @@
 export type UniverseItem = { symbol: string; name: string; sort_order?: number };
 
-export type TallyRow = { symbol: string; name: string; votes: number; weight?: number };
-export type Alloc = { symbol: string; weight: number };   // weight = % of voting power
+export type TallyRow = {
+  symbol: string; name: string; votes: number; weight?: number;
+  /** Latest few HUMAN rationales attached to this pick (absent when none). */
+  theses?: { name: string; text: string }[];
+};
+export type Alloc = { symbol: string; weight: number; thesis?: string | null };   // weight = % of voting power
 
 export type Balance = { total_value: number | null; cash: number | null; buying_power: number | null } | null;
 export type Allocation = { type: "percent" | "dollar"; value: number; resolved_usd: number; balance: Balance };
@@ -99,6 +103,8 @@ export type MemberSettings = {
   alloc_type?: string;
   alloc_value?: number;
   voting_power?: number;
+  /** Ballot lifecycle emails (open / closing-soon); default on. */
+  email_reminders?: number;
 } | null;
 
 export type Member = {

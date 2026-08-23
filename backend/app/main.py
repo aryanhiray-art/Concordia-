@@ -93,12 +93,24 @@ def _startup() -> None:
 
 @app.get("/health")
 def health():
+    # ok now means "the API can actually WRITE its database", not just "the
+    # process answers HTTP" — the external dead-man probe keys off this, and a
+    # read-only-disk box that still serves 200s was exactly the blind spot.
+    db_ok = True
+    try:
+        from .db import db as _db
+        with _db() as conn:
+            conn.execute("INSERT OR REPLACE INTO kv(key,value) VALUES('health_probe_at',?)",
+                         (str(int(__import__('time').time())),))
+    except Exception:  # noqa: BLE001
+        db_ok = False
     return {
-        "ok": True,
+        "ok": db_ok,
         "service": "concord",
         "app_env": settings.app_env,
         "execution_mode": settings.execution_mode,
         "armed": is_armed(),
+        "db_ok": db_ok,
     }
 
 

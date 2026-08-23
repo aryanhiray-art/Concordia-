@@ -340,10 +340,36 @@ def _check_backup_stale() -> list[dict]:
                              "never have run")}]
     age_h = (time.time() - files[-1].stat().st_mtime) / 3600
     if age_h <= BACKUP_STALE_H:
-        return []
+        return _check_offbox_stale()
     return [{"key": "backup-stale", "severity": "warn",
              "message": (f"newest backup ({files[-1].name}) is {age_h:.0f}h old "
-                         f"(> {BACKUP_STALE_H}h) — check concord-backup.timer")}]
+                         f"(> {BACKUP_STALE_H}h) — check concord-backup.timer")}] \
+        + _check_offbox_stale()
+
+
+def _check_offbox_stale() -> list[dict]:
+    """W11b: the off-box ship must be succeeding, not just the local write —
+    same-disk-only backups are exactly the failure DR exists for. Only armed
+    once a ship has EVER succeeded (or a dest is configured), so dev boxes
+    with no off-box target stay quiet."""
+    import os as _os
+
+    from ..db import kv_get
+    dest_set = bool(_os.environ.get("CONCORD_BACKUP_DEST", "").strip())
+    stamp = kv_get("backup_offbox_ok_at")
+    if not dest_set and not stamp:
+        return []
+    if not stamp:
+        return [{"key": "backup-offbox-stale", "severity": "warn",
+                 "message": "CONCORD_BACKUP_DEST is set but no off-box ship has "
+                            "ever succeeded — check SSH key / dest path"}]
+    age_h = (time.time() - int(stamp)) / 3600
+    if age_h <= BACKUP_STALE_H:
+        return []
+    return [{"key": "backup-offbox-stale", "severity": "warn",
+             "message": (f"last successful OFF-BOX backup ship was {age_h:.0f}h ago "
+                         f"(> {BACKUP_STALE_H}h) — local backups continue but DR "
+                         "is stale; check the ship target")}]
 
 
 # ─── W12: underfunded stake ──────────────────────────────────────────────────

@@ -169,3 +169,85 @@ def _deliver(to: str, subject: str, body: str, out: dict) -> None:
     except Exception:  # noqa: BLE001 — a mail crash is a failed send, nothing more
         ok = False
     (out["sent"] if ok else out["failed"]).append(to)
+
+
+# ─── ballot lifecycle emails (open / closing-soon) ───────────────────────────
+# Same constitution as the receipts above: fenced everywhere, never raises,
+# one member's failure never blocks the next. A kv stamp per (kind, session)
+# makes every send idempotent — catch-up timer runs can't double-mail the club.
+# DEMO_MODE sends nothing: demo ballots are a playground, not an obligation.
+
+def _reminder_recipients(sid: int, only_nonvoters: bool) -> list[dict]:
+    """Human, verified, participating members with reminders on — optionally
+    only those who have not voted in session `sid`."""
+    q = (
+        "SELECT m.id, m.email, m.display_name FROM members m "
+        "JOIN member_settings s ON s.member_id = m.id "
+        "WHERE COALESCE(m.is_bot,0)=0 AND m.email_verified_at IS NOT NULL "
+        "AND s.opted_in=1 AND COALESCE(s.email_reminders,1)=1 "
+        "AND m.email NOT LIKE 'deleted-%'"
+    )
+    if only_nonvoters:
+        q += " AND NOT EXISTS (SELECT 1 FROM votes v WHERE v.session_id=? AND v.member_id=m.id)"
+    with db() as conn:
+        rows = conn.execute(q, ((sid,) if only_nonvoters else ())).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _lifecycle_send(kind: str, session: dict, only_nonvoters: bool,
+                    subject: str, body_for) -> dict:
+    out: dict = {"sent": [], "failed": [], "printed": [], "skipped": None}
+    try:
+        if settings.demo_mode:
+            out["skipped"] = "demo mode"
+            return out
+        if not settings.member_run_emails:
+            out["skipped"] = "member_run_emails disabled"
+            return out
+        sid = session.get("id")
+        if not sid or session.get("status") != "open":
+            out["skipped"] = "no open session"
+            return out
+        from ..db import kv_get, kv_set
+        stamp = f"notified:{kind}:{sid}"
+        if kv_get(stamp):
+            out["skipped"] = "already sent"
+            return out
+        kv_set(stamp, str(int(__import__("time").time())))   # stamp FIRST: a re-run mid-send must not re-mail the club
+        for r in _reminder_recipients(int(sid), only_nonvoters):
+            try:
+                _deliver(r["email"], subject, body_for(r), out)
+            except Exception:  # noqa: BLE001
+                pass
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def send_ballot_open_emails(session: dict) -> dict:
+    """One 'the ballot is open' email per participating member, once per session."""
+    td = str(session.get("trade_date") or "")
+
+    def body(r: dict) -> str:
+        return (f"Hi {r['display_name']},\n\n"
+                f"The club's ballot for the {td} cycle is open.\n\n"
+                "Cast your picks at voteconcordia.com/vote — your voting power "
+                "only counts if you use it before the ballot closes.\n\n"
+                "(You can turn these reminders off from your Account page.)\n")
+    return _lifecycle_send("open", session, False,
+                           f"Concordia — the ballot is open ({td})", body)
+
+
+def send_closing_soon_emails(session: dict) -> dict:
+    """One closing-soon nudge per participating member who has NOT voted yet."""
+    td = str(session.get("trade_date") or "")
+
+    def body(r: dict) -> str:
+        return (f"Hi {r['display_name']},\n\n"
+                f"The ballot for the {td} cycle closes soon and you haven't "
+                "voted yet.\n\n"
+                "Cast your picks at voteconcordia.com/vote before it closes — "
+                "otherwise this cycle trades without your voice.\n\n"
+                "(You can turn these reminders off from your Account page.)\n")
+    return _lifecycle_send("close", session, True,
+                           f"Concordia — the ballot closes soon ({td})", body)

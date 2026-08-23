@@ -18,6 +18,7 @@ from .. import ratelimit
 from ..config import settings
 from ..db import audit, db
 from ..security import ct_eq, hash_password, make_session, verify_password
+from ..services import invites
 from ..services import email_codes, google_auth, mailer
 from .deps import COOKIE_NAME, client_ip, current_member, load_member
 
@@ -176,7 +177,7 @@ def signup_start(body: SignupStartBody, request: Request):
     ip = client_ip(request)
     if ratelimit.too_many(f"signup:{ip}", 10, 3600):
         raise HTTPException(status_code=429, detail="too many signups — try again later")
-    if not ct_eq(body.invite_code.strip(), settings.invite_code):
+    if not invites.check(body.invite_code):
         ratelimit.record(f"signup:{ip}")
         raise HTTPException(status_code=403, detail="invalid invite code")
     if not settings.email_enabled:
@@ -205,7 +206,7 @@ def signup(body: SignupBody, request: Request, resp: Response):
     ip = client_ip(request)
     if ratelimit.too_many(f"signup:{ip}", 10, 3600):
         raise HTTPException(status_code=429, detail="too many signups — try again later")
-    if not ct_eq(body.invite_code.strip(), settings.invite_code):
+    if not invites.check(body.invite_code):
         ratelimit.record(f"signup:{ip}")
         raise HTTPException(status_code=403, detail="invalid invite code")
     # Prod requires an explicit club-agreement acceptance (dev keeps old clients
@@ -230,6 +231,14 @@ def signup(body: SignupBody, request: Request, resp: Response):
                                 detail="that code didn't match or expired — use the newest email")
     role = "owner" if ct_eq(email, settings.owner_email) else "member"
     pw = hash_password(body.password)
+    # Consume the invite LAST — after the email code verified and right before
+    # the row exists — so failed signups never burn a limited-use code. The
+    # legacy shared code stays "redacted" in the row (leak hygiene); minted
+    # codes are recorded verbatim — attribution is their entire point.
+    used = invites.redeem(body.invite_code)
+    if used is None:
+        raise HTTPException(status_code=403, detail="invalid invite code")
+    attr = "redacted" if ct_eq(used, settings.invite_code) else used
     with db() as conn:
         if conn.execute("SELECT 1 FROM members WHERE email=?", (email,)).fetchone():
             # never overwrite an existing account (no passwordless-claim takeover)
@@ -237,7 +246,7 @@ def signup(body: SignupBody, request: Request, resp: Response):
         cur = conn.execute(
             "INSERT INTO members(email,display_name,role,invite_code_used,password_hash,"
             "email_verified_at,created_at) VALUES(?,?,?,?,?,?,?)",
-            (email, _clean_display_name(body.display_name), role, "redacted", pw,
+            (email, _clean_display_name(body.display_name), role, attr, pw,
              int(time.time()) if settings.email_enabled else None, int(time.time())),
         )
         member = {"id": cur.lastrowid, "session_version": 1, "role": role}
@@ -340,18 +349,22 @@ def google(body: GoogleBody, request: Request, resp: Response):
     # New member: same invite gate + per-IP signup window as password signup.
     if ratelimit.too_many(f"signup:{ip}", 10, 3600):
         raise HTTPException(status_code=429, detail="too many signups — try again later")
-    if not body.invite_code or not ct_eq(body.invite_code.strip(), settings.invite_code):
+    if not body.invite_code or not invites.check(body.invite_code):
         ratelimit.record(f"signup:{ip}")
         raise HTTPException(status_code=403, detail="invite code required or invalid")
     if body.consent is not True:
         raise HTTPException(status_code=403, detail="you must accept the club agreement")
+    used = invites.redeem(body.invite_code)
+    if used is None:
+        raise HTTPException(status_code=403, detail="invite code required or invalid")
+    attr = "redacted" if ct_eq(used, settings.invite_code) else used
     role = "owner" if ct_eq(email, settings.owner_email) else "member"
     with db() as conn:
         cur = conn.execute(
             "INSERT INTO members(email,display_name,role,invite_code_used,password_hash,"
             "email_verified_at,created_at) VALUES(?,?,?,?,?,?,?)",
             (email, _clean_display_name(info.get("name") or email.split("@")[0]),
-             role, "redacted", None, int(time.time()), int(time.time())),
+             role, attr, None, int(time.time()), int(time.time())),
         )
         member = {"id": cur.lastrowid, "session_version": 1, "role": role}
     _default_settings(member["id"])

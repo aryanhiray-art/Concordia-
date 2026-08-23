@@ -14,6 +14,7 @@ router = APIRouter(prefix="/api", tags=["voting"])
 class AllocItem(BaseModel):
     symbol: str
     weight: float = 0   # % of the member's voting power on this pick
+    thesis: str | None = None   # optional rationale, sanitized+capped server-side
 
 
 class VoteBody(BaseModel):
@@ -44,7 +45,8 @@ def cast_vote(body: VoteBody, member: dict = Depends(require_member)):
     try:
         if body.allocations is not None:
             svc.set_member_allocations(session["id"], member["id"],
-                                       [{"symbol": a.symbol, "weight": a.weight} for a in body.allocations])
+                                       [{"symbol": a.symbol, "weight": a.weight, "thesis": a.thesis}
+                                        for a in body.allocations])
         else:
             svc.set_member_picks(session["id"], member["id"], body.symbols or [])
     except ValueError as e:

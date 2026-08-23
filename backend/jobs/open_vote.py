@@ -30,6 +30,12 @@ def main() -> int:
     session = voting.open_session_for(target)
     print(f"[open_vote] session for {session['trade_date']} status={session['status']} "
           f"closes_at={session['closes_at']}")
+    # Ballot-open email to participating members (idempotent via kv stamp —
+    # a Persistent catch-up re-run cannot double-mail the club).
+    from app.services import notify  # noqa: E402
+    res = notify.send_ballot_open_emails(session)
+    print(f"[open_vote] open-email sent={len(res['sent'])} printed={len(res['printed'])} "
+          f"failed={len(res['failed'])} skipped={res['skipped']}")
     return 0
 
 

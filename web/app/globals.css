@@ -420,7 +420,7 @@ a:focus-visible, button:focus-visible { background: rgba(255,255,255,0.06); }
 .statcell .s { margin-top: 4px; font: 500 11.5px/1.2 var(--font-inter), sans-serif; color: var(--subtle); }
 
 /* ═══ Vote allocation rows + sliders ═══════════════════════════════════ */
-.vrow { display: flex; align-items: center; gap: 14px; padding: 16px 0; border-top: 1px solid var(--hair); }
+.vrow { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; padding: 16px 0; border-top: 1px solid var(--hair); }
 .vrow:first-of-type { border-top: none; }
 .vtk { width: 92px; flex: none; }
 .vtk b { font: 600 13.5px/1 var(--font-outfit), sans-serif; }

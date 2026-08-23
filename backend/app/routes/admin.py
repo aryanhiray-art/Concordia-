@@ -18,7 +18,7 @@ from ..calendar_us import cycle_phase, next_trading_day, today_et
 from ..config import settings
 from ..db import audit, db, is_armed, kv_get, kv_set, set_armed
 from ..robinhood import vault
-from ..services import adminview, alloc, apikeys, bots, executor, power, reconcile, research
+from ..services import adminview, alloc, apikeys, bots, executor, invites, power, reconcile, research
 from ..services import voting as svc
 from .deps import load_member, owner_member_id, require_admin, require_owner
 
@@ -303,6 +303,38 @@ def rename_symbol(body: RenameBody, admin: dict = Depends(require_admin)):
                                actor=f"admin:{admin['id']}")
     except ValueError as e:
         raise HTTPException(422, str(e))
+
+
+class InviteBody(BaseModel):
+    note: str = ""
+    expires_days: int | None = None
+    max_uses: int | None = None
+
+
+@router.get("/invites")
+def invites_list(admin: dict = Depends(require_admin)):
+    """Minted invite codes with usage + active flags (env legacy code excluded)."""
+    return {"invites": invites.listing()}
+
+
+@router.post("/invites")
+def invites_mint(body: InviteBody, admin: dict = Depends(require_admin)):
+    if body.expires_days is not None and not (0 < body.expires_days <= 365):
+        raise HTTPException(status_code=422, detail="expires_days must be 1–365")
+    if body.max_uses is not None and not (0 < body.max_uses <= 500):
+        raise HTTPException(status_code=422, detail="max_uses must be 1–500")
+    row = invites.mint(admin.get("id"), body.note, body.expires_days, body.max_uses)
+    audit(f"admin:{admin['id']}", "invite_mint", row["code"],
+          {"note": row["note"], "expires_at": row["expires_at"], "max_uses": row["max_uses"]})
+    return {"invite": row}
+
+
+@router.post("/invites/{invite_id}/revoke")
+def invites_revoke(invite_id: int, admin: dict = Depends(require_admin)):
+    if not invites.revoke(invite_id):
+        raise HTTPException(status_code=404, detail="no such active invite")
+    audit(f"admin:{admin['id']}", "invite_revoke", str(invite_id), None)
+    return {"ok": True}
 
 
 @router.get("/bots")

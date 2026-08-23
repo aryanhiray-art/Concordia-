@@ -182,6 +182,12 @@ export type AdminOverviewMember = {
   rh_status?: string | null;
   power_delta?: number | null;
 };
+export type AdminInvite = {
+  id: number; code: string; note: string | null; created_at: number;
+  expires_at: number | null; max_uses: number | null; uses: number;
+  revoked_at: number | null; active: boolean;
+};
+
 export type AdminOverview = {
   armed: boolean;
   halt: boolean;
@@ -422,6 +428,8 @@ export const api = {
   // the single on/off switch
   participate: (on: boolean) =>
     req<{ member: Member }>("/api/me/participate", { method: "PUT", body: JSON.stringify({ on }) }),
+  emailReminders: (on: boolean) =>
+    req<{ member: Member }>("/api/me/email-reminders", { method: "PUT", body: JSON.stringify({ on }) }),
 
   // agentic balance + allocation (% or $) + club-only P&L.
   // CHEAP: served from the backend's cached snapshot (refreshed on a ~10-min
@@ -494,7 +502,7 @@ export const api = {
     req<{ symbols: UniverseItem[] }>(`/api/universe?q=${encodeURIComponent(q)}&limit=${limit}`),
   voteToday: () => req<SessionView>("/api/vote/today"),
   // Concordia model: allocate % of voting power across picks (sums to ≤100)
-  castVote: (allocations: { symbol: string; weight: number }[]) =>
+  castVote: (allocations: { symbol: string; weight: number; thesis?: string | null }[]) =>
     req<SessionView>("/api/vote/today", { method: "POST", body: JSON.stringify({ allocations }) }),
   results: () => req<{
     session: SessionView | null; executions: ExecutionRow[];
@@ -526,6 +534,11 @@ export const api = {
   adminOverview: () => req<AdminOverview>("/api/admin/overview"),
   adminSchedule: () => req<AdminSchedule>("/api/admin/schedule"),
   adminBots: () => req<AdminBots>("/api/admin/bots"),
+  adminInvites: () => req<{ invites: AdminInvite[] }>("/api/admin/invites"),
+  adminInviteMint: (b: { note?: string; expires_days?: number | null; max_uses?: number | null }) =>
+    req<{ invite: AdminInvite }>("/api/admin/invites", { method: "POST", body: JSON.stringify(b) }),
+  adminInviteRevoke: (id: number) =>
+    req<{ ok: boolean }>(`/api/admin/invites/${id}/revoke`, { method: "POST" }),
   adminMember: (id: number) => req<AdminMemberDetail>(`/api/admin/member/${id}`),
   // arming lets real orders happen — the typed-ARM confirm lives in the UI
   adminArm: (armed: boolean) =>

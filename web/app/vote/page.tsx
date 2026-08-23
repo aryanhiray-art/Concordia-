@@ -137,13 +137,21 @@ export default function VotePage() {
             ) : (
               <div className="mt-3.5 flex max-h-[min(46vh,400px)] flex-col gap-2.5 overflow-y-auto">
                 {basket.map((b) => (
-                  <div key={b.symbol} className="flex items-center gap-2.5">
-                    <StockLink symbol={b.symbol} unstyled
-                      className={`w-14 flex-none text-left font-display text-[13px] font-semibold transition hover:text-teal ${mine.has(b.symbol) ? "text-teal" : ""}`}>
-                      {b.symbol}
-                    </StockLink>
-                    <div className="bar min-w-0 flex-1"><i style={{ width: `${((b.weight || 0) / maxW) * 100}%` }} /></div>
-                    <span className="w-14 flex-none text-right text-[12px] tnum text-muted">{money(b.weight)}</span>
+                  <div key={b.symbol}>
+                    <div className="flex items-center gap-2.5">
+                      <StockLink symbol={b.symbol} unstyled
+                        className={`w-14 flex-none text-left font-display text-[13px] font-semibold transition hover:text-teal ${mine.has(b.symbol) ? "text-teal" : ""}`}>
+                        {b.symbol}
+                      </StockLink>
+                      <div className="bar min-w-0 flex-1"><i style={{ width: `${((b.weight || 0) / maxW) * 100}%` }} /></div>
+                      <span className="w-14 flex-none text-right text-[12px] tnum text-muted">{money(b.weight)}</span>
+                    </div>
+                    {/* member rationales — the "why" behind the pick, human votes only */}
+                    {(b.theses || []).slice(0, 2).map((t, k) => (
+                      <p key={k} className="ml-16 mt-1 text-[11.5px] leading-snug text-subtle">
+                        <span className="font-semibold text-muted">{t.name}:</span> “{t.text}”
+                      </p>
+                    ))}
                   </div>
                 ))}
               </div>

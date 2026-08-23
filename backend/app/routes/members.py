@@ -493,6 +493,20 @@ def participate(body: ParticipateBody, member: dict = Depends(require_member)):
     return {"member": load_member(member["id"])}
 
 
+@router.put("/me/email-reminders")
+def email_reminders(body: ParticipateBody, member: dict = Depends(require_member)):
+    """Ballot-lifecycle email opt-out. Deliberately does NOT touch updated_at:
+    that timestamp doubles as the stake-freeze / demo buy-in clock, and a mail
+    preference must never reset either."""
+    with db() as conn:
+        conn.execute(
+            "UPDATE member_settings SET email_reminders=? WHERE member_id=?",
+            (1 if body.on else 0, member["id"]),
+        )
+    audit(f"member:{member['id']}", "email_reminders", None, {"on": body.on})
+    return {"member": load_member(member["id"])}
+
+
 class DeleteAccountBody(BaseModel):
     confirm: str
 

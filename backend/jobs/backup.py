@@ -101,6 +101,18 @@ def prune(backup_dir: Path, keep: int) -> int:
     return removed
 
 
+def _stamp_offbox_ok() -> None:
+    """Record the last successful off-box ship in kv, for watchdog W11b. A
+    stamp failure is swallowed — the ship itself already succeeded."""
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from app.db import kv_set
+        kv_set("backup_offbox_ok_at", str(int(datetime.now().timestamp())))
+    except Exception as e:  # noqa: BLE001
+        print(f"[backup] WARNING: could not stamp off-box success: {e}")
+
+
 def ship_offbox(path: Path, dest: str) -> None:
     """Copy `path` to `dest` (an rsync/scp target or a mounted path). Never raises."""
     rsync = shutil.which("rsync")
@@ -121,6 +133,7 @@ def ship_offbox(path: Path, dest: str) -> None:
             print(f"[backup] WARNING: off-box ship failed (exit {r.returncode}): {msg}")
         else:
             print(f"[backup] shipped off-box → {dest}")
+            _stamp_offbox_ok()
     except subprocess.TimeoutExpired:
         print(f"[backup] WARNING: off-box ship timed out after {SHIP_TIMEOUT}s → {dest}")
     except Exception as e:  # never let a bad dest crash the (successful) local backup

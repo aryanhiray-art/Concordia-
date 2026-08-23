@@ -49,6 +49,8 @@ export function ConnectCard({ member, onChange }: { member: Member; onChange: ()
   const reauth = !!(rh && rh.account_number && !connected);
 
   const [optedIn, setOptedIn] = useState(Number(s?.opted_in) === 1);
+  // default ON when the column hasn't arrived yet (older backend payloads)
+  const [reminders, setReminders] = useState(Number(s?.email_reminders ?? 1) === 1);
   const [busy, setBusy] = useState(false);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const [phase, setPhase] = useState<"idle" | "paste">("idle");
@@ -89,6 +91,12 @@ export function ConnectCard({ member, onChange }: { member: Member; onChange: ()
     setOptedIn(on);
     try { await api.participate(on); onChange(); }
     catch { setOptedIn(!on); } // revert on failure
+  }
+
+  async function toggleReminders(on: boolean) {
+    setReminders(on);
+    try { await api.emailReminders(on); onChange(); }
+    catch { setReminders(!on); } // revert on failure
   }
 
   return (
@@ -174,6 +182,14 @@ export function ConnectCard({ member, onChange }: { member: Member; onChange: ()
               </div>
             </div>
             <Toggle on={optedIn} onChange={toggle} />
+          </div>
+
+          <div className="mt-4 flex items-center justify-between gap-4 border-t border-white/10 pt-4">
+            <div>
+              <div className="font-display text-[13.5px] font-semibold">Ballot reminder emails</div>
+              <div className="mt-0.5 text-[12px] text-subtle">When the ballot opens, and a nudge before it closes if you haven&apos;t voted.</div>
+            </div>
+            <Toggle on={reminders} onChange={toggleReminders} />
           </div>
 
           {/* the exit right §7 of the club agreement promises: full revocation */}

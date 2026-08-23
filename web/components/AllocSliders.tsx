@@ -18,7 +18,7 @@ import { StockSearch } from "./StockSearch";
 /** Mirrors backend settings.max_picks (MAX_PICKS, default 20). */
 const MAX_PICKS = 20;
 
-type Row = { symbol: string; name: string; weight: number };
+type Row = { symbol: string; name: string; weight: number; thesis?: string };
 
 export function AllocSliders({
   session, participating, onVoted,
@@ -36,6 +36,7 @@ export function AllocSliders({
   useEffect(() => {
     setRows((session.my_picks || []).map((a: Alloc) => ({
       symbol: a.symbol, name: names.current[a.symbol] || a.symbol, weight: Math.round(a.weight),
+      thesis: a.thesis || "",
     })));
   }, [session.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -49,6 +50,10 @@ export function AllocSliders({
     setSaved(false); setErr(null);
   }
   function remove(i: number) { setRows((rs) => rs.filter((_, k) => k !== i)); setSaved(false); setErr(null); }
+  function setThesis(i: number, t: string) {
+    setRows((rs) => rs.map((r, k) => (k === i ? { ...r, thesis: t } : r)));
+    setSaved(false); setErr(null);
+  }
 
   // Same merge policy as "Add to ballot" on the research surfaces: the new pick
   // takes an equal share out of unspent power, and only if there is none does
@@ -75,7 +80,9 @@ export function AllocSliders({
   async function submit() {
     setSaving(true); setSaved(false); setErr(null);
     try {
-      const s = await api.castVote(rows.map((r) => ({ symbol: r.symbol, weight: r.weight })));
+      const s = await api.castVote(rows.map((r) => ({
+        symbol: r.symbol, weight: r.weight, thesis: r.thesis?.trim() ? r.thesis.trim() : null,
+      })));
       onVoted(s); setSaved(true);
     } catch (e: any) {
       setErr(e?.message || "something went wrong on the server. Please try again.");
@@ -141,6 +148,14 @@ export function AllocSliders({
               <button className="del" onClick={() => remove(i)} title="Remove" aria-label={`Remove ${r.symbol}`}>
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18M6 6l12 12" /></svg>
               </button>
+              {/* optional rationale — the "why" shown to the club next to the tally */}
+              <input
+                value={r.thesis || ""}
+                onChange={(e) => setThesis(i, e.target.value.slice(0, 280))}
+                placeholder="why? (optional — shown to the club)"
+                aria-label={`${r.symbol} rationale`}
+                className="basis-full rounded-[9px] border border-transparent bg-white/[0.03] px-2.5 py-1.5 text-[12px] text-muted outline-none transition placeholder:text-subtle/70 focus:border-teal/30 focus:text-ink"
+              />
             </div>
           ))}
         </div>

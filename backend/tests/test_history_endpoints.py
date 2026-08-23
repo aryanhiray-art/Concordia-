@@ -202,8 +202,8 @@ def test_me_votes_only_caller_rows_and_hits():
     assert set(mine) == {"id", "trade_date", "status", "status_display",
                          "my_allocations", "basket", "hits"}
     assert mine["trade_date"] == "2026-06-06" and mine["status"] == "executed"
-    assert mine["my_allocations"] == [{"symbol": "AAPL", "weight": 60.0},
-                                      {"symbol": "XOM", "weight": 40.0}]
+    assert mine["my_allocations"] == [{"symbol": "AAPL", "weight": 60.0, "thesis": None},
+                                      {"symbol": "XOM", "weight": 40.0, "thesis": None}]
     assert mine["basket"] == ["AAPL", "MSFT"]        # what the club decided
     assert mine["hits"] == ["AAPL"]                  # XOM missed, MSFT wasn't mine
     # B's ballot must not appear ANYWHERE in A's payload (ZBRA = B's unique pick;
@@ -214,8 +214,8 @@ def test_me_votes_only_caller_rows_and_hits():
     r_b = client.get("/api/me/votes", headers=_hdrs(tok_b))
     b_sessions = {s["id"]: s for s in r_b.json()["sessions"]}
     assert set(b_sessions) == {sid, sid_b_only}
-    assert b_sessions[sid]["my_allocations"] == [{"symbol": "MSFT", "weight": 70.0},
-                                                 {"symbol": "ZBRA", "weight": 30.0}]
+    assert b_sessions[sid]["my_allocations"] == [{"symbol": "MSFT", "weight": 70.0, "thesis": None},
+                                                 {"symbol": "ZBRA", "weight": 30.0, "thesis": None}]
     assert b_sessions[sid]["hits"] == ["MSFT"]
     assert b_sessions[sid_b_only]["hits"] == ["ZBRA"]
     # newest first
@@ -236,8 +236,8 @@ def test_open_session_ballot_visible_to_owner_with_empty_basket():
                   client.get("/api/me/votes", headers=_hdrs(tok_a)).json()["sessions"]}
     mine = a_sessions[sid]                           # the owner's own ballot IS there
     assert mine["status"] == "open"
-    assert mine["my_allocations"] == [{"symbol": "NVDA", "weight": 55.0},
-                                      {"symbol": "AMD", "weight": 45.0}]
+    assert mine["my_allocations"] == [{"symbol": "NVDA", "weight": 55.0, "thesis": None},
+                                      {"symbol": "AMD", "weight": 45.0, "thesis": None}]
     assert mine["basket"] == [] and mine["hits"] == []   # nothing decided pre-close
 
     # ...and the open ballot never leaks to anyone else, in either endpoint

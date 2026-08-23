@@ -30,7 +30,10 @@ export function mergePick(mine: Alloc[], symbol: string): { next: Alloc[]; weigh
   const used = mine.reduce((a, p) => a + (p.weight || 0), 0);
   const weight = Math.max(0, Math.min(100, Math.round(100 - used)));
   return {
-    next: [...mine.map((p) => ({ symbol: p.symbol, weight: p.weight })), { symbol, weight }],
+    // thesis passes through untouched: POST /api/vote/today REPLACES the whole
+    // ballot, so dropping it here would silently erase saved rationales.
+    next: [...mine.map((p) => ({ symbol: p.symbol, weight: p.weight, thesis: p.thesis ?? null })),
+           { symbol, weight }],
     weight,
   };
 }

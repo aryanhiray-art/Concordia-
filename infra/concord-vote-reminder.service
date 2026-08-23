@@ -1,0 +1,15 @@
+[Unit]
+Description=Concord — closing-soon ballot reminder email (window-gated in the job)
+
+[Service]
+Type=oneshot
+User=concord
+Group=concord
+WorkingDirectory=/opt/concord/backend
+EnvironmentFile=/opt/concord/.env
+ExecStart=/opt/concord/backend/.venv/bin/python jobs/vote_reminder.py
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/concord
+UMask=077

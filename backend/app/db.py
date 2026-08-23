@@ -72,6 +72,20 @@ CREATE TABLE IF NOT EXISTS login_events (
     kind       TEXT NOT NULL DEFAULT 'login'          -- 'signup' | 'login'
 );
 
+-- Minted invite codes (alongside the legacy shared INVITE_CODE env string).
+-- A code admits while: not revoked, not expired, uses < max_uses (NULL = ∞).
+CREATE TABLE IF NOT EXISTS invites (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    code       TEXT UNIQUE NOT NULL,
+    note       TEXT,                                  -- who/what this code is for
+    created_by INTEGER REFERENCES members(id),
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER,                               -- epoch seconds; NULL = never
+    max_uses   INTEGER,                               -- NULL = unlimited
+    uses       INTEGER NOT NULL DEFAULT 0,
+    revoked_at INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS rh_accounts (
     member_id        INTEGER PRIMARY KEY REFERENCES members(id) ON DELETE CASCADE,
     account_number   TEXT,
@@ -381,6 +395,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE members ADD COLUMN email_verified_at INTEGER")
     if "weight" not in cols("votes"):
         conn.execute("ALTER TABLE votes ADD COLUMN weight REAL NOT NULL DEFAULT 100")
+    # Optional per-pick rationale — the "why" a member attaches to a vote.
+    if "thesis" not in cols("votes"):
+        conn.execute("ALTER TABLE votes ADD COLUMN thesis TEXT")
     s = cols("member_settings")
     if "voting_power" not in s:
         conn.execute("ALTER TABLE member_settings ADD COLUMN voting_power REAL NOT NULL DEFAULT 0")
@@ -393,6 +410,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE member_settings ADD COLUMN accuracy REAL NOT NULL DEFAULT 0")
     if "cycles_participated" not in s:
         conn.execute("ALTER TABLE member_settings ADD COLUMN cycles_participated INTEGER NOT NULL DEFAULT 0")
+    # Ballot lifecycle emails (open / closing-soon). Default ON: a weekly-cadence
+    # club lives or dies on members remembering the ballot exists.
+    if "email_reminders" not in s:
+        conn.execute("ALTER TABLE member_settings ADD COLUMN email_reminders INTEGER NOT NULL DEFAULT 1")
     if "scored_at" not in cols("vote_sessions"):
         conn.execute("ALTER TABLE vote_sessions ADD COLUMN scored_at INTEGER")
 

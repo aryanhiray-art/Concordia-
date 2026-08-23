@@ -194,7 +194,7 @@ def set_member_allocations(session_id: int, member_id: int, allocs: list[dict]) 
         raise ValueError("voting is closed for this session")
     valid = universe_symbols()
     seen: set[str] = set()
-    clean: list[tuple[str, float]] = []
+    clean: list[tuple[str, float, str | None]] = []
     for a in allocs:
         sym = str(a.get("symbol") or "").upper()
         try:
@@ -203,11 +203,11 @@ def set_member_allocations(session_id: int, member_id: int, allocs: list[dict]) 
             w = 0.0
         if sym in valid and sym not in seen and w > 0:
             seen.add(sym)
-            clean.append((sym, max(0.0, min(100.0, w))))
+            clean.append((sym, max(0.0, min(100.0, w)), _clean_thesis(a.get("thesis"))))
     clean = clean[: settings.max_picks]
-    total = sum(w for _, w in clean)
+    total = sum(w for _, w, _t in clean)
     if total > 100.0 and total > 0:                    # never let a member exceed 100%
-        clean = [(s, w * 100.0 / total) for s, w in clean]
+        clean = [(s, w * 100.0 / total, t) for s, w, t in clean]
     now = int(time.time())
     # TOCTOU-safe (finding #16): take the write lock, re-check 'open' INSIDE the
     # transaction, and do the DELETE+INSERT atomically. A vote that read 'open'
@@ -222,16 +222,17 @@ def set_member_allocations(session_id: int, member_id: int, allocs: list[dict]) 
                 raise ValueError("voting is closed for this session")
             conn.execute("DELETE FROM votes WHERE session_id=? AND member_id=?", (session_id, member_id))
             conn.executemany(
-                "INSERT OR IGNORE INTO votes(session_id,member_id,symbol,weight,created_at) VALUES(?,?,?,?,?)",
-                [(session_id, member_id, s, round(w, 4), now) for s, w in clean],
+                "INSERT OR IGNORE INTO votes(session_id,member_id,symbol,weight,thesis,created_at) "
+                "VALUES(?,?,?,?,?,?)",
+                [(session_id, member_id, s, round(w, 4), t, now) for s, w, t in clean],
             )
             conn.execute("COMMIT")
         except BaseException:
             conn.execute("ROLLBACK")
             raise
     audit(f"member:{member_id}", "vote", sess["trade_date"],
-          {"allocs": [{"symbol": s, "weight": round(w, 2)} for s, w in clean]})
-    return [{"symbol": s, "weight": round(w, 4)} for s, w in clean]
+          {"allocs": [{"symbol": s, "weight": round(w, 2)} for s, w, _t in clean]})
+    return [{"symbol": s, "weight": round(w, 4), "thesis": t} for s, w, t in clean]
 
 
 def set_member_picks(session_id: int, member_id: int, symbols: list[str]) -> list[dict]:
@@ -251,13 +252,47 @@ def set_member_picks(session_id: int, member_id: int, symbols: list[str]) -> lis
 
 
 def member_picks(session_id: int, member_id: int) -> list[dict]:
-    """This member's picks for a session as [{symbol, weight}] (weight = % of power)."""
+    """This member's picks for a session as [{symbol, weight, thesis}]."""
     with db() as conn:
         rows = conn.execute(
-            "SELECT symbol, weight FROM votes WHERE session_id=? AND member_id=? ORDER BY weight DESC",
+            "SELECT symbol, weight, thesis FROM votes WHERE session_id=? AND member_id=? ORDER BY weight DESC",
             (session_id, member_id)
         ).fetchall()
-    return [{"symbol": r["symbol"], "weight": round(r["weight"], 2)} for r in rows]
+    return [{"symbol": r["symbol"], "weight": round(r["weight"], 2), "thesis": r["thesis"]}
+            for r in rows]
+
+
+_THESIS_MAX = 280
+
+
+def _clean_thesis(raw) -> str | None:
+    """Sanitize a member-typed rationale: strip control chars, collapse runs of
+    whitespace, cap the length. Empty → None (stored as NULL, never '')."""
+    if raw is None:
+        return None
+    txt = "".join(ch for ch in str(raw) if ch == " " or (ch.isprintable() and ch not in "\u2028\u2029"))
+    txt = " ".join(txt.split()).strip()
+    return txt[:_THESIS_MAX] or None
+
+
+def symbol_theses(session_id: int, per_symbol: int = 3) -> dict[str, list[dict]]:
+    """{symbol: [{name, text}]} — the latest few HUMAN rationales per pick.
+
+    Bots never surface here (their generated theses stay admin-only), and a
+    symbol with no rationale simply has no key — the payload stays lean."""
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT v.symbol, v.thesis, m.display_name AS name FROM votes v "
+            "JOIN members m ON m.id = v.member_id "
+            "WHERE v.session_id=? AND v.thesis IS NOT NULL AND COALESCE(m.is_bot,0)=0 "
+            "ORDER BY v.created_at DESC", (session_id,)
+        ).fetchall()
+    out: dict[str, list[dict]] = {}
+    for r in rows:
+        bucket = out.setdefault(r["symbol"], [])
+        if len(bucket) < per_symbol:
+            bucket.append({"name": r["name"], "text": r["thesis"]})
+    return out
 
 
 def _tally_rows(conn: sqlite3.Connection, session_id: int) -> list[sqlite3.Row]:
@@ -542,6 +577,22 @@ def _merge_tallies(base: list[dict], extra: list[dict]) -> list[dict]:
     return sorted(by.values(), key=lambda r: (-r["weight"], -r["votes"], r["symbol"]))
 
 
+def _attach_theses(rows: list[dict], session_id: int) -> list[dict]:
+    """Fold member rationales onto tally rows (post-merge: mirror rows carry
+    none, so attachment must happen after the demo overlay)."""
+    try:
+        theses = symbol_theses(session_id)
+    except Exception:  # noqa: BLE001 — rationale display never breaks the ballot
+        return rows
+    if not theses:
+        return rows
+    for r in rows:
+        t = theses.get(r.get("symbol"))
+        if t:
+            r["theses"] = t
+    return rows
+
+
 def session_public(session: dict, member_id: int | None) -> dict:
     """API view of a session, including the caller's own picks + the live tally."""
     # DEMO ONLY: overlay the LIVE club's forming tally so a fresh demo ballot
@@ -571,7 +622,7 @@ def session_public(session: dict, member_id: int | None) -> dict:
         # was an operational tell. Total-with-bots stays admin-only
         # (adminview cycle_view / GET /api/admin/cycles).
         "voters": human_voter_count(session["id"]) + live_voters,
-        "tally": _merge_tallies(live_tally, tally(session["id"])),
+        "tally": _attach_theses(_merge_tallies(live_tally, tally(session["id"])), session["id"]),
         "my_picks": member_picks(session["id"], member_id) if member_id else [],
         "picks": session_picks(session),
     }
