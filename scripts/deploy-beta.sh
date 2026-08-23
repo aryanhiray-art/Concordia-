@@ -39,7 +39,7 @@ echo "→ deploying $(git rev-parse --short HEAD) to $HOST (BETA)"
 tar czf - --exclude .git --exclude backend/.venv --exclude backend/data --exclude backend/demo.db \
     --exclude web/node_modules --exclude web/.next . \
 | ssh "$HOST" "set -e
-  mkdir -p /root/concordia-beta
+  rm -rf /root/concordia-beta && mkdir -p /root/concordia-beta
   tar xzf - -C /root/concordia-beta
   if [ ${DO_WEB} -eq 1 ]; then
     rsync -a --delete --exclude node_modules --exclude .next --exclude .env.production \

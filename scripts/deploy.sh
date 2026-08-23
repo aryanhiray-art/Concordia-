@@ -37,6 +37,10 @@ echo "→ deploying $(git rev-parse --short HEAD) to $HOST"
 tar czf - --exclude .git --exclude backend/.venv --exclude backend/data --exclude backend/demo.db \
     --exclude web/node_modules --exclude web/.next . \
 | ssh "$HOST" "set -e
+  # FRESH staging every deploy: tar-over-existing left deleted files behind as
+  # ghosts, and the --delete rsync below faithfully re-shipped them (a stale
+  # StatusBar.tsx broke the 2026-08-23 build once an API signature moved).
+  rm -rf /root/concordia && mkdir -p /root/concordia
   tar xzf - -C /root/concordia
   if [ ${DO_WEB} -eq 1 ]; then
     rsync -a --delete --exclude node_modules --exclude .next --exclude .env.production \
