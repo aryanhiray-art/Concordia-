@@ -13,18 +13,15 @@ export const metadata: Metadata = {
   description: "An invite-only investing club: members vote, the top picks become one shared basket, and every trade executes in your own brokerage account.",
 };
 
-// iOS Safari tints its chrome (status bar + URL bar) from theme-color. This
-// value must MATCH the page's composited colour at y=0, or the chrome reads as
-// a black bar above a tinted page — which is exactly what happened: the first
-// attempt used #081310 (8,19,16), technically teal but ~3x darker than the
-// real top and visually indistinguishable from black.
-//
-// Measured composite at the viewport top: --bg #06080C, + the .bgfx radial
-// glows, + the .bgfx::before wash at its 35vh stop (rgba(45,212,191,.10))
-// = #0E3134 mid-screen, warming to ~#114343 under the left aurora orb.
-// Matching the mid value makes chrome and page read as one surface.
+// iOS Safari tints its chrome (status bar + URL bar) from theme-color, so this
+// must match the page's colour at y=0 or the chrome reads as a bar above the
+// page. Two earlier misses: #081310 was technically teal but ~3x too dark, and
+// matching a top-anchored WASH was chasing the wrong target — that wash was
+// itself the artifact (a fixed band content scrolled through). Phones now use
+// ONE uniform tinted base (#0a1c1e + soft glows, see globals.css), so this is
+// simply that base with the glow at the top edge composited in.
 export const viewport: Viewport = {
-  themeColor: "#0E3134",
+  themeColor: "#0D2C2E",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

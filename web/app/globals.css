@@ -52,22 +52,24 @@ body { background: transparent; }
     radial-gradient(820px 600px at 108vw 31vh, rgba(56, 134, 221, 0.12), transparent 60%),
     var(--bg);
 }
-/* top wash: the radial glows centre above the screen and are nearly gone by
-   y=0, so phones showed a flat-black band at the very top (and iOS Safari
-   extends that flat colour into its browser chrome — the "black bar"). A soft
-   teal wash pinned across the viewport's top edge (the element starts 35vh
-   above it) carries the tint to y=0 and through the overscroll bounce. */
-.bgfx::before {
-  content: "";
-  position: absolute;
-  left: 0; right: 0; top: 0;
-  height: calc(35vh + 340px);
-  background: linear-gradient(180deg,
-    rgba(45, 212, 191, 0.10) 0,
-    rgba(45, 212, 191, 0.10) 35vh,
-    rgba(45, 212, 191, 0.045) calc(35vh + 150px),
-    transparent 100%);
-  pointer-events: none;
+/* ── Phone backgrounds: ONE surface, not two zones ────────────────────────
+   .bgfx is position:FIXED, so any top-anchored tint stays pinned to the
+   viewport while content scrolls through it — the owner saw content "transition
+   from the teal to the dark background" on every scroll. A tall narrow phone
+   makes this worse: the radial glows centre near the top, so the bottom 60% of
+   an 812px viewport is left flat black.
+   The cure is not a stronger top wash (that IS the band) — it is removing the
+   two-zone split: on narrow screens the base itself is a tinted dark, so top
+   and bottom already share the tint and the glows only add gentle variation
+   above it. Nothing to transition to. Desktop keeps its original look. */
+@media (max-width: 768px) {
+  html { background: #0a1c1e; }
+  .bgfx {
+    background:
+      radial-gradient(760px 540px at 10vw 22vh, rgba(45, 212, 191, 0.13), transparent 62%),
+      radial-gradient(820px 600px at 108vw 30vh, rgba(56, 134, 221, 0.10), transparent 62%),
+      #0a1c1e;
+  }
 }
 
 /* fine film-grain: desaturated feTurbulence tile (stitched, 180px — no visible
