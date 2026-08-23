@@ -8,8 +8,8 @@
 //
 // Multi-page: AppShell renders <AdminConsole /> for EVERY pathname on the
 // admin host, so this component reads usePathname() and routes internally —
-// / (overview) · /members · /cycle · /bots · /audit, unknown paths falling
-// back to Overview. Data fetching stays HOISTED here (mount + 60s poll +
+// / (overview) · /controls · /basket · /members · /cycle · /runs · /bots ·
+// /audit, unknown paths falling back to Overview. Data fetching stays HOISTED here (mount + 60s poll +
 // window focus) and flows down into the page layouts, so switching tabs never
 // refetches and a slow poll never stacks.
 //
@@ -33,7 +33,8 @@ import { MembersPanel } from "./admin/MembersPanel";
 import { MemberDrawer } from "./admin/MemberDrawer";
 import { SessionPanel } from "./admin/SessionPanel";
 import { BotsPanel } from "./admin/BotsPanel";
-import { AuditTail } from "./admin/AuditTail";
+import { RunsPage } from "./admin/RunsPage";
+import { AuditPage } from "./admin/AuditTail";
 import { AccessCard } from "./admin/AccessCard";
 
 const POLL_MS = 60_000;
@@ -190,11 +191,13 @@ export function AdminConsole() {
               </>
             )}
 
+            {page === "runs" && <RunsPage />}
+
             {page === "bots" && (
               <BotsPanel bots={bots} err={botsErr} onOpen={setSelected} />
             )}
 
-            {page === "audit" && <AuditTail audit={panel.audit} />}
+            {page === "audit" && <AuditPage panelAudit={panel.audit} />}
           </div>
         )}
       </main>

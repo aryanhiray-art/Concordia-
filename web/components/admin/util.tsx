@@ -165,9 +165,12 @@ export function OpsTag({ className = "" }: { className?: string }) {
 
 /** Deferrals ride inside `error` on skipped rows — the executor's cash-account
  *  "not enough SETTLED cash yet" path — and the owner monitors both-day runs
- *  by exactly this count, so it gets its own detector + rendering. */
+ *  by exactly this count, so it gets its own detector + rendering. Two spellings
+ *  exist in the wild: executions rows say "deferred — beyond settled buying
+ *  power", while run-report summary orders say "defer · settles next cycle" —
+ *  match the stem so both read as deferred. */
 export function isDeferred(error?: string | null): boolean {
-  return /deferred/i.test(error || "");
+  return /\bdefer/i.test(error || "");
 }
 
 type Tone = "ok" | "teal" | "warn" | "danger" | "neutral";

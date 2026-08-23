@@ -8,6 +8,8 @@ research-voter ballot.
 """
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -82,6 +84,114 @@ def schedule(admin: dict = Depends(require_admin)):
         "today": {"date": today.isoformat(), "phase": cycle_phase(today) or "idle"},
         "upcoming": upcoming,
     }
+
+
+# ─── run reports + audit/login browsers (DB-only, no broker calls) ───────────
+# Freshness philosophy: like /panel, these endpoints read ONLY rows the runs
+# and jobs already wrote — an admin browsing history must never trigger live
+# Robinhood traffic.
+
+_RUN_COLS = ('id, trade_date, phase, mode, "trigger", will_place, started_at, '
+             "finished_at, placed, skipped, errors, verify_verdict")
+
+
+def _run_row(r) -> dict:
+    out = dict(r)
+    out["will_place"] = bool(out.get("will_place"))
+    return out
+
+
+def _parse_json(raw: str | None):
+    if raw is None:
+        return None
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+@router.get("/runs")
+def runs_list(limit: int = 30, before: int | None = None,
+              admin: dict = Depends(require_admin)):
+    """Executor run history, newest first. `before=<id>` pages older rows.
+
+    summary_json deliberately stays out of the list — a summary can be tens of
+    KB per run; the drilldown endpoint below serves it one run at a time.
+    """
+    limit = max(1, min(limit, 200))
+    q = f"SELECT {_RUN_COLS} FROM run_reports"  # noqa: S608 — column list is a constant
+    params: list = []
+    if before is not None:
+        q += " WHERE id < ?"
+        params.append(before)
+    q += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+    with db() as conn:
+        rows = conn.execute(q, params).fetchall()
+    return {"runs": [_run_row(r) for r in rows]}
+
+
+@router.get("/runs/{run_id}")
+def run_detail(run_id: int, admin: dict = Depends(require_admin)):
+    """One run's list fields + the FULL parsed summary (per-member orders,
+    buying power, notes, verification)."""
+    with db() as conn:
+        row = conn.execute(
+            f"SELECT {_RUN_COLS}, summary_json FROM run_reports WHERE id=?",  # noqa: S608
+            (run_id,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "no such run")
+    out = _run_row(row)
+    out["summary"] = _parse_json(out.pop("summary_json", None))
+    return out
+
+
+@router.get("/audit")
+def audit_browse(limit: int = 50, before: int | None = None,
+                 action: str | None = None, actor: str | None = None,
+                 admin: dict = Depends(require_admin)):
+    """The audit trail, newest first, finally browsable: parsed detail on every
+    row, `before=<id>` pagination, exact-match `action=` / `actor=` filters
+    (optional, combinable)."""
+    limit = max(1, min(limit, 500))
+    conds, params = [], []
+    if before is not None:
+        conds.append("id < ?")
+        params.append(before)
+    if action:
+        conds.append("action = ?")
+        params.append(action)
+    if actor:
+        conds.append("actor = ?")
+        params.append(actor)
+    q = "SELECT id, ts, actor, action, target, detail_json FROM audit_log"
+    if conds:
+        q += " WHERE " + " AND ".join(conds)
+    q += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+    with db() as conn:
+        rows = conn.execute(q, params).fetchall()
+    return {"entries": [
+        {"id": r["id"], "ts": r["ts"], "actor": r["actor"], "action": r["action"],
+         "target": r["target"], "detail": _parse_json(r["detail_json"])}
+        for r in rows
+    ]}
+
+
+@router.get("/logins")
+def logins_list(limit: int = 30, admin: dict = Depends(require_admin)):
+    """Recent sign-ins (login_events joined to members), newest first. Bots are
+    excluded — they never log in; a bot row here would mean forged sessions."""
+    limit = max(1, min(limit, 200))
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT l.ts, l.member_id, m.display_name, m.email, l.ip, l.kind "
+            "FROM login_events l JOIN members m ON m.id = l.member_id "
+            "WHERE COALESCE(m.is_bot, 0) = 0 ORDER BY l.id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return {"logins": [dict(r) for r in rows]}
 
 
 class RenameBody(BaseModel):
@@ -414,6 +524,13 @@ def kill(admin: dict = Depends(require_admin)):
 @router.post("/run/{phase}")
 def run_phase(phase: str, dry_run: bool = True, admin: dict = Depends(require_admin)):
     """Manually trigger a phase. `execute` honours dry_run unless live+armed."""
+    if phase not in ("open", "close", "execute", "power", "bots", "reweight"):
+        raise HTTPException(400, "phase must be open|close|execute|power|bots|reweight")
+    # EVERY manual trigger audits WHO pulled the lever BEFORE the phase runs —
+    # arm/kill/reset-password were audited while `run` (the lever that can move
+    # money) was not. Before, not after: a phase that crashes mid-flight must
+    # still leave the fingerprint.
+    audit(admin["email"], "manual_trigger", phase, {"dry_run": dry_run})
     if phase == "open":
         return {"session": svc.ensure_active_session()}
     if phase == "power":
@@ -429,10 +546,10 @@ def run_phase(phase: str, dry_run: bool = True, admin: dict = Depends(require_ad
         if not session:
             raise HTTPException(404, "no session")
         return {"session": svc.close_and_select(session["id"])}
-    if phase == "execute":
-        # Do NOT clear halt here (finding #15) — if the club is halted, execution
-        # stays blocked until the owner explicitly re-arms. run_today runs the
-        # phase scheduled for today (sell on a sell day, buy on a buy day),
-        # honouring the split-cycle cadence, not a same-day full rebalance.
-        return executor.run_today(force_dry_run=dry_run)
-    raise HTTPException(400, "phase must be open|close|execute|power|bots|reweight")
+    # phase == "execute":
+    # Do NOT clear halt here (finding #15) — if the club is halted, execution
+    # stays blocked until the owner explicitly re-arms. run_today runs the
+    # phase scheduled for today (sell on a sell day, buy on a buy day),
+    # honouring the split-cycle cadence, not a same-day full rebalance.
+    # trigger=manual:<email> stamps the run_reports row with who fired it.
+    return executor.run_today(force_dry_run=dry_run, trigger=f"manual:{admin['email']}")

@@ -210,6 +210,78 @@ export type AdminRunResult = {
   [k: string]: unknown;
 };
 
+/** GET /api/admin/runs — one persisted executor run report per invocation
+ *  (idle/no-op runs included: absence of a record is itself a gap). The list
+ *  rows deliberately omit the summary — adminRun(id) returns it parsed. */
+export type AdminRunRow = {
+  id: number;
+  trade_date: string | null;
+  phase: string | null;          // sell | buy | both | none/null (idle run)
+  mode: string | null;           // dry_run | live
+  trigger: string;               // "schedule" | "manual:<email>"
+  will_place: boolean;
+  started_at: number;            // epoch seconds
+  finished_at: number;
+  placed: number | null;         // counts over THIS run's member orders
+  skipped: number | null;
+  errors: number | null;
+  verify_verdict: string | null; // PASS | WARN | FAIL | SKIPPED | null
+};
+
+/** The persisted executor summary dict (summary_json parsed server-side).
+ *  Typed around the keys executor.run() writes today, open for whatever it
+ *  grows — the Runs page renders the known parts and offers the raw JSON. */
+export type AdminRunOrder = {
+  member_id?: number; symbol?: string; side?: string; status?: string;
+  amount?: number | null; note?: string | null;
+  [k: string]: unknown;
+};
+export type AdminRunMember = {
+  member_id?: number; name?: string; skip_reason?: string | null;
+  note?: string | null; orders?: AdminRunOrder[];
+  [k: string]: unknown;
+};
+export type AdminRunSummary = {
+  mode?: string; phase?: string; trade_date?: string; picks?: string[];
+  will_place?: boolean; note?: string | null;
+  quorum_blocked?: boolean; calendar_stale?: boolean; halted?: boolean;
+  executed_deferred?: string; placed_total?: number;
+  skipped?: Record<string, number>;
+  members?: AdminRunMember[];
+  orders?: AdminRunOrder[];
+  verification?: {
+    verdict?: string; report?: string; error?: string;
+    members?: {
+      member_id?: number; name?: string; verdict?: string;
+      findings?: { level?: string; code?: string; msg?: string }[];
+    }[];
+  } | null;
+  [k: string]: unknown;
+};
+export type AdminRunDetail = AdminRunRow & { summary: AdminRunSummary | null };
+
+/** GET /api/admin/audit — the browsable trail. detail = parsed detail_json
+ *  (shape varies per action) or null. */
+export type AdminAuditEntry = {
+  id: number;
+  ts: number;
+  actor: string;
+  action: string;
+  target?: string | null;
+  detail?: unknown;
+};
+
+/** GET /api/admin/logins — member sign-in events, joined to members, bots
+ *  excluded. kind = "login" | "signup" (kept open for future kinds). */
+export type AdminLoginRow = {
+  ts: number;
+  member_id: number;
+  display_name: string | null;
+  email: string | null;
+  ip: string | null;
+  kind: string | null;
+};
+
 export const api = {
   base: BASE,
   // auth — invite code + email + a password you create; log in with email + password.
@@ -409,9 +481,26 @@ export const api = {
     req<{ old: string; new: string; execution_rows: number }>(
       "/api/admin/rename-symbol",
       { method: "POST", body: JSON.stringify({ old: old_, new: new_ }) }),
-  // manual phase triggers — `execute` honours dry_run unless live+armed
-  adminRun: (phase: "open" | "close" | "execute" | "power" | "bots" | "reweight", dryRun = true) =>
+  // manual phase triggers — `execute` honours dry_run unless live+armed.
+  // (adminRunPhase, not adminRun: that name is the run-report GET below.)
+  adminRunPhase: (phase: "open" | "close" | "execute" | "power" | "bots" | "reweight", dryRun = true) =>
     req<AdminRunResult>(`/api/admin/run/${phase}?dry_run=${dryRun}`, { method: "POST" }),
+  // persisted run reports — every executor invocation, newest first. before =
+  // pagination cursor (an id from the previous page's last row).
+  adminRuns: (before?: number) =>
+    req<{ runs: AdminRunRow[] }>(
+      `/api/admin/runs?limit=30${before != null ? `&before=${before}` : ""}`),
+  adminRun: (id: number) => req<AdminRunDetail>(`/api/admin/runs/${id}`),
+  // the browsable audit trail — filters are optional and combinable; before =
+  // pagination cursor. (panel.audit stays the Overview's 20-line teaser.)
+  adminAudit: (params: { limit?: number; before?: number; action?: string; actor?: string } = {}) => {
+    const q = new URLSearchParams({ limit: String(params.limit ?? 50) });
+    if (params.before != null) q.set("before", String(params.before));
+    if (params.action) q.set("action", params.action);
+    if (params.actor) q.set("actor", params.actor);
+    return req<{ entries: AdminAuditEntry[] }>(`/api/admin/audit?${q}`);
+  },
+  adminLogins: () => req<{ logins: AdminLoginRow[] }>("/api/admin/logins?limit=30"),
   // admin-mediated password recovery — the temp password is returned ONCE
   adminResetPassword: (id: number) =>
     req<{ ok: boolean; email: string; temp_password: string }>(

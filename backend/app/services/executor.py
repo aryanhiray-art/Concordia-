@@ -28,7 +28,7 @@ from ..config import settings
 from ..db import audit, db, is_armed, kv_get
 from ..robinhood import vault
 from ..robinhood.client import RHAuthError
-from . import alloc, positions, reconcile, voting
+from . import alloc, positions, reconcile, runreports, voting
 
 # How old a 'closed' session may be and still count as "the basket sold
 # yesterday". A cycle's sell and buy legs are consecutive TRADING days, so the
@@ -282,10 +282,37 @@ def _match_recovered_order(orders: list[dict], ref_id: str, symbol: str, side: s
     return None
 
 
-def run(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict:
-    """Execute the session's basket. `phase` = 'sell' (exit dropped names + trim
-    overweights), 'buy' (top each name up to target), or 'both'. Splitting sell
-    and buy across two trading days lets a cash account settle (T+1) between them."""
+def run(session: dict, force_dry_run: bool = False, phase: str = "both",
+        trigger: str = "schedule") -> dict:
+    """Execute the session's basket, then persist a run_reports row for it.
+
+    `phase` = 'sell' (exit dropped names + trim overweights), 'buy' (top each
+    name up to target), or 'both'. `trigger` names who pulled the lever
+    ('schedule' | 'manual:<email>') and rides into the report row. EVERY
+    invocation writes a report — even a no-op run (no picks) — and report
+    persistence can never fail the run (runreports.persist swallows errors).
+    """
+    started_at = int(time.time())
+    trade_date = session.get("trade_date") if isinstance(session, dict) else None
+    try:
+        summary = _run_impl(session, force_dry_run=force_dry_run, phase=phase)
+    except Exception as e:  # noqa: BLE001 — record the crashed run, then re-raise
+        runreports.persist(
+            {"ok": False, "error": f"{type(e).__name__}: {e}", "phase": phase,
+             "trade_date": trade_date, "orders": []},
+            trigger=trigger, started_at=started_at)
+        raise
+    # No-op early returns (e.g. "no consensus picks") omit identity fields the
+    # wrapper knows — backfill them so the report row is still attributable.
+    report = dict(summary)
+    report.setdefault("trade_date", trade_date)
+    report.setdefault("phase", phase)
+    runreports.persist(report, trigger=trigger, started_at=started_at)
+    return summary
+
+
+def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -> dict:
+    """The actual execution pass — see run() (which owns report persistence)."""
     if session["status"] == "open":
         raise ValueError("session is still open — close/tally first")
     picks = [p["symbol"] for p in voting.session_picks(session)]
@@ -863,13 +890,17 @@ def dust_cleanup(member_id: int, dry_run: bool = True) -> dict:
     return out
 
 
-def run_today(force_dry_run: bool = False) -> dict:
+def run_today(force_dry_run: bool = False, trigger: str = "schedule") -> dict:
     """Single-flight wrapper around the day's phase run.
 
     A file lock (finding #8) prevents a timer run and a dashboard 'Execute now'
     (or two quick clicks) from executing concurrently — the check-then-act on
     _placed_keys plus place()-before-record could otherwise let two runs both
     place the same order, relying only on broker ref_id dedup.
+
+    `trigger` ('schedule' | 'manual:<email>') rides into the run_reports row.
+    A lock-bounced call writes NO report — the run already in progress writes
+    its own, so the invocation is not a run of its own.
     """
     import fcntl
     import tempfile
@@ -881,26 +912,37 @@ def run_today(force_dry_run: bool = False) -> dict:
         except (BlockingIOError, OSError):
             return {"ok": False, "note": "another execute run is already in progress", "orders": []}
         try:
-            return _run_today_locked(force_dry_run=force_dry_run)
+            return _run_today_locked(force_dry_run=force_dry_run, trigger=trigger)
         finally:
             fcntl.flock(lf, fcntl.LOCK_UN)
     finally:
         lf.close()
 
 
-def _run_today_locked(force_dry_run: bool = False) -> dict:
+def _run_today_locked(force_dry_run: bool = False, trigger: str = "schedule") -> dict:
     """Run the phase scheduled for today: SELL on a sell/vote day (close the ballot,
     then exit dropped names), BUY on a buy day (top up the last sold basket with the
     now-settled cash). Idle days do nothing. This is what the cron + the dashboard
     'Execute now' button call."""
     from ..calendar_us import cycle_phase, today_et
+    started_at = int(time.time())
+
+    def _idle(summary: dict) -> dict:
+        """A run that never reaches run(): persist the report here — EVERY
+        invocation leaves a row, and an idle day's row is the proof the timer
+        fired and correctly did nothing."""
+        runreports.persist(summary, trigger=trigger, started_at=started_at)
+        return summary
+
     phase = cycle_phase(today_et())
     if phase is None:
-        return {"ok": True, "note": "idle day — no sell or buy phase scheduled today", "orders": []}
+        return _idle({"ok": True, "note": "idle day — no sell or buy phase scheduled today",
+                      "phase": "none", "orders": []})
     if phase == "buy":
         session = voting.latest_session("closed")   # the basket sold on the prior sell day
         if not session:
-            return {"ok": True, "note": "no sold basket waiting to be bought", "orders": []}
+            return _idle({"ok": True, "note": "no sold basket waiting to be bought",
+                          "phase": phase, "orders": []})
         # The sell and buy legs are CONSECUTIVE trading days. latest_session()
         # is unbounded, so a session that got stuck at 'closed' stays the newest
         # 'closed' row forever and this leg would happily buy it — with real
@@ -925,12 +967,13 @@ def _run_today_locked(force_dry_run: bool = False) -> dict:
             print(f"[executor] {note}", flush=True)
             audit("system", "buy_refused_stale_basket", str(session.get("id")),
                   {"trade_date": session.get("trade_date"), "age_days": age_days})
-            return {"ok": True, "note": note, "orders": [], "stale_session": session.get("id")}
-        return run(session, force_dry_run=force_dry_run, phase="buy")
+            return _idle({"ok": True, "note": note, "phase": phase, "orders": [],
+                          "stale_session": session.get("id")})
+        return run(session, force_dry_run=force_dry_run, phase="buy", trigger=trigger)
     # 'sell' or 'both' — close today's ballot, then sell (and buy too, if 'both')
     session = voting.session_for_trade_date(today_et().isoformat())
     if not session:
-        return {"ok": True, "note": "no session for today", "orders": []}
+        return _idle({"ok": True, "note": "no session for today", "phase": phase, "orders": []})
     if session["status"] == "open":
         session = voting.close_and_select(session["id"])
-    return run(session, force_dry_run=force_dry_run, phase=phase)
+    return run(session, force_dry_run=force_dry_run, phase=phase, trigger=trigger)

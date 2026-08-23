@@ -153,6 +153,28 @@ CREATE TABLE IF NOT EXISTS executions (
 );
 CREATE INDEX IF NOT EXISTS ix_exec_session ON executions(session_id);
 
+-- One row per EXECUTOR INVOCATION — idle/no-op runs included (phase may be
+-- NULL/'none'; the absence of a record is itself a gap). Execution forensics
+-- become a DB read instead of ssh + journalctl: summary_json is the full run
+-- summary dict (per-member orders, buying power, notes, verification).
+-- "trigger" is quoted because TRIGGER is an SQLite keyword; the column name
+-- is exactly `trigger` ('schedule' | 'manual:<email>').
+CREATE TABLE IF NOT EXISTS run_reports (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_date     TEXT,
+    phase          TEXT,
+    mode           TEXT,
+    "trigger"      TEXT NOT NULL,
+    will_place     INTEGER NOT NULL DEFAULT 0,
+    started_at     INTEGER NOT NULL,
+    finished_at    INTEGER NOT NULL,
+    placed         INTEGER,
+    skipped        INTEGER,
+    errors         INTEGER,
+    verify_verdict TEXT,
+    summary_json   TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     ts          INTEGER NOT NULL,

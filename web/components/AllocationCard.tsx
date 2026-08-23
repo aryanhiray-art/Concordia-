@@ -104,7 +104,11 @@ export function AllocationCard({ onChange }: { onChange?: () => void }) {
           </div>
         </div>
         <div className="rounded-[12px] border border-white/10 bg-white/[0.02] px-4 py-3">
-          <div className="label">Club profit</div>
+          {/* "Open", not "Club profit": broker cost basis RESETS every rebalance,
+              so this is unrealized P&L on the CURRENT positions only — the owner
+              read the old label as his lifetime club return (it isn't; the
+              account chart on the Overview is the real record). */}
+          <div className="label">Open P&amp;L</div>
           {pnl.invested > 0 ? (
             <>
               <div className={`mt-1 font-display text-[22px] font-bold tnum ${pnl.profit >= 0 ? "text-green" : "text-red"}`}>
@@ -113,6 +117,7 @@ export function AllocationCard({ onChange }: { onChange?: () => void }) {
               <div className="text-[11.5px] text-subtle">
                 {money(pnl.value, 2)} value · {money(pnl.invested, 2)} in
                 {pnl.profit_pct != null && <span className={pnl.profit >= 0 ? "text-green" : "text-red"}> · {pnl.profit_pct >= 0 ? "+" : ""}{pnl.profit_pct}%</span>}
+                <span> · current positions</span>
               </div>
             </>
           ) : (

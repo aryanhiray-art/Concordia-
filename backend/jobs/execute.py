@@ -25,7 +25,8 @@ def main() -> int:
     # run_today picks the phase scheduled for today: SELL on a sell/vote day
     # (close + exit dropped names), BUY on a buy day (top up the last sold basket),
     # nothing on idle days.
-    summary = executor.run_today(force_dry_run=False)
+    # trigger="schedule" stamps the run_reports row: this path is the timer.
+    summary = executor.run_today(force_dry_run=False, trigger="schedule")
     print(f"[execute] mode={summary.get('mode')} phase={summary.get('phase')} note={summary.get('note')}")
     print(json.dumps(summary, indent=2, default=str))
     return 0

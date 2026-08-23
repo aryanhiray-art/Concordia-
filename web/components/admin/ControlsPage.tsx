@@ -195,20 +195,20 @@ export function ControlsPage({ state, cadence, inviteCode, onChanged }: {
         <ControlCard title="Close vote"
           desc="Locks today's ballot now and computes the consensus basket ahead of the scheduled close.">
           <ConfirmButton label="Close vote" variant="glass" busy={busy === "close"}
-            onFire={() => act("close", () => api.adminRun("close"), "Close vote")} />
+            onFire={() => act("close", () => api.adminRunPhase("close"), "Close vote")} />
         </ControlCard>
 
         <ControlCard title="Dry-run"
           desc="Simulates today's phase for every member — full sizing and order plan, zero orders sent.">
           <ConfirmButton label="Dry-run" variant="glass" busy={busy === "dry"}
-            onFire={() => act("dry", () => api.adminRun("execute", true), "Dry-run")} />
+            onFire={() => act("dry", () => api.adminRunPhase("execute", true), "Dry-run")} />
         </ControlCard>
 
         <ControlCard title="Execute live"
           desc="Places REAL market orders for today's phase on every live, armed account — right now, not at the scheduled time.">
           <ConfirmButton label="Execute live" confirmLabel="Execute live" variant="danger"
             word="EXECUTE" busy={busy === "live"} disabled={!canLive}
-            onFire={() => act("live", () => api.adminRun("execute", false), "Execute (live)")} />
+            onFire={() => act("live", () => api.adminRunPhase("execute", false), "Execute (live)")} />
           {!canLive && (
             <p className="mt-2 text-[11px] text-subtle">needs live mode + armed, without halt</p>
           )}

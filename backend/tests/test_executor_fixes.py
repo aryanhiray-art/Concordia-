@@ -806,3 +806,125 @@ def test_both_day_cash_account_keeps_single_quick_look(monkeypatch):
     assert order["status"] == "skipped", "cash buys defer to the next buy day"
     mine = [c for c in client.calls if c[0] == "get_portfolio" and c[1] == f"ACC{mid}"]
     assert len(mine) == 2, "pre-sell snapshot + ONE quick post-sell look, no long poll"
+
+
+# ─── run_reports persistence: every run leaves a row ─────────────────────────
+
+def _latest_report() -> dict:
+    with db() as conn:
+        row = conn.execute("SELECT * FROM run_reports ORDER BY id DESC LIMIT 1").fetchone()
+    assert row is not None, "no run_reports row written"
+    return dict(row)
+
+
+def test_run_persists_report_row_with_counts(monkeypatch):
+    """executor.run() writes a run_reports row: trigger threaded through, the
+    identity columns, counts over THIS run's member orders, and a summary_json
+    that parses back to the full summary."""
+    mid = _member("rr-counts@x.com")
+    closed = _closed_session(datetime.date(2027, 1, 4), mid, ["AAPL", "MSFT"])
+    client = FakeClient(quotes={"AAPL": 100.0})   # MSFT unquoted → its buy skips
+    _use_client(monkeypatch, client)
+
+    summary = executor.run(closed, force_dry_run=True, trigger="manual:owner@x.com")
+
+    rep = _latest_report()
+    assert rep["trigger"] == "manual:owner@x.com"
+    assert rep["trade_date"] == closed["trade_date"] == "2027-01-04"
+    assert rep["phase"] == "both" and rep["mode"] == summary["mode"]
+    assert rep["will_place"] == 0
+    assert rep["started_at"] > 0 and rep["finished_at"] >= rep["started_at"]
+    # counts are over THIS run's member orders (the shared test DB carries
+    # opted-in members from other modules, so compare against the summary
+    # itself, not absolutes). Our member contributes ≥1 skip (MSFT, no quote);
+    # dry-run 'reviewed' orders are not counted.
+    want = {"placed": 0, "skipped": 0, "error": 0}
+    for o in summary["orders"]:
+        if o["status"] in want:
+            want[o["status"]] += 1
+    assert (rep["placed"], rep["skipped"], rep["errors"]) == \
+        (want["placed"], want["skipped"], want["error"])
+    assert rep["skipped"] >= 1 and rep["placed"] == 0 and rep["errors"] == 0
+    parsed = json.loads(rep["summary_json"])
+    assert parsed["picks"] == summary["picks"]
+    my_row = next(m for m in parsed["members"] if m["member_id"] == mid)
+    assert [o["symbol"] for o in my_row["orders"] if o["status"] == "skipped"] == ["MSFT"]
+
+
+def test_run_default_trigger_is_schedule(monkeypatch):
+    mid = _member("rr-sched@x.com")
+    closed = _closed_session(datetime.date(2027, 1, 5), mid, ["AAPL"])
+    _use_client(monkeypatch, FakeClient(quotes={"AAPL": 100.0}))
+    executor.run(closed, force_dry_run=True)
+    assert _latest_report()["trigger"] == "schedule"
+
+
+def test_no_op_run_still_persists_report(monkeypatch):
+    """A no-picks run writes a row too — the absence of a record is itself a
+    gap. The wrapper backfills the identity fields the early return omits."""
+    mid = _member("rr-noop@x.com")
+    s = voting.open_session_for(datetime.date(2027, 1, 6))   # nobody votes
+    closed = voting.close_and_select(s["id"])
+
+    res = executor.run(closed, force_dry_run=True, trigger="manual:x@y.z")
+
+    assert "no consensus picks" in res["note"]
+    rep = _latest_report()
+    assert rep["trigger"] == "manual:x@y.z"
+    assert rep["trade_date"] == "2027-01-06" and rep["phase"] == "both"
+    assert (rep["placed"], rep["skipped"], rep["errors"]) == (0, 0, 0)
+    assert json.loads(rep["summary_json"])["note"] == res["note"]
+
+
+def test_run_today_idle_day_persists_schedule_report(monkeypatch):
+    """The timer firing on an idle day is still a run — the row (phase 'none',
+    trigger 'schedule') is the proof it fired and correctly did nothing."""
+    import app.calendar_us as cal
+    monkeypatch.setattr(cal, "cycle_phase", lambda d: None)
+
+    res = executor.run_today(force_dry_run=True)
+
+    assert "idle day" in res["note"]
+    rep = _latest_report()
+    assert rep["trigger"] == "schedule" and rep["phase"] == "none"
+    assert rep["will_place"] == 0
+    assert (rep["placed"], rep["skipped"], rep["errors"]) == (0, 0, 0)
+    assert json.loads(rep["summary_json"])["note"] == res["note"]
+
+
+def test_report_persistence_failure_never_fails_the_run(monkeypatch):
+    """The hard rule: a run must NEVER fail because its report could not be
+    written (the run may have just placed real orders)."""
+    from app.services import runreports
+    mid = _member("rr-dbfail@x.com")
+    closed = _closed_session(datetime.date(2027, 1, 7), mid, ["AAPL"])
+    _use_client(monkeypatch, FakeClient(quotes={"AAPL": 100.0}))
+
+    def _boom():
+        raise RuntimeError("disk full")
+    monkeypatch.setattr(runreports, "db", _boom)
+
+    summary = executor.run(closed, force_dry_run=True)     # must not raise
+    assert summary["picks"] == ["AAPL"]
+    assert any(o["symbol"] == "AAPL" and o["status"] == "reviewed"
+               for o in summary["orders"])
+
+
+def test_report_insert_failure_never_fails_the_run(monkeypatch):
+    """Same hard rule, one layer deeper: the INSERT statement itself raising
+    (table gone / disk error mid-write, not just the connection factory) is
+    swallowed too — the try/except wraps the write, not only the open."""
+    mid = _member("rr-insfail@x.com")
+    closed = _closed_session(datetime.date(2027, 1, 8), mid, ["AAPL"])
+    _use_client(monkeypatch, FakeClient(quotes={"AAPL": 100.0}))
+
+    with db() as conn:
+        conn.execute("ALTER TABLE run_reports RENAME TO run_reports_hidden")
+    try:
+        summary = executor.run(closed, force_dry_run=True)  # must not raise
+        assert summary["picks"] == ["AAPL"]
+        assert any(o["symbol"] == "AAPL" and o["status"] == "reviewed"
+                   for o in summary["orders"])
+    finally:
+        with db() as conn:
+            conn.execute("ALTER TABLE run_reports_hidden RENAME TO run_reports")
