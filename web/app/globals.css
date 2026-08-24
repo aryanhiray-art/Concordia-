@@ -52,24 +52,29 @@ body { background: transparent; }
     radial-gradient(820px 600px at 108vw 31vh, rgba(56, 134, 221, 0.12), transparent 60%),
     var(--bg);
 }
-/* ── Phone backgrounds: ONE surface, not two zones ────────────────────────
-   .bgfx is position:FIXED, so any top-anchored tint stays pinned to the
-   viewport while content scrolls through it — the owner saw content "transition
-   from the teal to the dark background" on every scroll. A tall narrow phone
-   makes this worse: the radial glows centre near the top, so the bottom 60% of
-   an 812px viewport is left flat black.
-   The cure is not a stronger top wash (that IS the band) — it is removing the
-   two-zone split: on narrow screens the base itself is a tinted dark, so top
-   and bottom already share the tint and the glows only add gentle variation
-   above it. Nothing to transition to. Desktop keeps its original look. */
+/* ── Phone backgrounds: ONE surface, and one Safari can SAMPLE ────────────
+   Two separate truths forced this shape:
+
+   1. `.bgfx`/`.aurora` are position:FIXED, so any top-anchored tint is pinned
+      to the viewport and content scrolls THROUGH it — the owner saw content
+      "transition from the teal to the dark background" on every scroll.
+   2. Safari 26 no longer reads the `theme-color` meta tag: it derives its
+      browser-UI colour from the BODY element's background-color. Ours is
+      `transparent` (so the negative-z aurora can paint — body's background
+      would cover it, CSS 2.1 painting order), so Safari sampled nothing,
+      fell back to black, and drew the black bar under the address bar that
+      no theme-color value could ever fix.
+
+   On phones both are answered by giving BODY a real, uniform tint: Safari has
+   a colour to sample (chrome matches the page — the bar is gone), and the page
+   is one flat surface with no zone for content to scroll between. That body
+   background necessarily covers the fixed layers, so they are switched off
+   here rather than left painting invisibly. Desktop keeps the full aurora. */
 @media (max-width: 768px) {
-  html { background: #0a1c1e; }
-  .bgfx {
-    background:
-      radial-gradient(760px 540px at 10vw 22vh, rgba(45, 212, 191, 0.13), transparent 62%),
-      radial-gradient(820px 600px at 108vw 30vh, rgba(56, 134, 221, 0.10), transparent 62%),
-      #0a1c1e;
-  }
+  html { background: #0e2e30; }
+  body { background-color: #0e2e30; }   /* ← Safari 26 samples THIS for its UI */
+  .bgfx,
+  .aurora { display: none; }
 }
 
 /* fine film-grain: desaturated feTurbulence tile (stitched, 180px — no visible

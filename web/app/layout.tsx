@@ -13,15 +13,12 @@ export const metadata: Metadata = {
   description: "An invite-only investing club: members vote, the top picks become one shared basket, and every trade executes in your own brokerage account.",
 };
 
-// iOS Safari tints its chrome (status bar + URL bar) from theme-color, so this
-// must match the page's colour at y=0 or the chrome reads as a bar above the
-// page. Two earlier misses: #081310 was technically teal but ~3x too dark, and
-// matching a top-anchored WASH was chasing the wrong target — that wash was
-// itself the artifact (a fixed band content scrolled through). Phones now use
-// ONE uniform tinted base (#0a1c1e + soft glows, see globals.css), so this is
-// simply that base with the glow at the top edge composited in.
+// theme-color is kept for Safari 15-25 / Chrome Android, which still honour
+// it. Safari 26 IGNORES this tag and samples the BODY background-color instead
+// (see the phone block in globals.css) — both paths are pointed at the same
+// colour so the chrome matches the page on every engine.
 export const viewport: Viewport = {
-  themeColor: "#0D2C2E",
+  themeColor: "#0E2E30",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

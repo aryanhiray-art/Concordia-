@@ -121,7 +121,7 @@ def _opted_members() -> list[dict]:
         rows = conn.execute(
             "SELECT m.id AS member_id, m.display_name, s.alloc_type, s.alloc_value,"
             "       s.daily_cap_usd, s.max_orders, COALESCE(s.compound,1) AS compound,"
-            "       s.alloc_applied, a.account_number, a.agentic_allowed, a.status AS rh_status "
+            "       s.alloc_applied, COALESCE(s.slice_carry,0) AS slice_carry, a.account_number, a.agentic_allowed, a.status AS rh_status "
             "FROM members m "
             "JOIN member_settings s ON s.member_id=m.id "
             "LEFT JOIN rh_accounts a ON a.member_id=m.id "
@@ -503,12 +503,25 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         # PINNED (compound off) keeps the legacy min(stake, account) target.
         compounding = bool(m.get("compound", 1)) and m["alloc_type"] == "dollar"
         budget_stamp = f"cycle_budget:{sid}:{mid}"
+        stamped_stake = None
         if compounding:
-            if phase == "buy" and kv_get(budget_stamp):
+            _stamped = kv_get(budget_stamp)
+            if _stamped:
+                # WRITE-ONCE per session — reused on the T+1 buy day AND on any
+                # re-run of a 'both' day. Recomputing after the morning's sells
+                # have filled would mark the slice from post-sell positions while
+                # the proceeds are still settling CASH: every kept name would read
+                # as overweight and get trimmed, permanently shrinking the slice.
                 try:
-                    budget = float(kv_get(budget_stamp))
-                except (TypeError, ValueError):
-                    budget = 0.0
+                    _st = json.loads(_stamped)
+                    budget = float(_st["budget"])
+                    stamped_stake = float(_st["stake"])
+                except (TypeError, ValueError, KeyError):
+                    # Fail CLOSED like every other unreadable input here: a
+                    # coerced 0 budget would liquidate the member's whole slice.
+                    _skip_member(msum, "transient_rh_error",
+                                 "unreadable cycle budget stamp — skipping this run")
+                    continue
             else:
                 club_value = 0.0
                 unpriced = []
@@ -529,9 +542,15 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                     continue
                 budget = alloc.compound_budget(m["alloc_value"], m.get("alloc_applied"),
                                                club_value, total_value,
-                                               daily_cap_usd=m.get("daily_cap_usd"))
-                if phase in ("sell", "both"):
-                    kv_set(budget_stamp, f"{budget:.2f}")
+                                               daily_cap_usd=m.get("daily_cap_usd"),
+                                               slice_carry=m.get("slice_carry"))
+                # Stamp the stake the budget EMBODIES alongside it: the buy-day
+                # write-back must credit that figure, not whatever the member
+                # has since changed it to (a non-voting member can edit their
+                # stake mid-cycle — the vote-based freeze doesn't cover them).
+                stamped_stake = float(m["alloc_value"] or 0.0)
+                kv_set(budget_stamp, json.dumps({"budget": round(budget, 2),
+                                                 "stake": stamped_stake}))
         else:
             budget = alloc.rebalance_budget(m["alloc_type"], m["alloc_value"], total_value,
                                             buying_power, daily_cap_usd=m.get("daily_cap_usd"))
@@ -554,8 +573,12 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         # within $1 of fair share keeps its value and the others absorb the
         # difference — winners ride, entries shrink, the total adds up. A name
         # >$1 over fair share is targeted at fair share (the sell leg trims it).
-        _held_val_of = (lambda sym: (live.get(sym, 0.0) if settings.buy_sizing_account
-                                     else held.get(sym, 0.0)) * (prices.get(sym) or 0.0))
+        # Club-capped, exactly like the valuation and the sell cap: a personal
+        # position in a basket name must not inflate that name's target (which
+        # would subtract personal dollars from every other name's share).
+        _held_val_of = (lambda sym: min(held.get(sym, 0.0),
+                                        live.get(sym, 0.0) if settings.buy_sizing_account
+                                        else held.get(sym, 0.0)) * (prices.get(sym) or 0.0))
         targets = alloc.basket_targets(budget, {sym: _held_val_of(sym) for sym in basket})
         msum["buying_power"] = round(buying_power, 2)
         msum["allocation"] = round(budget, 2)
@@ -563,6 +586,7 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         msum["per_pick"] = per_pick
         msum["compounding"] = compounding
         order_count = 0
+        unplaced_usd = 0.0   # club dollars this leg meant to deploy but could not
         # Per-member order ceiling = the tighter of the global cap and this
         # member's own max_orders (finding #35 — the column was fetched but the
         # global was always used).
@@ -772,6 +796,7 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                                        "note": f"at target (${held_val:.2f} ≥ ${_tgt:.2f})"})
                 continue
             if need > bp_left + 0.005:                 # not enough SETTLED cash yet → defer
+                unplaced_usd += need
                 _record(sid, mid, symbol, need, ref_id_for(sid, mid, symbol), "skipped",
                         error="deferred — beyond settled buying power")
                 msum["orders"].append({"symbol": symbol, "side": "buy", "status": "skipped",
@@ -779,6 +804,7 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                 continue
             bp_left -= need
             if order_count >= member_max_orders:
+                unplaced_usd += need
                 _record(sid, mid, symbol, need, ref_id_for(sid, mid, symbol), "skipped",
                         error="max_orders cap reached")
                 msum["orders"].append({"symbol": symbol, "side": "buy", "status": "skipped", "note": "max_orders cap"})
@@ -816,10 +842,12 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         # cycle's budget applies only future stake CHANGES as deltas. Only on
         # a completed (non-skipped) buy/both pass, and never touching
         # updated_at (the stake-freeze / demo clock).
-        if compounding and phase in ("buy", "both") and not msum.get("skip_reason"):
+        if (compounding and will_place and phase in ("buy", "both")
+                and not msum.get("skip_reason") and stamped_stake is not None):
             with db() as conn:
-                conn.execute("UPDATE member_settings SET alloc_applied=? WHERE member_id=?",
-                             (m["alloc_value"], mid))
+                conn.execute("UPDATE member_settings SET alloc_applied=?, slice_carry=? "
+                             "WHERE member_id=?",
+                             (stamped_stake, round(unplaced_usd, 2), mid))
         summary["members"].append(msum)
         summary["orders"].extend(
             {"member_id": mid, **o} for o in msum["orders"]

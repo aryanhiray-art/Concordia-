@@ -79,8 +79,10 @@ def build(member_id: int) -> dict:
     """
     holds = positions.holdings_with_value(member_id)
     return {
-        "allocation": alloc.member_allocation(member_id),
-        "pnl": alloc.club_pnl(member_id, holds=holds),
+        "pnl": (_pnl := alloc.club_pnl(member_id, holds=holds)),
+        # club_value = the live value of what the club holds for this member —
+        # the same figure the executor marks a compounding slice from.
+        "allocation": alloc.member_allocation(member_id, club_value=_pnl.get("value")),
         "power": power.member_power_view(member_id),
         "holdings": holds,
     }

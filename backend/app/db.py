@@ -422,6 +422,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE member_settings ADD COLUMN compound INTEGER NOT NULL DEFAULT 1")
     if "alloc_applied" not in s:
         conn.execute("ALTER TABLE member_settings ADD COLUMN alloc_applied REAL")
+        # Backfill: an existing member's CURRENT stake is already deployed, so
+        # it counts as honored. Without this, a stake change made between the
+        # migration and that member's first compounding run would be silently
+        # absorbed (NULL reads as "already applied").
+        conn.execute("UPDATE member_settings SET alloc_applied=alloc_value "
+                     "WHERE alloc_applied IS NULL AND alloc_value > 0")
+    # Club dollars the last cycle meant to deploy but could not (deferred for
+    # settled cash, order-cap). Carried into the next budget so undeployed cash
+    # cannot silently leave the slice; recomputed fresh each buy leg.
+    if "slice_carry" not in s:
+        conn.execute("ALTER TABLE member_settings ADD COLUMN slice_carry REAL NOT NULL DEFAULT 0")
     if "scored_at" not in cols("vote_sessions"):
         conn.execute("ALTER TABLE vote_sessions ADD COLUMN scored_at INTEGER")
 
