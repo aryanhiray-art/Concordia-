@@ -172,3 +172,21 @@ def test_percent_converts_to_a_riding_dollar_commitment():
     assert rebalance_budget("percent", 50.0, 250.0, 250.0) == 125.0
     # once converted to dollars it compounds: $125 grown to $131.25 stays whole
     assert compound_budget(125.0, 125.0, 131.25, 500.0) == 131.25
+
+
+def test_dry_run_cannot_erase_a_placed_cycles_record():
+    """A verification dry-run over an already-placed cycle must not wipe the
+    live run's skipped/reviewed rows — that is the only record of WHY an order
+    did not go through (lost for real on 2026-08-24)."""
+    from app.services import executor
+    sid = 991001
+    executor._record(sid, 1, "AAPL", 5.0, "ref-placed", "placed")
+    executor._record(sid, 1, "WMT", 5.0, "ref-skip", "skipped",
+                     error="deferred — beyond settled buying power")
+    assert executor.already_placed_rows(sid) is True
+    # a cycle with nothing placed is still freely re-plannable
+    assert executor.already_placed_rows(991002) is False
+    with db() as conn:
+        n = conn.execute("SELECT COUNT(*) c FROM executions WHERE session_id=? "
+                         "AND status='skipped'", (sid,)).fetchone()["c"]
+    assert n == 1

@@ -171,6 +171,15 @@ def _quotes(client, symbols: list[str]) -> dict[str, float]:
     return out
 
 
+def already_placed_rows(session_id: int) -> bool:
+    """True once this session has any placed order — its record is then final."""
+    with db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM executions WHERE session_id=? AND status='placed' LIMIT 1",
+            (session_id,)).fetchone()
+    return row is not None
+
+
 def _clear_replanable(session_id: int) -> None:
     """Drop prior non-final rows so a re-run is clean; never touch 'placed'."""
     with db() as conn:
@@ -369,7 +378,15 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
     # A4: remember which buys ERRORED in a prior run of this session — the broker
     # may have accepted them — before _clear_replanable deletes the evidence.
     prior_error_buys = _error_buy_rows(sid)
-    _clear_replanable(sid)
+    # A dry run over a cycle that ALREADY PLACED is an inspection, not a
+    # re-plan: clearing there overwrote the live run's skipped/reviewed rows
+    # with review-only ones and destroyed the audit trail of what the cycle
+    # actually deferred (observed 2026-08-24 — a verification dry-run erased
+    # why two members' buys did not place; 'placed' rows survived, so only the
+    # explanation was lost). A dry run over a cycle that has placed nothing
+    # still re-plans freely, which is what planning a cycle needs.
+    if will_place or not already_placed_rows(sid):
+        _clear_replanable(sid)
     already = _placed_keys(sid)
     summary = {"mode": mode, "phase": phase, "trade_date": session["trade_date"], "picks": picks,
                "will_place": will_place, "members": [], "orders": []}
@@ -812,8 +829,15 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
             _tgt = targets.get(symbol, per_pick)
             need = round(_tgt - held_val, 2)
             if need < 1.00:
+                # Two different reasons, and they must not read the same: either
+                # the name really is at/over target, or the top-up is real but
+                # smaller than Robinhood's $1 minimum order (common on small
+                # stakes, where a per-name target is barely over $1 itself).
+                note = (f"at target (${held_val:.2f} ≥ ${_tgt:.2f})" if need <= 0 else
+                        f"top-up ${need:.2f} below the $1 minimum order "
+                        f"(${held_val:.2f} of ${_tgt:.2f})")
                 msum["orders"].append({"symbol": symbol, "side": "buy", "status": "held",
-                                       "note": f"at target (${held_val:.2f} ≥ ${_tgt:.2f})"})
+                                       "note": note})
                 continue
             if need > bp_left + 0.005:                 # not enough SETTLED cash yet → defer
                 unplaced_usd += need
