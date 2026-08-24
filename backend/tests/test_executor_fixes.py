@@ -488,7 +488,7 @@ def test_verify_clean_account_passes(monkeypatch):
 def test_verify_errored_order_fails(monkeypatch):
     """An execution row the club recorded as errored surfaces as a FAIL."""
     mid = _member("verify-err@x.com")
-    closed = _closed_session(datetime.date(2026, 12, 21), mid, ["AAPL"])
+    closed = _closed_session(datetime.date(2027, 3, 16), mid, ["AAPL"])
     executor._record(closed["id"], mid, "MSFT", None, "vref-2", "error",
                      error="sell: Order quantity cannot include fractional shares", side="sell")
     client = FakeClient(quotes={"AAPL": 200.0}, positions=[])
@@ -937,3 +937,49 @@ def test_report_insert_failure_never_fails_the_run(monkeypatch):
     finally:
         with db() as conn:
             conn.execute("ALTER TABLE run_reports_hidden RENAME TO run_reports")
+
+
+# ─── small-stake resize: exit + re-enter when a top-up is unplaceable ────────
+
+def test_sub_minimum_topup_resizes_by_selling_and_rebuying(monkeypatch):
+    """Charlie's live shape (2026-08-24): a ~$1.30 per-name target with $1.02
+    held. The $0.28 top-up is under Robinhood's $1 minimum, so before this the
+    name was reported 'at target' and could never be corrected. The position is
+    now exited whole and re-bought at the right size."""
+    from app.config import settings
+    from app.db import set_armed
+
+    mid = _member("resize@x.com", alloc_value=100.0)
+    # club ledger: 1.02 shares of a $1.00 stock == $1.02 held
+    executor._record(90600, mid, "AAPL", 1.02, "resize-ref", "placed",
+                     place={"_concord_est_qty": 1.02})
+    closed = _closed_session(datetime.date(2027, 6, 15), mid, ["AAPL"])
+    client = FakeClient(quotes={"AAPL": 1.00}, positions=[("AAPL", "1.02")],
+                        buying_power=1.30, total_value=1.30)
+    _use_client(monkeypatch, client)
+
+    prev = settings.execution_mode
+    object.__setattr__(settings, "execution_mode", "live")
+    object.__setattr__(settings, "min_basket_size", 1)
+    set_armed(True)
+    try:
+        summary = executor.run(closed, force_dry_run=False, phase="both")
+    finally:
+        object.__setattr__(settings, "execution_mode", prev)
+        set_armed(False)
+
+    orders = _mrow(summary, mid)["orders"]
+    sell = next((o for o in orders if o["side"] == "sell" and o["symbol"] == "AAPL"), None)
+    buy = next((o for o in orders if o["side"] == "buy" and o["symbol"] == "AAPL"), None)
+    assert sell and sell["status"] == "placed", "under-target name must be exited whole"
+    assert "resize" in (sell.get("note") or ""), sell
+    assert buy and buy["status"] == "placed", \
+        "and re-bought at target (regression: skipped as 'at target' forever)"
+
+
+def test_cash_buffer_no_longer_strands_a_fully_committed_account():
+    """Neil (2026-08-24): stake == 100% of the account, so a 1% reserve left
+    less deployable than the budget and the last name deferred every cycle."""
+    from app.config import settings
+    assert settings.cash_buffer_pct == 0.0
+    assert executor.deployable(1000.0) == 1000.0

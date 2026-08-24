@@ -43,6 +43,12 @@ STALE_BASKET_DAYS = 5
 BP_POLL_EVERY_S = 6
 BP_POLL_MAX_S = 120
 
+# A position more than this fraction below its target, whose top-up would be
+# under the broker's $1 minimum order, is exited and re-bought at the right
+# size. Small enough to keep a small stake tracking the basket, large enough
+# that cent-level drift does not churn a round trip every cycle.
+_RESIZE_MIN_FRAC = 0.05
+
 
 def _session_age_days(session: dict) -> int | None:
     """Calendar days between a session's trade_date and today (ET). None when
@@ -624,6 +630,7 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         msum["compounding"] = compounding
         order_count = 0
         unplaced_usd = 0.0   # club dollars this leg meant to deploy but could not
+        resized: set[str] = set()   # names exited purely to re-enter at target
         # Per-member order ceiling = the tighter of the global cap and this
         # member's own max_orders (finding #35 — the column was fetched but the
         # global was always used).
@@ -653,9 +660,21 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                     continue                          # can't size a trim without a price
                 _tgt = targets.get(symbol, per_pick)
                 excess = held_qty - (_tgt / price)    # shares above this name's water-fill target
-                if excess * price < 1.00:             # not meaningfully overweight → keep
-                    continue
-                sell_qty, why = excess, "trim to target"
+                short = -excess * price               # $ BELOW target (negative excess)
+                if excess * price >= 1.00:
+                    sell_qty, why = excess, "trim to target"
+                elif (short >= _RESIZE_MIN_FRAC * _tgt and short < 1.00
+                      and held_qty * price >= 1.00):
+                    # Materially under target, but the top-up ($<1) is smaller
+                    # than Robinhood's minimum order — so it can never be closed
+                    # by buying more. Exit the position fully and let the buy leg
+                    # re-enter at the correct size (owner call 2026-08-24). This
+                    # is the only way a small stake can rebalance at all: with a
+                    # ~$1.30 per-name target, almost every drift is unplaceable.
+                    sell_qty, why = held_qty, "resize · rebuy at target"
+                    resized.add(symbol)
+                else:
+                    continue                          # at target, or drift too small to churn
             else:
                 sell_qty, why = held_qty, "exited basket"  # full exit of a dropped name
             if (mid, symbol, "sell") in already:
@@ -708,6 +727,12 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                     place["_concord_est_qty"] = qfloor   # shares sold (broker fill is async)
                 _record(sid, mid, symbol, None, ref_id, "placed", review=review, place=place, side="sell")
                 msum["orders"].append({"symbol": symbol, "side": "sell", "status": "placed", "qty": qstr, "note": why})
+                if symbol in resized:
+                    # `live`/`held` were read BEFORE this sell; without clearing
+                    # them the buy leg would still size against the old holding
+                    # and skip the name for the same sub-$1 reason.
+                    live[symbol] = 0.0
+                    held[symbol] = 0.0
                 order_count += 1
                 placed_sell_usd += (price or 0.0) * qfloor
             except Exception as e:  # noqa: BLE001

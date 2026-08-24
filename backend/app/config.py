@@ -120,7 +120,13 @@ class Settings:
 
     # Sizing: deploy ALL available buying power across the basket, holding back a
     # small cash reserve so dollar market orders never trip a buying-power reject.
-    cash_buffer_pct: float = _float("CASH_BUFFER_PCT", 1.0)   # % of BP kept as reserve
+    # 0 = no reserve (owner call 2026-08-24). The reserve existed so the last
+    # dollar order could not trip a buying-power reject, but it silently
+    # stranded that % of every FULLY-committed account: a member whose stake is
+    # 100% of their cash had 1% less deployable than their budget, so the final
+    # name deferred every cycle (Neil, 08-24). A rejected last order is recorded
+    # and retried; a permanently undeployable slice was not.
+    cash_buffer_pct: float = _float("CASH_BUFFER_PCT", 0.0)   # % of BP kept as reserve
     max_orders: int = _int("MAX_ORDERS", 25)                  # hard per-member order ceiling
     # Global safety ceiling on the $ any single member's stake can deploy per
     # cycle. Enforced in alloc.rebalance_budget, which sizes both the executor's
