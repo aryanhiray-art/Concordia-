@@ -375,7 +375,7 @@ def google(body: GoogleBody, request: Request, resp: Response):
             with db() as conn:
                 conn.execute("UPDATE invites SET uses = MAX(uses - 1, 0) WHERE code=?", (attr,))
         raise HTTPException(status_code=409, detail="account exists — log in instead")
-        member = {"id": cur.lastrowid, "session_version": 1, "role": role}
+    member = {"id": cur.lastrowid, "session_version": 1, "role": role}
     _default_settings(member["id"])
     _record_consent(member["id"])
     _link_identity(member["id"], info)
