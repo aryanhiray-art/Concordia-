@@ -9,6 +9,7 @@ signup records acceptance of the club agreement in `consents`.
 from __future__ import annotations
 
 import threading
+import sqlite3
 import time
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -214,16 +215,16 @@ def signup(body: SignupBody, request: Request, resp: Response):
     if settings.is_prod and body.consent is not True:
         raise HTTPException(status_code=403, detail="you must accept the club agreement")
     email = body.email
+    # Duplicate-account check BEFORE consuming anything (the email code OR an
+    # invite use): a valid code must never be burnt just to learn 409
+    # "account exists". Unconditional — the email-off path burnt minted invite
+    # uses on duplicate signups when this lived under `if email_enabled`.
+    with db() as conn:
+        if conn.execute("SELECT 1 FROM members WHERE email=?", (email,)).fetchone():
+            raise HTTPException(status_code=409, detail="account exists — log in instead")
     # Email verification (only when configured — otherwise byte-for-byte the old
     # flow). Checked after invite+consent so a burnt code never precedes those 403s.
     if settings.email_enabled:
-        # Duplicate-account check BEFORE consuming the code: verify() deletes on
-        # hit, so without this a valid code would be burnt just to learn 409
-        # "account exists". Existence isn't a secret past the invite gate (the
-        # in-transaction check below already 409s), only the ordering changes.
-        with db() as conn:
-            if conn.execute("SELECT 1 FROM members WHERE email=?", (email,)).fetchone():
-                raise HTTPException(status_code=409, detail="account exists — log in instead")
         if not body.email_code:
             raise HTTPException(status_code=403, detail="enter the code we emailed you")
         if not email_codes.verify(email, "signup", body.email_code):
@@ -359,13 +360,21 @@ def google(body: GoogleBody, request: Request, resp: Response):
         raise HTTPException(status_code=403, detail="invite code required or invalid")
     attr = "redacted" if ct_eq(used, settings.invite_code) else used
     role = "owner" if ct_eq(email, settings.owner_email) else "member"
-    with db() as conn:
-        cur = conn.execute(
-            "INSERT INTO members(email,display_name,role,invite_code_used,password_hash,"
-            "email_verified_at,created_at) VALUES(?,?,?,?,?,?,?)",
-            (email, _clean_display_name(info.get("name") or email.split("@")[0]),
-             role, attr, None, int(time.time()), int(time.time())),
-        )
+    try:
+        with db() as conn:
+            cur = conn.execute(
+                "INSERT INTO members(email,display_name,role,invite_code_used,password_hash,"
+                "email_verified_at,created_at) VALUES(?,?,?,?,?,?,?)",
+                (email, _clean_display_name(info.get("name") or email.split("@")[0]),
+                 role, attr, None, int(time.time()), int(time.time())),
+            )
+    except sqlite3.IntegrityError:
+        # concurrent duplicate signup: refund the just-consumed invite use
+        # (best-effort) and answer like the pre-check would have
+        if attr != "redacted":
+            with db() as conn:
+                conn.execute("UPDATE invites SET uses = MAX(uses - 1, 0) WHERE code=?", (attr,))
+        raise HTTPException(status_code=409, detail="account exists — log in instead")
         member = {"id": cur.lastrowid, "session_version": 1, "role": role}
     _default_settings(member["id"])
     _record_consent(member["id"])

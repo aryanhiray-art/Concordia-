@@ -219,6 +219,12 @@ def _lifecycle_send(kind: str, session: dict, only_nonvoters: bool,
                 _deliver(r["email"], subject, body_for(r), out)
             except Exception:  # noqa: BLE001
                 pass
+        # Escape hatch: if EVERY delivery failed (provider outage), clear the
+        # stamp so the next timer run retries — nothing was delivered, so
+        # at-most-once still holds. Partial failure keeps the stamp (the
+        # delivered majority must never be double-mailed).
+        if out["failed"] and not out["sent"] and not out["printed"]:
+            kv_set(stamp, "")
     except Exception:  # noqa: BLE001
         pass
     return out

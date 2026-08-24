@@ -92,16 +92,26 @@ def _startup() -> None:
 
 
 @app.get("/health")
+@app.get("/api/health")   # public-edge alias: the web vhost only forwards /api/*
 def health():
     # ok now means "the API can actually WRITE its database", not just "the
     # process answers HTTP" — the external dead-man probe keys off this, and a
     # read-only-disk box that still serves 200s was exactly the blind spot.
     db_ok = True
     try:
+        import time as _t
+
         from .db import db as _db
+        now = int(_t.time())
         with _db() as conn:
-            conn.execute("INSERT OR REPLACE INTO kv(key,value) VALUES('health_probe_at',?)",
-                         (str(int(__import__('time').time())),))
+            row = conn.execute("SELECT value FROM kv WHERE key='health_probe_at'").fetchone()
+            last = int(row["value"]) if row and str(row["value"]).isdigit() else 0
+            # Self-throttled: an anonymous endpoint must not be a write-per-GET
+            # lever on the single-writer DB. A stamp <60s old IS the proof a
+            # write recently succeeded, so freshness answers without writing.
+            if now - last >= 60:
+                conn.execute("INSERT OR REPLACE INTO kv(key,value) VALUES('health_probe_at',?)",
+                             (str(now),))
     except Exception:  # noqa: BLE001
         db_ok = False
     return {

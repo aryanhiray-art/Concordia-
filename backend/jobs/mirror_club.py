@@ -63,6 +63,11 @@ def build(limit: int = 60) -> dict:
     open_row = voting.latest_session("open")
     if open_row and (open_row.get("closes_at") or 0) > time.time():
         pub = voting.session_public(open_row, member_id=None)
+        # The mirror's contract: NOTHING member-identifying crosses to the demo
+        # box. session_public now attaches theses [{name, text}] for the member
+        # UI — strip them (and refuse surprises) before the tally is exported.
+        for _row in (pub.get("tally") or []):
+            _row.pop("theses", None)
         today = {"trade_date": pub.get("trade_date"),
                  "tally": pub.get("tally") or [],
                  "voters": pub.get("voters") or 0}

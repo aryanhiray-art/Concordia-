@@ -32,6 +32,7 @@ def mint(created_by: int | None, note: str = "", expires_days: int | None = None
     """Create one invite. Returns the full row (including the code)."""
     code = "cncd-" + "".join(secrets.choice(_ALPHABET) for _ in range(8))
     now = int(time.time())
+    created_by = created_by or None   # static admin token authenticates as id 0 — not a member row
     expires_at = now + int(expires_days) * 86_400 if expires_days else None
     with db() as conn:
         cur = conn.execute(
