@@ -98,7 +98,8 @@ def _num(v) -> float | None:
 
 # ─── write ───────────────────────────────────────────────────────────────────
 
-def record(member_id: int, total_value, ts: int | None = None) -> bool:
+def record(member_id: int, total_value, ts: int | None = None,
+           club_value=None) -> bool:
     """Store ONE observed account value. Returns True if a row was written.
 
     Refuses (returns False, writes nothing) when the value is None, non-numeric,
@@ -110,11 +111,18 @@ def record(member_id: int, total_value, ts: int | None = None) -> bool:
     if v is None or v < 0 or v > MAX_SANE_VALUE:
         return False
     at = int(ts if ts is not None else time.time())
+    # club_value is the slice the CLUB manages — recorded alongside the account
+    # total so the club's track record can measure its own money instead of
+    # whatever else shares the account (personal shares, idle cash, gifts).
+    cv = _num(club_value)
+    if cv is not None and (cv < 0 or cv > MAX_SANE_VALUE):
+        cv = None
     with db() as conn:
         conn.execute(
-            "INSERT INTO equity_points(member_id,ts,total_value) VALUES(?,?,?) "
-            "ON CONFLICT(member_id,ts) DO UPDATE SET total_value=excluded.total_value",
-            (int(member_id), at, v),
+            "INSERT INTO equity_points(member_id,ts,total_value,club_value) VALUES(?,?,?,?) "
+            "ON CONFLICT(member_id,ts) DO UPDATE SET total_value=excluded.total_value, "
+            "club_value=COALESCE(excluded.club_value, equity_points.club_value)",
+            (int(member_id), at, v, cv),
         )
     return True
 
@@ -131,7 +139,8 @@ def record_from_payload(member_id: int, payload: dict, ts: int | None = None) ->
         bal = ((payload or {}).get("allocation") or {}).get("balance")
         if not isinstance(bal, dict):
             return False
-        return record(member_id, bal.get("total_value"), ts)
+        return record(member_id, bal.get("total_value"), ts,
+                      club_value=(payload or {}).get("club_value"))
     except Exception:  # noqa: BLE001 — history is best-effort, the caller is not
         return False
 

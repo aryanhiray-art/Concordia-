@@ -160,3 +160,15 @@ def test_water_fill_totals_hold_across_a_grown_slice():
     t = basket_targets(110.94, held)
     assert all(abs(v - 5.55) < 0.02 for v in t.values())
     assert abs(sum(t.values()) - 110.94) < 0.5
+
+
+def test_percent_converts_to_a_riding_dollar_commitment():
+    """A percent stake specifies the OPENING amount; after a deployed cycle the
+    member holds a dollar commitment that rides its own P&L — so "$100 that grew
+    to $105" reads as $105 committed, for both stake types."""
+    from app.services.alloc import rebalance_budget
+    # opening: 50% of a $250 account = $125 (NOT the current slice, which may
+    # have drifted above what was ever committed)
+    assert rebalance_budget("percent", 50.0, 250.0, 250.0) == 125.0
+    # once converted to dollars it compounds: $125 grown to $131.25 stays whole
+    assert compound_budget(125.0, 125.0, 131.25, 500.0) == 131.25

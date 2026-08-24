@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.db import init_db  # noqa: E402
-from app.services import metrics  # noqa: E402
+from app.services import clubnav, metrics  # noqa: E402
 
 
 def main() -> int:
@@ -27,6 +27,11 @@ def main() -> int:
         return 0
     result = metrics.run_nightly()
     print(f"[daily_metrics] {result['mode']}: wrote {result['days']} day(s)")
+    # The club's REAL-money track record is a kept ledger (services/clubnav):
+    # extend it every night so the chart reads recorded history rather than a
+    # figure re-derived from whatever prices are fetchable at request time.
+    nav = clubnav.refresh()
+    print(f"[daily_metrics] club_nav: {nav}")
     return 0
 
 

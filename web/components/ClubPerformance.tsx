@@ -58,7 +58,10 @@ export function ClubPerformance() {
   }
 
   const innerW = W - PAD.l - PAD.r, innerH = H - PAD.t - PAD.b;
-  const vals = pts.flatMap((p) => [p.club, p.spy]);
+  // A benchmark point can be null (a day the price fetch could not cover):
+  // drop the SPY line entirely rather than feed NaN into the path.
+  const hasSpy = pts.every((p) => typeof p.spy === "number");
+  const vals = pts.flatMap((p) => (typeof p.spy === "number" ? [p.club, p.spy] : [p.club]));
   let lo = Math.min(...vals), hi = Math.max(...vals);
   // Floor the y-range at 1.5 index points so a near-flat first week isn't
   // amplified to full chart height (a ±0.1% wiggle reading as a moonshot).
@@ -75,7 +78,7 @@ export function ClubPerformance() {
   for (let k = 0; g0 + k * step <= hi; k++) grid.push(Math.round((g0 + k * step) * 100) / 100);
 
   const club = pts.map((p, i) => [x(i), y(p.club)]);
-  const spy = pts.map((p, i) => [x(i), y(p.spy)]);
+  const spy = hasSpy ? pts.map((p, i) => [x(i), y(p.spy as number)]) : [];
   const sign = (p: number | null) => (p == null ? "var(--muted)" : p >= 0 ? "var(--green)" : "var(--red)");
 
   return (
@@ -88,7 +91,7 @@ export function ClubPerformance() {
         </span>
         <span className="flex items-center gap-2">
           <span className="inline-block h-[2px] w-4 rounded-full bg-white/35" />
-          <span style={{ color: sign(perf!.spy_pct) }}>S&amp;P 500 {pct(perf!.spy_pct)}</span>
+          {hasSpy && <span style={{ color: sign(perf!.spy_pct) }}>S&amp;P 500 {pct(perf!.spy_pct)}</span>}
         </span>
       </div>
 
@@ -97,11 +100,11 @@ export function ClubPerformance() {
         {grid.map((g) => (
           <line key={g} x1={PAD.l} x2={W - PAD.r} y1={y(g)} y2={y(g)} stroke="rgba(255,255,255,0.06)" />
         ))}
-        <path d={smooth(spy)} fill="none" stroke="var(--subtle)" strokeWidth="1.6" strokeLinecap="round" opacity="0.75" />
+        {hasSpy && <path d={smooth(spy)} fill="none" stroke="var(--subtle)" strokeWidth="1.6" strokeLinecap="round" opacity="0.75" />}
         <path d={smooth(club)} fill="none" stroke="var(--teal)" strokeWidth="2.2" strokeLinecap="round" />
         {pts.length === 1 && (
           <>
-            <circle cx={x(0)} cy={y(pts[0].spy)} r="3" fill="var(--subtle)" />
+            {hasSpy && <circle cx={x(0)} cy={y(pts[0].spy as number)} r="3" fill="var(--subtle)" />}
             <circle cx={x(0)} cy={y(pts[0].club)} r="3.5" fill="var(--teal)" />
           </>
         )}

@@ -91,6 +91,9 @@ def build(member_id: int) -> dict:
     return {
         "pnl": alloc.club_pnl(member_id, holds=holds),
         "allocation": alloc.member_allocation(member_id, club_value=club_value),
+        # recorded into equity_points by equity_history.record_from_payload —
+        # the club's track record measures THIS, not the whole account
+        "club_value": club_value,
         "power": power.member_power_view(member_id),
         "holdings": holds,
     }

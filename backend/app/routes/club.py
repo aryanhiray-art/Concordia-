@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from ..services import clubmirror, performance
+from ..services import clubmirror, clubnav, performance
 from ..services import voting as voting_svc
 from .deps import require_member
 
@@ -26,7 +26,17 @@ def club_performance(force: bool = False, member: dict = Depends(require_member)
     mirrored = clubmirror.performance()
     if mirrored is not None:
         return mirrored
-    return performance.club_performance(force=force and member.get("role") == "owner")
+    # The REAL-money record (services/clubnav), read from the kept ledger.
+    # The old paper decisions-index is retained in services/performance for
+    # comparison but is no longer what the club claims as its track record.
+    if force and member.get("role") == "owner":
+        clubnav.refresh()
+    served = clubnav.series()
+    if served["points"]:
+        return served
+    # Ledger not built yet (fresh deploy) — build it once, then serve.
+    clubnav.refresh()
+    return clubnav.series()
 
 
 @router.get("/history")

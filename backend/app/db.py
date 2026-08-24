@@ -72,6 +72,17 @@ CREATE TABLE IF NOT EXISTS login_events (
     kind       TEXT NOT NULL DEFAULT 'login'          -- 'signup' | 'login'
 );
 
+-- KEPT club record: one row per ET day of the REAL-money club index (see
+-- services/clubnav). This is a ledger, not a cache — the club's track record
+-- must not be re-derived from whatever prices happen to be fetchable later.
+CREATE TABLE IF NOT EXISTS club_nav (
+    d          TEXT PRIMARY KEY,              -- ET date, YYYY-MM-DD
+    club       REAL NOT NULL,                 -- index, 100 = first recorded day
+    spy        REAL,                          -- benchmark index, same base (NULL = unfetched)
+    members    INTEGER NOT NULL DEFAULT 0,    -- member-days that fed this day's return
+    created_at INTEGER NOT NULL
+);
+
 -- Minted invite codes (alongside the legacy shared INVITE_CODE env string).
 -- A code admits while: not revoked, not expired, uses < max_uses (NULL = ∞).
 CREATE TABLE IF NOT EXISTS invites (
@@ -433,6 +444,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # cannot silently leave the slice; recomputed fresh each buy leg.
     if "slice_carry" not in s:
         conn.execute("ALTER TABLE member_settings ADD COLUMN slice_carry REAL NOT NULL DEFAULT 0")
+    # The CLUB SLICE's value, recorded alongside total account value from
+    # 2026-08-24. The club's track record must measure the money the club
+    # actually manages: total_value also carries personal positions, idle cash
+    # and gifted shares, which inflated the record (services/clubnav).
+    if "club_value" not in {r["name"] for r in conn.execute("PRAGMA table_info(equity_points)")}:
+        conn.execute("ALTER TABLE equity_points ADD COLUMN club_value REAL")
     if "scored_at" not in cols("vote_sessions"):
         conn.execute("ALTER TABLE vote_sessions ADD COLUMN scored_at INTEGER")
 

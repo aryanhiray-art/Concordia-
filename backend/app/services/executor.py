@@ -501,10 +501,22 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         # the SELL day and is stamped to kv, because on the T+1 buy day part of
         # the slice is settling CASH that a positions-only mark can't see.
         # PINNED (compound off) keeps the legacy min(stake, account) target.
-        compounding = bool(m.get("compound", 1)) and m["alloc_type"] == "dollar"
+        # Compounding applies to BOTH stake types (owner call 2026-08-24): the
+        # committed figure itself rides the slice, so "I put in $100 and it grew
+        # to $105" leaves $105 committed. A percent stake bootstraps from
+        # pct x account and compounds from there like a dollar stake.
+        compounding = bool(m.get("compound", 1))
+        # A PERCENT stake means "not compounded yet": the percentage specifies
+        # the opening amount, is resolved against the account once, and the
+        # write-back below converts the member to the dollar figure that was
+        # actually deployed. From then on (alloc_type='dollar') the commitment
+        # RIDES its own P&L. Bootstrapping a percent member from their current
+        # slice instead would lock in whatever the slice had drifted to, which
+        # can exceed what they ever committed.
+        rides = compounding and m["alloc_type"] == "dollar"
         budget_stamp = f"cycle_budget:{sid}:{mid}"
         stamped_stake = None
-        if compounding:
+        if rides:
             _stamped = kv_get(budget_stamp)
             if _stamped:
                 # WRITE-ONCE per session — reused on the T+1 buy day AND on any
@@ -540,7 +552,12 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                     _skip_member(msum, "transient_rh_error",
                                  f"no quote for club valuation ({','.join(unpriced[:3])}) — skipping this run")
                     continue
-                budget = alloc.compound_budget(m["alloc_value"], m.get("alloc_applied"),
+                # The committed figure in DOLLARS. A percent stake is a way of
+                # SPECIFYING the amount; once deployed it compounds like any
+                # other, so the percentage is resolved against the account only
+                # while the slice is still empty.
+                stake_usd = float(m["alloc_value"] or 0.0)
+                budget = alloc.compound_budget(stake_usd, m.get("alloc_applied"),
                                                club_value, total_value,
                                                daily_cap_usd=m.get("daily_cap_usd"),
                                                slice_carry=m.get("slice_carry"))
@@ -548,12 +565,15 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                 # write-back must credit that figure, not whatever the member
                 # has since changed it to (a non-voting member can edit their
                 # stake mid-cycle — the vote-based freeze doesn't cover them).
-                stamped_stake = float(m["alloc_value"] or 0.0)
+                stamped_stake = float(stake_usd or 0.0)
                 kv_set(budget_stamp, json.dumps({"budget": round(budget, 2),
                                                  "stake": stamped_stake}))
         else:
             budget = alloc.rebalance_budget(m["alloc_type"], m["alloc_value"], total_value,
                                             buying_power, daily_cap_usd=m.get("daily_cap_usd"))
+            # The resolved dollars are what a compounding member is converted to
+            # once this cycle deploys.
+            stamped_stake = float(budget)
 
         # No meaningful stake and nothing club-held to unwind → skip the member.
         # (A budget under $1 with live club holdings still runs, so a member who
@@ -845,9 +865,17 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         if (compounding and will_place and phase in ("buy", "both")
                 and not msum.get("skip_reason") and stamped_stake is not None):
             with db() as conn:
-                conn.execute("UPDATE member_settings SET alloc_applied=?, slice_carry=? "
+                # The commitment RIDES: after a deployed cycle the member's
+                # committed figure becomes what is actually deployed, so a $100
+                # stake that grew to $105 reads "$105 committed" — and a percent
+                # stake converts to the dollars it resolved to, which is what it
+                # has meant since the first deployment. alloc_applied tracks it
+                # so only future EDITS move the budget.
+                conn.execute("UPDATE member_settings SET alloc_type='dollar', "
+                             "alloc_value=?, alloc_applied=?, slice_carry=? "
                              "WHERE member_id=?",
-                             (stamped_stake, round(unplaced_usd, 2), mid))
+                             (round(budget, 2), round(budget, 2),
+                              round(unplaced_usd, 2), mid))
         summary["members"].append(msum)
         summary["orders"].extend(
             {"member_id": mid, **o} for o in msum["orders"]

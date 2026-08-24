@@ -61,7 +61,7 @@ export type PowerView = {
 };
 
 // Club-level decisions-vs-SPY performance — the same series for every member.
-export type PerfPoint = { d: string; club: number; spy: number };  // both indexed, base 100
+export type PerfPoint = { d: string; club: number; spy: number | null };  // indexed, base 100; spy null = day unpriced
 export type PerfView = {
   start_date: string | null;
   computed_at: number;
@@ -69,6 +69,8 @@ export type PerfView = {
   points: PerfPoint[];
   club_pct: number | null;
   spy_pct: number | null;
+  /** "real_money" = the recorded club ledger (services/clubnav), not a backtest. */
+  basis?: string;
 };
 
 export type SessionView = {
