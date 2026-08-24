@@ -128,3 +128,22 @@ def test_ledger_round_trips():
     assert served["basis"] == "real_money"
     assert served["club_pct"] == 5.0
     assert len(served["points"]) == 2
+
+
+def test_basis_switch_never_creates_a_phantom_return():
+    """club_value began recording mid-history. Comparing an account total on one
+    day against a club slice on the next turns a LEVEL difference (idle cash, a
+    personal position) into a fake return — observed live as a +0.25% move on a
+    Sunday. The daily ratio must use the same field on both endpoints."""
+    _clear()
+    m = _mk(110, "switcher")
+    _pt(m, 0, 100.0)                 # total only (pre-club_value era)
+    _pt(m, 1, 100.0)                 # total only, flat
+    _pt(m, 2, 100.0, club=88.0)      # club_value starts; account still flat
+    _pt(m, 3, 100.0, club=88.0)      # both flat
+    pts = clubnav.compute()
+    assert [p["club"] for p in pts] == [100.0, 100.0, 100.0, 100.0], \
+        "a change of measurement basis is not a return"
+    # and once BOTH days carry a slice, the slice drives the record
+    _pt(m, 4, 100.0, club=92.4)      # slice +5% while the account is unchanged
+    assert clubnav.compute()[-1]["club"] == 105.0

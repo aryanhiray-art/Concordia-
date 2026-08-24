@@ -47,7 +47,7 @@ def daily_values() -> dict[str, dict[int, float]]:
     Bots carry seeded equity rows (a flat 100.0) and no brokerage account —
     including them would dilute every real move toward zero.
     """
-    out: dict[str, dict[int, float]] = {}
+    out: dict[str, dict[int, tuple[float | None, float | None]]] = {}
     with db() as conn:
         rows = conn.execute(
             "SELECT e.member_id, e.ts, e.total_value, e.club_value, "
@@ -64,14 +64,21 @@ def daily_values() -> dict[str, dict[int, float]]:
         # positions, idle cash and gifted shares that are not the club's doing.
         # (This is exactly why the old chart read +6.0%: one member's account
         # grew on a gifted share while the club's own slice was flat.)
-        v = r["club_value"]
-        if v is None:
-            if not (r["alloc_type"] == "percent" and float(r["alloc_value"] or 0) >= 100.0):
-                continue
-            v = r["total_value"]
-        if v is None or v < 0:
+        # Keep BOTH readings per member-day. The daily ratio must be taken from
+        # the SAME field on both endpoints: club_value only began recording on
+        # 2026-08-24, and silently switching basis mid-series turns a level
+        # difference (idle cash, a personal position) into a phantom return —
+        # observed as a +0.25% move on a Sunday when the column went live.
+        total = r["total_value"]
+        # An account total is the slice ONLY for a member who committed 100%.
+        whole_account = (r["alloc_type"] == "percent"
+                         and float(r["alloc_value"] or 0) >= 100.0)
+        tv = float(total) if (total is not None and total >= 0 and whole_account) else None
+        cv = float(r["club_value"]) if (r["club_value"] is not None
+                                        and r["club_value"] >= 0) else None
+        if tv is None and cv is None:
             continue
-        out.setdefault(_et_date(r["ts"]), {})[r["member_id"]] = float(v)
+        out.setdefault(_et_date(r["ts"]), {})[r["member_id"]] = (tv, cv)
     return out
 
 
@@ -106,7 +113,7 @@ def compute(spy_closes: dict[str, float] | None = None) -> list[dict]:
 
     index = 100.0
     last_spy = 100.0 if spy_base else None
-    prev_vals: dict[int, float] = dict(byday[dates[0]])
+    prev_vals: dict[int, tuple] = dict(byday[dates[0]])
     points = [{"d": dates[0], "club": 100.0,
                "spy": 100.0 if spy_base else None,
                "members": len(prev_vals)}]
@@ -114,12 +121,22 @@ def compute(spy_closes: dict[str, float] | None = None) -> list[dict]:
         cur = byday[d]
         num = den = 0.0
         counted = 0
-        for mid, v1 in cur.items():
-            v0 = prev_vals.get(mid)
-            if v0 is None or v0 <= 0:
+        for mid, pair1 in cur.items():
+            pair0 = prev_vals.get(mid)
+            if pair0 is None:
                 continue
             if (mid, d) in flows:
                 continue                      # detected cash movement — not a return
+            # Same basis on both endpoints: prefer the recorded club slice, fall
+            # back to the account total only when BOTH days carry one.
+            if pair0[1] is not None and pair1[1] is not None:
+                v0, v1 = pair0[1], pair1[1]
+            elif pair0[0] is not None and pair1[0] is not None:
+                v0, v1 = pair0[0], pair1[0]
+            else:
+                continue
+            if v0 <= 0:
+                continue
             r = v1 / v0
             if abs(r - 1.0) > _FLOW_GUARD:
                 continue                      # undetected cash movement
