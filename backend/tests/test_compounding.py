@@ -123,3 +123,40 @@ def test_toggle_defaults_on_and_flips():
                    headers={"Authorization": f"Bearer {tok}"})
     assert r.status_code == 200
     assert r.json()["member"]["settings"]["compound"] == 0
+
+
+# ─── review-fix regressions (2026-08-24 adversarial pass) ───────────────────
+
+def test_pin_never_paid_for_by_liquidating_a_laggard():
+    """A winner is pinned only while the remaining names stay fundable.
+
+    The bug: 19 names grown to $5.95 inside the band pinned $113 of a $100
+    budget, the leftover went negative, and the single $2 laggard was targeted
+    at 0 — i.e. FULLY SOLD to pay for keeping the overweight names."""
+    held = {f"S{i}": 5.95 for i in range(19)}
+    held["LAG"] = 2.00
+    t = basket_targets(100.0, held)
+    assert t["LAG"] > 1.00, "laggard must not be liquidated to fund pins"
+    assert sum(t.values()) <= 100.0 + 1.0, "targets must not overshoot the budget"
+    # with pinning refused, everyone takes fair share → the overweight names get trimmed
+    assert t["S0"] < 5.95
+
+
+def test_carry_returns_undeployed_cash_to_the_slice():
+    """Deferred buys leave club cash behind; without the carry the positions-only
+    mark would drop those dollars out of the slice forever (one-way ratchet)."""
+    # slice marked at $90 of positions, $20 was deferred last cycle
+    assert compound_budget(100.0, 100.0, 90.0, 500.0, slice_carry=20.0) == 110.0
+    # a market LOSS is still never topped up (no carry → no top-up)
+    assert compound_budget(100.0, 100.0, 90.0, 500.0, slice_carry=0.0) == 90.0
+    # carry is club money only, so it cannot resurrect a liquidated slice
+    assert compound_budget(100.0, 100.0, 0.0, 500.0, slice_carry=0.0) == 100.0
+
+
+def test_water_fill_totals_hold_across_a_grown_slice():
+    """The owner's live shape: 20 names ~$5.55 on a $110.94 compounded budget —
+    everything is at fair share, so no trims and no buys should be implied."""
+    held = {f"S{i}": 5.55 for i in range(20)}
+    t = basket_targets(110.94, held)
+    assert all(abs(v - 5.55) < 0.02 for v in t.values())
+    assert abs(sum(t.values()) - 110.94) < 0.5

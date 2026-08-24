@@ -78,11 +78,19 @@ def build(member_id: int) -> dict:
     is exactly what the endpoints returned before this cache existed.
     """
     holds = positions.holdings_with_value(member_id)
+    # CLUB-only value (personal positions excluded, same cap the executor's
+    # valuation and sell leg use) — a compounding stake must never read the
+    # member's own shares as part of the slice. DB-only ledger read; on any
+    # failure we pass None and the display falls back to the pinned figure.
+    try:
+        _club_qty = positions.club_shares(member_id)
+        club_value = sum((h.get("value") or 0.0) for h in holds
+                         if _club_qty.get(h.get("symbol"), 0.0) > 1e-6)
+    except Exception:  # noqa: BLE001
+        club_value = None
     return {
-        "pnl": (_pnl := alloc.club_pnl(member_id, holds=holds)),
-        # club_value = the live value of what the club holds for this member —
-        # the same figure the executor marks a compounding slice from.
-        "allocation": alloc.member_allocation(member_id, club_value=_pnl.get("value")),
+        "pnl": alloc.club_pnl(member_id, holds=holds),
+        "allocation": alloc.member_allocation(member_id, club_value=club_value),
         "power": power.member_power_view(member_id),
         "holdings": holds,
     }

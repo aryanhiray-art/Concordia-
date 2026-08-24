@@ -293,7 +293,8 @@ def test_put_allocation_returns_a_freshly_refreshed_snapshot(monkeypatch):
     assert set(body) == {"allocation", "pnl", "power", "as_of", "stale", "live"}
     assert body["live"] is True
     assert body["allocation"] == {"type": "percent", "value": 25.0,
-                                  "resolved_usd": 500.0, "balance": b.balance}
+                                  "resolved_usd": 500.0, "compounding": False,
+                                  "balance": b.balance}
     assert body["as_of"] > primed["as_of"] or b.calls > 2
 
     # and the cache now serves the new stake without another broker call
