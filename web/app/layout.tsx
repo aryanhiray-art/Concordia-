@@ -18,7 +18,7 @@ export const metadata: Metadata = {
 // (see the phone block in globals.css) — both paths are pointed at the same
 // colour so the chrome matches the page on every engine.
 export const viewport: Viewport = {
-  themeColor: "#0E2E30",
+  themeColor: "#091416",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

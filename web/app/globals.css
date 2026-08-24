@@ -71,8 +71,8 @@ body { background: transparent; }
    background necessarily covers the fixed layers, so they are switched off
    here rather than left painting invisibly. Desktop keeps the full aurora. */
 @media (max-width: 768px) {
-  html { background: #0e2e30; }
-  body { background-color: #0e2e30; }   /* ← Safari 26 samples THIS for its UI */
+  html { background: #091416; }
+  body { background-color: #091416; }   /* ← Safari 26 samples THIS for its UI */
   .bgfx,
   .aurora { display: none; }
 }
