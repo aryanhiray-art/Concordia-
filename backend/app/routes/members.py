@@ -493,6 +493,26 @@ def participate(body: ParticipateBody, member: dict = Depends(require_member)):
     return {"member": load_member(member["id"])}
 
 
+@router.put("/me/compound")
+def set_compound(body: ParticipateBody, member: dict = Depends(require_member)):
+    """Compounding stake on/off (default ON: the slice rides its own P&L in
+    both directions; OFF pins deployment to the committed figure). Same freeze
+    window as an allocation change — sizing must not flip mid-execution."""
+    from ..services import voting as _voting
+    if _voting.member_in_closed_unexecuted_session(member["id"]):
+        raise HTTPException(
+            status_code=409,
+            detail="locked while this cycle's basket is executing — try again once it completes",
+        )
+    with db() as conn:
+        conn.execute(
+            "UPDATE member_settings SET compound=? WHERE member_id=?",
+            (1 if body.on else 0, member["id"]),
+        )
+    audit(f"member:{member['id']}", "compound", None, {"on": body.on})
+    return {"member": load_member(member["id"])}
+
+
 @router.put("/me/email-reminders")
 def email_reminders(body: ParticipateBody, member: dict = Depends(require_member)):
     """Ballot-lifecycle email opt-out. Deliberately does NOT touch updated_at:

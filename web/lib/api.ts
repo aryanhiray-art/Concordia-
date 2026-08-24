@@ -430,6 +430,8 @@ export const api = {
     req<{ member: Member }>("/api/me/participate", { method: "PUT", body: JSON.stringify({ on }) }),
   emailReminders: (on: boolean) =>
     req<{ member: Member }>("/api/me/email-reminders", { method: "PUT", body: JSON.stringify({ on }) }),
+  setCompound: (on: boolean) =>
+    req<{ member: Member }>("/api/me/compound", { method: "PUT", body: JSON.stringify({ on }) }),
 
   // agentic balance + allocation (% or $) + club-only P&L.
   // CHEAP: served from the backend's cached snapshot (refreshed on a ~10-min

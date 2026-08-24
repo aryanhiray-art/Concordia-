@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { Button, Card, Freshness } from "./ui";
+import { Button, Card, Freshness, Toggle } from "./ui";
 import { ClubPerformance } from "./ClubPerformance";
 
 function money(n: number | null | undefined, dp = 0) {
@@ -14,9 +14,16 @@ function money(n: number | null | undefined, dp = 0) {
 export function AllocationCard({ onChange }: { onChange?: () => void }) {
   // Snapshot from the auth context — no broker read on every Account visit.
   const {
-    account: acc, applyAccount,
+    account: acc, applyAccount, member,
     accountAsOf, accountStale, accountRefreshing, refreshAccount,
   } = useAuth();
+  const [compound, setCompound] = useState(Number(member?.settings?.compound ?? 1) === 1);
+
+  async function toggleCompound(on: boolean) {
+    setCompound(on);
+    try { await api.setCompound(on); onChange?.(); }
+    catch { setCompound(!on); } // revert on failure (e.g. locked mid-cycle)
+  }
   const [type, setType] = useState<"percent" | "dollar">("percent");
   const [value, setValue] = useState<number>(0);
   const [busy, setBusy] = useState(false);
@@ -89,6 +96,17 @@ export function AllocationCard({ onChange }: { onChange?: () => void }) {
         {err && <div className="mt-2.5 text-[12px] text-red">⚠ {err}</div>}
         <div className="mt-2.5 text-[12.5px] text-muted">
           Committing <b className="text-teal">{money(resolved, 2)}</b>
+        </div>
+        <div className="mt-3 flex items-center justify-between gap-4 border-t border-white/10 pt-3">
+          <div>
+            <div className="font-display text-[13px] font-semibold">Compounding</div>
+            <div className="mt-0.5 text-[11.5px] leading-snug text-subtle">
+              {compound
+                ? "your slice rides its own gains and losses from what you committed"
+                : "pinned: gains are skimmed to cash, losses topped back up to your committed amount"}
+            </div>
+          </div>
+          <Toggle on={compound} onChange={toggleCompound} />
         </div>
       </div>
 

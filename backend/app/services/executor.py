@@ -120,7 +120,8 @@ def _opted_members() -> list[dict]:
     with db() as conn:
         rows = conn.execute(
             "SELECT m.id AS member_id, m.display_name, s.alloc_type, s.alloc_value,"
-            "       s.daily_cap_usd, s.max_orders, a.account_number, a.agentic_allowed, a.status AS rh_status "
+            "       s.daily_cap_usd, s.max_orders, COALESCE(s.compound,1) AS compound,"
+            "       s.alloc_applied, a.account_number, a.agentic_allowed, a.status AS rh_status "
             "FROM members m "
             "JOIN member_settings s ON s.member_id=m.id "
             "LEFT JOIN rh_accounts a ON a.member_id=m.id "
@@ -409,7 +410,7 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         _skip_member({"member_id": r["member_id"], "name": r["display_name"],
                       "orders": [], "note": "opted out"}, "opted_out")
 
-    from ..db import kv_get
+    from ..db import kv_get, kv_set
     members = _opted_members()
     for m_idx, m in enumerate(members):
         if kv_get("halt") == "1":
@@ -464,9 +465,6 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         total_value = (_num(pdata.get("total_value")) or _num(pdata.get("equity_value"))
                        or buying_power)
 
-        # Rebalance target = committed stake (frees cash via sells), NOT buying power.
-        budget = alloc.rebalance_budget(m["alloc_type"], m["alloc_value"], total_value, buying_power,
-                                        daily_cap_usd=m.get("daily_cap_usd"))
         # What the CLUB holds for this member — the sell candidate set + upper bound.
         # "derived" reconstructs it from the broker's agentic order feed (drift-proof,
         # personal-safe); on an incomplete feed read we FAIL CLOSED (skip this member,
@@ -481,6 +479,63 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                 continue
         else:
             held = positions.club_shares(mid)        # legacy ledger path (default; rollback)
+        # Live account holdings — the source of truth for BOTH the sell cap (never
+        # request more than actually held) AND buy sizing (below). Use the STRICT
+        # variant: if the positions read FAILS, we must NOT treat it as an empty
+        # account (buy sizing would re-buy the full basket) — skip the member this
+        # run and let the next cycle retry. Fails safe on both sell and buy.
+        try:
+            live = {p["symbol"]: p["quantity"] for p in positions.live_positions_strict(mid)}
+        except Exception:  # noqa: BLE001
+            _skip_member(msum, "transient_rh_error", "could not read live positions — skipping this run")
+            continue
+        # Quotes for everything we might touch: the full pick list (the basket is
+        # sized from the budget BELOW, so it isn't known yet) plus every club
+        # holding (valuation + sells).
+        prices = _quotes(client, list(set(picks) | set(held)))
+
+        # ── budget ──────────────────────────────────────────────────────────
+        # COMPOUNDING (default): a dollar stake rides its own P&L in both
+        # directions — budget = mark-to-market club value, adjusted by any
+        # stake change since the last honored figure. The valuation happens on
+        # the SELL day and is stamped to kv, because on the T+1 buy day part of
+        # the slice is settling CASH that a positions-only mark can't see.
+        # PINNED (compound off) keeps the legacy min(stake, account) target.
+        compounding = bool(m.get("compound", 1)) and m["alloc_type"] == "dollar"
+        budget_stamp = f"cycle_budget:{sid}:{mid}"
+        if compounding:
+            if phase == "buy" and kv_get(budget_stamp):
+                try:
+                    budget = float(kv_get(budget_stamp))
+                except (TypeError, ValueError):
+                    budget = 0.0
+            else:
+                club_value = 0.0
+                unpriced = []
+                for _sym, _qty in held.items():
+                    _q = min(_qty, live.get(_sym, 0.0))
+                    if _q <= 0:
+                        continue
+                    _p = prices.get(_sym)
+                    if _p is None:
+                        unpriced.append(_sym)
+                    else:
+                        club_value += _q * _p
+                if unpriced:
+                    # A missing quote UNDERVALUES the slice → the shortfall would
+                    # read as "over target" and trim real positions. Fail closed.
+                    _skip_member(msum, "transient_rh_error",
+                                 f"no quote for club valuation ({','.join(unpriced[:3])}) — skipping this run")
+                    continue
+                budget = alloc.compound_budget(m["alloc_value"], m.get("alloc_applied"),
+                                               club_value, total_value,
+                                               daily_cap_usd=m.get("daily_cap_usd"))
+                if phase in ("sell", "both"):
+                    kv_set(budget_stamp, f"{budget:.2f}")
+        else:
+            budget = alloc.rebalance_budget(m["alloc_type"], m["alloc_value"], total_value,
+                                            buying_power, daily_cap_usd=m.get("daily_cap_usd"))
+
         # No meaningful stake and nothing club-held to unwind → skip the member.
         # (A budget under $1 with live club holdings still runs, so a member who
         # zeroes their allocation gets liquidated rather than stranded.)
@@ -495,21 +550,18 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         basket = picks[:n_eff]
         per_pick = math.floor((budget / n_eff) * 100) / 100.0
         want = set(basket)
-        # Live account holdings — the source of truth for BOTH the sell cap (never
-        # request more than actually held) AND buy sizing (below). Use the STRICT
-        # variant: if the positions read FAILS, we must NOT treat it as an empty
-        # account (buy sizing would re-buy the full basket) — skip the member this
-        # run and let the next cycle retry. Fails safe on both sell and buy.
-        try:
-            live = {p["symbol"]: p["quantity"] for p in positions.live_positions_strict(mid)}
-        except Exception:  # noqa: BLE001
-            _skip_member(msum, "transient_rh_error", "could not read live positions — skipping this run")
-            continue
-        prices = _quotes(client, list(want | set(held)))
+        # Per-name dollar targets that SUM to the budget (water-fill): a name
+        # within $1 of fair share keeps its value and the others absorb the
+        # difference — winners ride, entries shrink, the total adds up. A name
+        # >$1 over fair share is targeted at fair share (the sell leg trims it).
+        _held_val_of = (lambda sym: (live.get(sym, 0.0) if settings.buy_sizing_account
+                                     else held.get(sym, 0.0)) * (prices.get(sym) or 0.0))
+        targets = alloc.basket_targets(budget, {sym: _held_val_of(sym) for sym in basket})
         msum["buying_power"] = round(buying_power, 2)
         msum["allocation"] = round(budget, 2)
         msum["budget"] = round(budget, 2)
         msum["per_pick"] = per_pick
+        msum["compounding"] = compounding
         order_count = 0
         # Per-member order ceiling = the tighter of the global cap and this
         # member's own max_orders (finding #35 — the column was fetched but the
@@ -538,7 +590,8 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
             if symbol in want:
                 if price is None:
                     continue                          # can't size a trim without a price
-                excess = held_qty - (per_pick / price)   # shares above the equal-weight target
+                _tgt = targets.get(symbol, per_pick)
+                excess = held_qty - (_tgt / price)    # shares above this name's water-fill target
                 if excess * price < 1.00:             # not meaningfully overweight → keep
                     continue
                 sell_qty, why = excess, "trim to target"
@@ -712,10 +765,11 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
             # mis-size the top-up; fall back to the club ledger only if disabled.
             held_now = live.get(symbol, 0.0) if settings.buy_sizing_account else held.get(symbol, 0.0)
             held_val = held_now * price
-            need = round(per_pick - held_val, 2)
+            _tgt = targets.get(symbol, per_pick)
+            need = round(_tgt - held_val, 2)
             if need < 1.00:
                 msum["orders"].append({"symbol": symbol, "side": "buy", "status": "held",
-                                       "note": f"at target (${held_val:.2f} ≥ ${per_pick:.2f})"})
+                                       "note": f"at target (${held_val:.2f} ≥ ${_tgt:.2f})"})
                 continue
             if need > bp_left + 0.005:                 # not enough SETTLED cash yet → defer
                 _record(sid, mid, symbol, need, ref_id_for(sid, mid, symbol), "skipped",
@@ -757,6 +811,15 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
             except Exception as e:  # noqa: BLE001
                 _record(sid, mid, symbol, need, ref_id, "error", review=review, error=f"place: {e}")
                 msum["orders"].append({"symbol": symbol, "side": "buy", "status": "error", "note": str(e)})
+        # Compounding bookkeeping: once the BUY leg has run for this member,
+        # the current stake figure has been honored — record it so the next
+        # cycle's budget applies only future stake CHANGES as deltas. Only on
+        # a completed (non-skipped) buy/both pass, and never touching
+        # updated_at (the stake-freeze / demo clock).
+        if compounding and phase in ("buy", "both") and not msum.get("skip_reason"):
+            with db() as conn:
+                conn.execute("UPDATE member_settings SET alloc_applied=? WHERE member_id=?",
+                             (m["alloc_value"], mid))
         summary["members"].append(msum)
         summary["orders"].extend(
             {"member_id": mid, **o} for o in msum["orders"]

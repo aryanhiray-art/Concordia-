@@ -105,6 +105,8 @@ export type MemberSettings = {
   voting_power?: number;
   /** Ballot lifecycle emails (open / closing-soon); default on. */
   email_reminders?: number;
+  /** Compounding stake (default 1): the slice rides its own P&L; 0 = pinned. */
+  compound?: number;
 } | null;
 
 export type Member = {

@@ -186,3 +186,78 @@ def club_pnl(member_id: int, holds: list[dict] | None = None) -> dict:
         "profit_pct": round(profit / invested * 100, 2) if invested else None,
         "positions": len(holds),
     }
+
+
+# ─── compounding stake (owner decision 2026-08-24, default ON) ──────────────
+
+def compound_budget(alloc_value: float | None, alloc_applied: float | None,
+                    club_value: float | None, total_value: float | None,
+                    daily_cap_usd: float | None = None) -> float:
+    """Rebalance target for a COMPOUNDING dollar stake.
+
+    The slice rides its own P&L in BOTH directions from the committed base:
+    grown to $110 → deploy $110; fallen to $90 → deploy $90 (never topped up
+    from fresh cash). `alloc_applied` is the stake figure the executor last
+    honored, so a stake CHANGE deploys/retires exactly the delta:
+
+        budget = club_value + (alloc_value − alloc_applied)
+
+    An empty slice (< $1 held) bootstraps from the full stake — first joiners,
+    liquidated accounts, and pre-feature members (alloc_applied NULL) all start
+    by deploying alloc_value. Safety clamps unchanged: total account value,
+    MAX_NOTIONAL_PER_MEMBER, and the member's own daily cap.
+    """
+    v = alloc_value or 0.0
+    cv = club_value or 0.0
+    if cv < 1.00:
+        target = v
+    else:
+        applied = v if alloc_applied is None else (alloc_applied or 0.0)
+        target = cv + (v - applied)
+    target = min(target, total_value or 0.0, settings.max_notional_per_member)
+    if daily_cap_usd is not None and daily_cap_usd > 0:
+        target = min(target, daily_cap_usd)
+    return round(max(0.0, target), 2)
+
+
+def basket_targets(budget: float, held_vals: dict[str, float],
+                   band: float = 1.00) -> dict[str, float]:
+    """Per-name dollar targets that SUM to ~budget (water-fill).
+
+    Fixes the old equal-weight dead-band drift: a name that has grown past its
+    fair share but by less than `band` (the broker's $1 order minimum makes a
+    smaller trim unplaceable) KEEPS its value, and the remaining budget spreads
+    equally over the other names — so winners ride and the rest shrink to make
+    the total add up. A name more than `band` over its fair share is targeted
+    AT fair share (the executor's sell leg trims it).
+
+    The aggregate can exceed budget by at most ~band per kept name in the
+    degenerate everyone-at-the-line case — the unavoidable cost of a $1
+    minimum order, not a sizing error.
+    """
+    names = list(held_vals)
+    if not names:
+        return {}
+    if budget <= 0:
+        return {n: 0.0 for n in names}
+    kept: dict[str, float] = {}
+    rest = set(names)
+    rem = float(budget)
+    while rest:
+        fair = rem / len(rest)
+        # names over fair share but within the band: pin at their held value
+        pin = [n for n in rest if fair < held_vals[n] <= fair + band]
+        if not pin:
+            break
+        for n in pin:
+            kept[n] = held_vals[n]
+            rem -= held_vals[n]
+            rest.discard(n)
+        if rem <= 0:
+            for n in rest:
+                kept[n] = 0.0
+            rest = set()
+    fair = (rem / len(rest)) if rest else 0.0
+    for n in rest:
+        kept[n] = max(0.0, fair)
+    return {n: round(v, 2) for n, v in kept.items()}

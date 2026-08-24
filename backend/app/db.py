@@ -414,6 +414,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # club lives or dies on members remembering the ballot exists.
     if "email_reminders" not in s:
         conn.execute("ALTER TABLE member_settings ADD COLUMN email_reminders INTEGER NOT NULL DEFAULT 1")
+    # Compounding stake (owner decision 2026-08-24, default ON): a dollar stake
+    # rides its own P&L in BOTH directions from the committed base instead of
+    # being pinned; alloc_applied = the last stake figure the executor honored,
+    # so a stake CHANGE deploys/retires exactly the delta.
+    if "compound" not in s:
+        conn.execute("ALTER TABLE member_settings ADD COLUMN compound INTEGER NOT NULL DEFAULT 1")
+    if "alloc_applied" not in s:
+        conn.execute("ALTER TABLE member_settings ADD COLUMN alloc_applied REAL")
     if "scored_at" not in cols("vote_sessions"):
         conn.execute("ALTER TABLE vote_sessions ADD COLUMN scored_at INTEGER")
 
