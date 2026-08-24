@@ -1,8 +1,23 @@
 [Unit]
-Description=Concord — bots vote every trading morning (07:30 ET, before the 08:30 close)
+Description=Concord — bots vote in three retryable passes (Wed, Sat, Mon-before-close)
 
 [Timer]
-OnCalendar=*-*-* 07:30 America/New_York
+# The Monday ballot is open all week, so the bots vote EARLY and REPEATEDLY
+# instead of once an hour before the close. Three passes, three attempts each:
+#   Wed — first basket
+#   Sat — recalculation on fresh prices
+#   Mon — final recalculation, all attempts finishing before the 09:15 ET close
+# A pass that dies loses nothing: the previous pass's votes stand, and a retry
+# only re-runs the bots the killed attempt never reached (see jobs/bot_vote.py).
+OnCalendar=Wed *-*-* 09:00 America/New_York
+OnCalendar=Wed *-*-* 13:00 America/New_York
+OnCalendar=Wed *-*-* 17:00 America/New_York
+OnCalendar=Sat *-*-* 09:00 America/New_York
+OnCalendar=Sat *-*-* 13:00 America/New_York
+OnCalendar=Sat *-*-* 17:00 America/New_York
+OnCalendar=Mon *-*-* 05:30 America/New_York
+OnCalendar=Mon *-*-* 07:00 America/New_York
+OnCalendar=Mon *-*-* 08:20 America/New_York
 Persistent=true
 
 [Install]

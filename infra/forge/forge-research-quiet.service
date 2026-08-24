@@ -1,0 +1,7 @@
+[Unit]
+Description=Forge — stand research down while Concordia's bots vote (reconciler)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/forge-research-quiet.py
+TimeoutStartSec=120

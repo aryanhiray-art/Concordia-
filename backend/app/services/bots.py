@@ -123,16 +123,40 @@ def _universe_with_prices() -> tuple[list[str], dict[str, float]]:
     return tickers, prices
 
 
-def cast_votes(session: dict) -> dict:
-    """Every bot decides + votes in the (open) session. Records picks for scoring."""
+def cast_votes(session: dict, skip_voted_since: int | None = None) -> dict:
+    """Every bot decides + votes in the (open) session. Records picks for scoring.
+
+    `skip_voted_since` makes the run RESUMABLE: any bot whose vote in this
+    session already lands at/after that timestamp is left alone. The bot loop is
+    20 local LLM inferences on a shared box and systemd has killed it mid-loop
+    before (2026-08-24: the whole pass timed out at 3300s and *no* bot voted).
+    With a cutoff, a retry costs only the bots the previous attempt never
+    reached, so several cheap attempts converge on full turnout instead of one
+    long attempt gambling the entire pass on finishing in a single window.
+    """
     tickers, prices = _universe_with_prices()
     now = int(time.time())
     sid = session["id"]
-    voted, failed, abstained = 0, 0, 0
+    voted, failed, abstained, already = 0, 0, 0, 0
     details: list[dict] = []
+    done: set[int] = set()
+    if skip_voted_since:
+        with db() as conn:
+            done = {
+                r["member_id"]
+                for r in conn.execute(
+                    "SELECT member_id, MAX(created_at) AS last FROM votes "
+                    "WHERE session_id=? GROUP BY member_id HAVING last>=?",
+                    (sid, int(skip_voted_since)),
+                ).fetchall()
+            }
     for b in bot_members():
         strat = _BY_SLUG.get(b["bot_slug"])
         if not strat:
+            continue
+        if b["id"] in done:
+            already += 1
+            details.append({"bot": b["display_name"], "status": "already_voted"})
             continue
         try:
             decision = ollama.decide(strat, tickers, prices)
@@ -166,9 +190,9 @@ def cast_votes(session: dict) -> dict:
         details.append({"bot": b["display_name"], "status": "voted",
                         "picks": symbols, "thesis": decision["thesis"]})
     audit("system", "bot_votes", session["trade_date"],
-          {"voted": voted, "failed": failed, "abstained": abstained})
+          {"voted": voted, "failed": failed, "abstained": abstained, "already": already})
     return {"trade_date": session["trade_date"], "voted": voted, "failed": failed,
-            "abstained": abstained, "details": details}
+            "abstained": abstained, "already": already, "details": details}
 
 
 # ─── weekly accuracy → voting power ──────────────────────────────────────────

@@ -12,15 +12,13 @@ Nice=10
 CPUWeight=30
 IOWeight=30
 ExecStart=/opt/concord/backend/.venv/bin/python jobs/bot_vote.py
-# The bots start at 07:30 ET and the ballot closes at 08:30 — a 60-minute
-# window, so 1800s was killing the run at the HALFWAY point. It showed up as
-# wildly uneven turnout: 20 bots voted on 07-14, but only 5 on 07-10 and 2 on
-# 07-28, because systemd terminated the job mid-loop and whichever bots had not
-# been reached simply never voted. Since the basket is decided by whoever voted,
-# a timeout was silently changing what the club bought.
-# 3300s runs the full useful window; votes cast after the close would not count
-# anyway, so the ballot itself is the real bound.
-TimeoutStartSec=3300
+# Each attempt must END before the next one starts, so a wedged run is killed
+# and retried rather than squatting the whole pass. Monday's attempts are the
+# tightest (05:30 / 07:00 / 08:20 ET, ballot closes 09:15), so 3000s < the 80min
+# minimum gap. Being killed mid-loop is no longer destructive: bots that already
+# voted today are skipped on the retry, so attempts accumulate turnout instead
+# of restarting from zero (the 2026-08-24 failure mode).
+TimeoutStartSec=3000
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
