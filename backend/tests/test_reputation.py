@@ -6,6 +6,7 @@ earning weight through accuracy only.
 
 Run from backend/:  python -m pytest tests/test_reputation.py -q
 """
+import dataclasses
 import datetime
 import os
 import tempfile
@@ -90,7 +91,10 @@ def _acc(mid):
 # ── accuracy scoring ─────────────────────────────────────────────────────────
 
 def test_capture_and_score_accuracy(monkeypatch):
-    """AAPL +10%, benchmark +5% → vote-weighted excess +5% → EWMA(0.25) accuracy 0.0125."""
+    """AAPL +10%, benchmark +5% → vote-weighted excess +5% → two-timescale EWMA:
+    short (H=13) and long (H=260) components each update from a 0 baseline, then
+    blend 60/40. accuracy_long barely moves (long half-life) while accuracy_short
+    carries most of the signal — this is the "recent form vs. career record" split."""
     mid = _member("rep-score@x.com")
     s1 = voting.open_session_for(datetime.date(2027, 5, 4))
     voting.set_member_picks(s1["id"], mid, ["AAPL"])
@@ -105,9 +109,15 @@ def test_capture_and_score_accuracy(monkeypatch):
     scored = reputation.score_matured_cycles()
 
     assert len(scored) == 1 and scored[0]["scored_session"] == s1["id"]
-    acc, cycles = _acc(mid)
-    assert acc == pytest.approx(0.0125, abs=1e-4)     # 0.25 * 0.05
-    assert cycles == 1
+    with db() as conn:
+        row = conn.execute(
+            "SELECT accuracy, accuracy_short, accuracy_long, cycles_participated "
+            "FROM member_settings WHERE member_id=?", (mid,)
+        ).fetchone()
+    assert row["accuracy_short"] == pytest.approx(0.0025961, abs=1e-6)
+    assert row["accuracy_long"] == pytest.approx(0.0001331, abs=1e-6)
+    assert row["accuracy"] == pytest.approx(0.0016109, abs=1e-6)   # 0.6*short + 0.4*long
+    assert row["cycles_participated"] == 1
     # s2 has no later cycle yet → not matured → not double-scored
     assert reputation.score_matured_cycles() == []
     assert _acc(mid)[1] == 1
@@ -127,6 +137,59 @@ def test_score_is_paper_basis_excess_vs_benchmark(monkeypatch):
     reputation.score_matured_cycles()
 
     assert _acc(mid)[0] == pytest.approx(0.0, abs=1e-6)   # matched benchmark → no excess
+
+
+# ── two-timescale recency (equation 1 refinement) ────────────────────────────
+
+def test_half_life_alpha_property():
+    """alpha solves (1-alpha)**H == 0.5 exactly, for both configured half-lives."""
+    from app.config import settings
+    a_short = reputation._half_life_alpha(settings.accuracy_short_half_life_cycles)
+    a_long = reputation._half_life_alpha(settings.accuracy_long_half_life_cycles)
+    assert (1 - a_short) ** settings.accuracy_short_half_life_cycles == pytest.approx(0.5, abs=1e-9)
+    assert (1 - a_long) ** settings.accuracy_long_half_life_cycles == pytest.approx(0.5, abs=1e-9)
+    assert a_long < a_short   # the long component moves far slower per cycle
+
+
+def test_long_component_preserves_old_signal_short_forgets_it():
+    """Compare a pulse that landed 260 cycles ago (= the long half-life, "5 years"
+    at a weekly cadence) against an equally-strong pulse landing THIS cycle: in
+    accuracy_long the old pulse still carries ~50% as much weight as a fresh one
+    (exactly one half-life of decay). In accuracy_short (13-cycle half-life) the
+    same 260-cycle-old pulse has decayed to statistical noise (~20 half-lives).
+    This relative-weight property — not the absolute EWMA value — is what makes
+    'recent matters more, but a 5-year-old result still counts' true at once; a
+    single EWMA's decay is one fixed exponential and can't do both."""
+    from app.config import settings
+    a_short = reputation._half_life_alpha(settings.accuracy_short_half_life_cycles)
+    a_long = reputation._half_life_alpha(settings.accuracy_long_half_life_cycles)
+
+    def _decayed(alpha: float, cycles_ago: int) -> float:
+        contribution = alpha * 0.10   # the pulse's initial EWMA contribution
+        return contribution * (1 - alpha) ** cycles_ago
+
+    long_old, long_now = _decayed(a_long, 260), _decayed(a_long, 0)
+    short_old, short_now = _decayed(a_short, 260), _decayed(a_short, 0)
+    assert long_old / long_now == pytest.approx(0.5, rel=1e-6)     # exactly one long half-life
+    assert short_old / short_now < 1e-5                            # ~20 short half-lives — negligible
+
+
+# ── organic capital dampening (equation 1 refinement) ────────────────────────
+
+def test_capital_gamma_dampens_whale_influence(monkeypatch):
+    """4x the stake should buy ~2x the power at gamma=0.5 (sqrt), not 4x — the
+    'organic, gets harder to get more' curve, with no hard cap or cliff."""
+    from app.config import settings
+    dampened = dataclasses.replace(settings, capital_gamma_bps=5000)   # gamma=0.5
+    monkeypatch.setattr(reputation, "settings", dampened)
+    whale = _member("whale@x.com", alloc_value=400.0)
+    minnow = _member("minnow@x.com", alloc_value=100.0)
+    _mock_balance(monkeypatch, {whale: {"total_value": 10000, "buying_power": 10000},
+                                minnow: {"total_value": 10000, "buying_power": 10000}})
+    snaps = {s["member_id"]: s for s in reputation.snapshot_power_all()}
+    # cap_share ratio = sqrt(400):sqrt(100) = 20:10 = 2:1, not the raw 4:1 stake ratio.
+    # rel=1e-3 (not exact) because production rounds power to cents.
+    assert snaps[whale]["power"] / snaps[minnow]["power"] == pytest.approx(2.0, rel=1e-3)
 
 
 # ── blended snapshot ─────────────────────────────────────────────────────────

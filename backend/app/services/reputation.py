@@ -1,16 +1,31 @@
 """Reputation & blended voting power — the ETHGlobal Concordia 50/50 formula.
 
     VP(i) = CAPITAL · CapitalShare(i) + ACCURACY · [ AccuracyShare(i) · confidence(i) ]
-      CapitalShare(i)  = capital(i) / Σ capital            # committed stake $ (bots have none → 0)
-      AccuracyShare(i) = max(acc(i),0) / Σ max(acc(j),0)   # negatives floored to 0
+      CapitalShare(i)  = capital(i)**gamma / Σ capital(j)**gamma   # gamma<1 dampens whales
+      AccuracyShare(i) = max(acc(i),0) / Σ max(acc(j),0)           # negatives floored to 0
       confidence(i)    = min(cycles(i) / CONFIDENCE_CYCLES, 1)
-      acc(i)           = EWMA(α) of the vote-weighted excess return vs the benchmark
+      acc(i)           = w_short·EWMA(α_short) + w_long·EWMA(α_long) of the
+                          vote-weighted excess return vs the benchmark
 
 Money AND merit, 50/50 by default. Accuracy is scored one cycle after each vote
 from prices captured at close (paper basis — you're credited for what you BACKED,
 even picks that lost the vote). The snapshot is peer-relative then rescaled to the
-$ capital pool, so with no accuracy history yet the blend reduces to pure stake
-(cold-start == legacy) and accuracy phases in over CONFIDENCE_CYCLES.
+$ capital pool.
+
+`gamma` (config.capital_gamma_bps, default 1.0 = linear = today's behaviour) lets
+capital weighting be dialed toward sqrt-style diminishing returns — 4x the stake
+buys 2x the power at gamma=0.5 — without a hard cap or cliff.
+
+`acc(i)` blends TWO EWMAs, not one (config.accuracy_{short,long}_half_life_cycles,
+config.accuracy_{short,long}_weight_bps): a single EWMA can't simultaneously make
+recent form dominant AND keep a multi-year track record meaningful, since its
+decay is one fixed exponential — shortening the half-life to chase recency also
+erases old cycles almost entirely. Two components (short ~ current form, long ~
+career record) give both: a hot/cold streak moves the score fast via the short
+half-life, while a 5-year-old result still contributes visibly via the long one
+instead of decaying to ~0. Cold start (no accuracy, default gamma) still reduces
+to pure linear stake — the switch from POWER_MODEL=stake to blend stays a no-op
+until an operator dials capital_gamma_bps below 10000.
 
 Enabled by POWER_MODEL=blend; dormant (prices still captured) otherwise. See the
 hackathon repo cx18121/concordia — DESIGN.md §3, Governance.sol, scoring.ts.
@@ -68,8 +83,25 @@ def _prices_for(session_id: int) -> dict[str, float]:
 
 # ── accuracy scoring (a cycle after the vote) ────────────────────────────────
 
-def _alpha() -> float:
-    return settings.ewma_alpha_bps / 1e4
+def _half_life_alpha(half_life_cycles: int) -> float:
+    """EWMA smoothing constant that halves a single cycle's weight after
+    `half_life_cycles` further cycles: alpha solves (1-alpha)**H = 0.5."""
+    h = max(1, half_life_cycles)
+    return 1.0 - 2.0 ** (-1.0 / h)
+
+
+def _alpha_short() -> float:
+    return _half_life_alpha(settings.accuracy_short_half_life_cycles)
+
+
+def _alpha_long() -> float:
+    return _half_life_alpha(settings.accuracy_long_half_life_cycles)
+
+
+def _blend_accuracy(short: float, long: float) -> float:
+    w_short = settings.accuracy_short_weight_bps / 1e4
+    w_long = settings.accuracy_long_weight_bps / 1e4
+    return w_short * short + w_long * long
 
 
 def score_cycle(scored_session_id: int, exit_prices: dict[str, float]) -> dict:
@@ -92,7 +124,7 @@ def score_cycle(scored_session_id: int, exit_prices: dict[str, float]) -> dict:
     by_member: dict[int, list[tuple[str, float]]] = {}
     for r in rows:
         by_member.setdefault(r["member_id"], []).append((r["symbol"].upper(), r["weight"] or 0.0))
-    a = _alpha()
+    a_short, a_long = _alpha_short(), _alpha_long()
     scored = []
     for mid, picks in by_member.items():
         this = 0.0
@@ -110,14 +142,21 @@ def score_cycle(scored_session_id: int, exit_prices: dict[str, float]) -> dict:
             scored.append({"member_id": mid, "picks_scored": 0, "skipped": "no_measurable_picks"})
             continue
         with db() as conn:
-            row = conn.execute("SELECT accuracy FROM member_settings WHERE member_id=?", (mid,)).fetchone()
-            old = float(row["accuracy"]) if row and row["accuracy"] is not None else 0.0
-            new = a * this + (1 - a) * old
+            row = conn.execute(
+                "SELECT accuracy_short, accuracy_long FROM member_settings WHERE member_id=?", (mid,)
+            ).fetchone()
+            old_short = float(row["accuracy_short"]) if row and row["accuracy_short"] is not None else 0.0
+            old_long = float(row["accuracy_long"]) if row and row["accuracy_long"] is not None else 0.0
+            new_short = a_short * this + (1 - a_short) * old_short
+            new_long = a_long * this + (1 - a_long) * old_long
+            new = _blend_accuracy(new_short, new_long)
             conn.execute(
-                "UPDATE member_settings SET accuracy=?, cycles_participated=cycles_participated+1, updated_at=? "
-                "WHERE member_id=?", (new, int(time.time()), mid))
+                "UPDATE member_settings SET accuracy=?, accuracy_short=?, accuracy_long=?, "
+                "cycles_participated=cycles_participated+1, updated_at=? WHERE member_id=?",
+                (new, new_short, new_long, int(time.time()), mid))
         scored.append({"member_id": mid, "cycle_excess_pct": round(this * 100, 3),
-                       "accuracy": round(new, 5), "picks_scored": used})
+                       "accuracy": round(new, 5), "accuracy_short": round(new_short, 5),
+                       "accuracy_long": round(new_long, 5), "picks_scored": used})
     return {"scored_session": scored_session_id, "scored": True,
             "benchmark_return_pct": round(sp_ret * 100, 3), "members": scored}
 
@@ -210,16 +249,24 @@ def snapshot_power_all() -> list[dict]:
     skipped = [m["member_id"] for m in members if not inputs[m["member_id"]][2]]
     caps = {m["member_id"]: max(0.0, inputs[m["member_id"]][0]) for m in active}
     eqs = {m["member_id"]: inputs[m["member_id"]][1] for m in active}   # real account value for history/graph
-    total_cap = sum(caps.values())
+    total_cap = sum(caps.values())   # the $ pool VP rescales to — stays LINEAR regardless of gamma
     total_pos_acc = sum(max(0.0, float(m["accuracy"])) for m in active)
     cap_w = settings.capital_bps / 1e4
     acc_w = settings.accuracy_bps / 1e4
     conf_n = max(1, settings.confidence_cycles)
 
+    # Capital SHARE (the ratio, not the rescale target) is built on capital**gamma.
+    # gamma=1.0 (default) is exactly the old linear ratio — a no-op. gamma<1 makes
+    # each additional dollar buy a shrinking increment of share: doubling your
+    # stake never quite doubles your slice of the vote.
+    gamma = settings.capital_gamma_bps / 1e4
+    cap_weight = {mid: (caps[mid] ** gamma if caps[mid] > 0 else 0.0) for mid in caps}
+    total_cap_weight = sum(cap_weight.values())
+
     raw: dict[int, float] = {}
     for m in active:
         mid = m["member_id"]
-        cap_share = (caps[mid] / total_cap) if total_cap > 0 else 0.0
+        cap_share = (cap_weight[mid] / total_cap_weight) if total_cap_weight > 0 else 0.0
         acc_share = (max(0.0, float(m["accuracy"])) / total_pos_acc) if total_pos_acc > 0 else 0.0
         conf = min(float(m["cycles_participated"]) / conf_n, 1.0)
         raw[mid] = cap_w * cap_share + acc_w * acc_share * conf
