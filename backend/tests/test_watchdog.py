@@ -197,11 +197,22 @@ def test_w3_quorum_risk(monkeypatch):
     finds = watchdog._check_quorum_risk()
     assert finds and finds[0]["key"] == f"quorum-risk:{sid}"
     assert finds[0]["severity"] == "warn" and "0" in finds[0]["message"]
-    # a human vote clears it
+    # A human vote clears the HUMAN half — but one voter is still below the
+    # total floor, and that remaining warning is exactly the 2026-08-24 signal:
+    # the bots were dead and the club was 18h from trading on a single voice.
     mid = _member("wd-quorum@wd.test")
     with db() as conn:
         conn.execute("INSERT INTO votes(session_id,member_id,symbol,weight,created_at) "
                      "VALUES(?,?,?,100,?)", (sid, mid, "AAPL", int(time.time())))
+    finds = watchdog._check_quorum_risk()
+    assert [f["key"] for f in finds] == [f"thin-quorum:{sid}"]
+    assert f"below the {settings.min_total_voters}" in finds[0]["message"]
+    # Enough voters clears it entirely.
+    with db() as conn:
+        for i in range(settings.min_total_voters - 1):
+            other = _member(f"wd-quorum-{i}@wd.test")
+            conn.execute("INSERT INTO votes(session_id,member_id,symbol,weight,created_at) "
+                         "VALUES(?,?,?,100,?)", (sid, other, "AAPL", int(time.time())))
     assert watchdog._check_quorum_risk() == []
     # a ballot closing far out is not yet a risk
     sess["closes_at"] = int(now.timestamp()) + 30 * 3600

@@ -12,6 +12,13 @@ G2 — a near-empty ballot (one human voting one stock) must never become a live
      to review-only (dry-runs still simulate), and adminview.will_place_state
      mirrors the reason so the console explains it before 10:15.
 
+G4 — the 2026-08-24 incident: the bot pass timed out, all 20 bot voters
+     vanished, and the executor placed ~$1,037 of real orders on a basket ONE
+     member had chosen. min_human_voters could not catch it (1 human IS normal
+     turnout here), so a total-voter floor now downgrades a collapsed tally to
+     review-only, every tripped floor is reported rather than just the first,
+     and watchdog W3 warns 18h before the close instead of after the fact.
+
 Run from backend/:  python -m pytest tests/test_autopilot_guards.py -q
 """
 import datetime
@@ -310,6 +317,9 @@ def test_basket_at_exactly_the_floor_places(monkeypatch):
     client = FakeClient(quotes={"AAPL": 100.0, "MSFT": 200.0})
     monkeypatch.setattr(vault, "ensure_client", lambda m: client)
     object.__setattr__(settings, "execution_mode", "live")
+    # Not a quorum test: these fixtures vote with ONE member, which is below
+    # MIN_TOTAL_VOTERS. conftest restores the singleton after the test.
+    object.__setattr__(settings, "min_total_voters", 1)
     object.__setattr__(settings, "min_basket_size", 2)   # conftest restores
     set_armed(True)
     try:
@@ -347,3 +357,104 @@ def test_adminview_never_judges_an_open_ballot(monkeypatch):
     monkeypatch.setattr(voting, "human_voter_count", lambda sid: 1)
     st = adminview.will_place_state()
     assert not any("basket too thin" in r for r in st["reasons"])
+
+
+# ─── G4: total-voter floor (the 2026-08-24 incident) ─────────────────────────
+
+def _closed_session_n(trade_date: datetime.date, n_voters: int, picks: list[str],
+                      tag: str) -> dict:
+    """A closed session decided by `n_voters` distinct members."""
+    s = voting.open_session_for(trade_date)
+    for i in range(n_voters):
+        voting.set_member_picks(s["id"], _member(f"{tag}-{i}@ag.test"), picks)
+    return voting.close_and_select(s["id"])
+
+
+def test_collapsed_tally_live_downgrades_to_review_only(monkeypatch):
+    """The 08-24 regression, reproduced: the bot pass died, every bot voter
+    vanished, and ONE member's picks became a live basket. The human floor let
+    it through (1 human IS normal turnout here) and ~$1,037 of real orders
+    placed. A single-voter tally must now review, never place."""
+    closed = _closed_session_n(datetime.date(2028, 4, 3), 1,
+                               ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN"], "collapse")
+    client = FakeClient(quotes={s: 100.0 for s in ("AAPL", "MSFT", "NVDA", "TSLA", "AMZN")})
+    monkeypatch.setattr(vault, "ensure_client", lambda m: client)
+    object.__setattr__(settings, "execution_mode", "live")
+    # Isolate the quorum guard: this module runs TOP_N=3, so the basket would
+    # also trip the thin-basket floor and we could not tell which one fired.
+    object.__setattr__(settings, "min_basket_size", 2)
+    set_armed(True)
+    try:
+        summary = executor.run(closed, force_dry_run=False)
+    finally:
+        set_armed(False)
+
+    assert summary["will_place"] is False
+    assert summary.get("thin_quorum") is True
+    assert f"below the {settings.min_total_voters}" in summary["note"]
+    assert not [c for c in client.calls if c[0].startswith("place_")], \
+        "a collapsed tally must never place a real order"
+    # The basket itself was fine (5 picks) — only the quorum was not.
+    assert summary.get("thin_basket") is None
+
+
+def test_voters_at_exactly_the_floor_place(monkeypatch):
+    """Boundary: N == MIN_TOTAL_VOTERS is NOT thin — the gate is strictly below."""
+    object.__setattr__(settings, "min_total_voters", 3)   # conftest restores
+    closed = _closed_session_n(datetime.date(2028, 4, 4), 3, ["AAPL", "MSFT"], "floor")
+    client = FakeClient(quotes={"AAPL": 100.0, "MSFT": 200.0})
+    monkeypatch.setattr(vault, "ensure_client", lambda m: client)
+    object.__setattr__(settings, "execution_mode", "live")
+    object.__setattr__(settings, "min_basket_size", 2)
+    set_armed(True)
+    try:
+        summary = executor.run(closed, force_dry_run=False)
+    finally:
+        set_armed(False)
+    assert summary.get("thin_quorum") is None
+    assert summary["will_place"] is True
+
+
+def test_collapsed_tally_dry_run_still_simulates(monkeypatch):
+    """Dry-runs are unchanged by the floor — planning a cycle still works."""
+    closed = _closed_session_n(datetime.date(2028, 4, 5), 1, ["AAPL", "MSFT"], "cdry")
+    client = FakeClient(quotes={"AAPL": 100.0, "MSFT": 200.0})
+    monkeypatch.setattr(vault, "ensure_client", lambda m: client)
+    summary = executor.run(closed, force_dry_run=True)
+    assert summary.get("thin_quorum") is None
+    buys = [o for o in summary["orders"] if o["side"] == "buy"]
+    assert buys and all(o["status"] == "reviewed" for o in buys)
+
+
+def test_every_tripped_floor_is_reported_not_just_the_first(monkeypatch):
+    """Guards are judged independently: a run that is BOTH under-quorum and
+    thin-basket says both, so the operator sees everything blocking the re-arm
+    instead of fixing one and rediscovering the next."""
+    closed = _closed_session_n(datetime.date(2028, 4, 6), 1, ["AAPL", "MSFT"], "both")
+    client = FakeClient(quotes={"AAPL": 100.0, "MSFT": 200.0})
+    monkeypatch.setattr(vault, "ensure_client", lambda m: client)
+    object.__setattr__(settings, "execution_mode", "live")
+    set_armed(True)
+    try:
+        summary = executor.run(closed, force_dry_run=False)
+    finally:
+        set_armed(False)
+    assert summary.get("thin_quorum") is True and summary.get("thin_basket") is True
+    assert "voter(s)" in summary["note"] and "basket too thin" in summary["note"]
+
+
+def test_adminview_mirrors_the_thin_quorum_reason(monkeypatch):
+    """The console must explain the same gate the executor enforces, so the
+    operator learns it BEFORE 10:15 rather than from an empty cycle."""
+    closed = _closed_session_n(datetime.date(2028, 4, 7), 1, ["AAPL", "MSFT"], "cadmin")
+    monkeypatch.setattr(voting, "latest_session",
+                        lambda status=None: closed if status == "closed" else None)
+    monkeypatch.setattr(adminview, "_current_open_session", lambda: None)
+    object.__setattr__(settings, "execution_mode", "live")
+    set_armed(True)
+    try:
+        state = adminview.will_place_state()
+    finally:
+        set_armed(False)
+    assert any("voter(s)" in r for r in state["reasons"]), state["reasons"]
+    assert state["will_place_next"] is False

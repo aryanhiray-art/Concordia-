@@ -679,6 +679,9 @@ def test_both_day_refreshes_buying_power_after_sells(monkeypatch):
 
     prev_mode = settings.execution_mode
     object.__setattr__(settings, "execution_mode", "live")
+    # Not a quorum test: these fixtures vote with ONE member, which is below
+    # MIN_TOTAL_VOTERS. conftest restores the singleton after the test.
+    object.__setattr__(settings, "min_total_voters", 1)
     # single-name test basket: waive the thin-basket floor (G2) — this test is
     # about buying-power mechanics, not basket breadth (conftest restores)
     object.__setattr__(settings, "min_basket_size", 1)
@@ -764,6 +767,9 @@ def test_both_day_polls_past_slow_proceeds_credit(monkeypatch):
 
     prev_mode = settings.execution_mode
     object.__setattr__(settings, "execution_mode", "live")
+    # Not a quorum test: these fixtures vote with ONE member, which is below
+    # MIN_TOTAL_VOTERS. conftest restores the singleton after the test.
+    object.__setattr__(settings, "min_total_voters", 1)
     # single-name test basket: waive the thin-basket floor (G2) — this test is
     # about buying-power mechanics, not basket breadth (conftest restores)
     object.__setattr__(settings, "min_basket_size", 1)
@@ -800,6 +806,9 @@ def test_both_day_cash_account_keeps_single_quick_look(monkeypatch):
 
     prev_mode = settings.execution_mode
     object.__setattr__(settings, "execution_mode", "live")
+    # Not a quorum test: these fixtures vote with ONE member, which is below
+    # MIN_TOTAL_VOTERS. conftest restores the singleton after the test.
+    object.__setattr__(settings, "min_total_voters", 1)
     # single-name test basket: waive the thin-basket floor (G2) — this test is
     # about buying-power mechanics, not basket breadth (conftest restores)
     object.__setattr__(settings, "min_basket_size", 1)
@@ -960,6 +969,9 @@ def test_sub_minimum_topup_resizes_by_selling_and_rebuying(monkeypatch):
 
     prev = settings.execution_mode
     object.__setattr__(settings, "execution_mode", "live")
+    # Not a quorum test: these fixtures vote with ONE member, which is below
+    # MIN_TOTAL_VOTERS. conftest restores the singleton after the test.
+    object.__setattr__(settings, "min_total_voters", 1)
     object.__setattr__(settings, "min_basket_size", 1)
     set_armed(True)
     try:
