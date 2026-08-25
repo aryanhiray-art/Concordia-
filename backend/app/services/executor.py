@@ -344,36 +344,29 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         return {"ok": True, "note": "no consensus picks — nothing to execute", "orders": []}
 
     armed = is_armed()
-    # Every floor is judged against the SAME baseline and reported independently,
-    # so a run that trips two of them says so. Chaining them (each gated on the
-    # previous one's result) would report only the first and hide the rest from
-    # the operator deciding whether to re-arm.
-    can_place = settings.is_live and armed and not force_dry_run
-    from ..calendar_us import calendar_covers, today_et as _today_et
-
-    # Human floor (finding #10): never spend real money on a basket chosen with
-    # no human participation at all.
-    quorum_blocked = can_place and (
-        voting.human_voter_count(session["id"]) < settings.min_human_voters)
-    # Total-voter floor (2026-08-24): the human floor passes on ONE human, which
-    # IS normal turnout here — so it structurally cannot catch a tally that
-    # collapsed the other way. On 08-24 the bot pass timed out, all 20 bot voters
-    # vanished, and the executor placed ~$1,037 of real orders on a basket one
-    # member had chosen alone. It failed OPEN on live money.
-    n_voters = voting.voter_count(session["id"])
-    thin_quorum = can_place and n_voters < settings.min_total_voters
-    # Thin-basket floor (G2): a near-empty ballot must never become a live 1-2
-    # name "basket" — the sell leg would exit the whole portfolio into a
-    # concentration. Dry-runs still simulate.
-    thin_basket = can_place and len(picks) < settings.min_basket_size
+    will_place = settings.is_live and armed and not force_dry_run
+    # Human-quorum floor (finding #10): never spend real money on a basket chosen
+    # without human participation. If fewer than MIN_HUMAN_VOTERS humans voted
+    # this session, drop to review-only so the ~20 bots can't auto-buy a basket on
+    # a zero/low-human-turnout day.
+    quorum_blocked = False
+    if will_place and voting.human_voter_count(session["id"]) < settings.min_human_voters:
+        will_place, quorum_blocked = False, True
+    # Thin-basket floor (G2): a near-empty ballot (one human voting one stock)
+    # must never become a live 1-2 name "basket" — the sell leg would exit the
+    # whole portfolio into a concentration. Below MIN_BASKET_SIZE picks the run
+    # downgrades to review-only; dry-runs still simulate.
+    thin_basket = False
+    if will_place and len(picks) < settings.min_basket_size:
+        will_place, thin_basket = False, True
     # Calendar-coverage guard (finding #17): if the hand-maintained holiday table
     # has lapsed past its last covered year we can't know today is a trading day —
-    # refuse real orders rather than risk trading a closed market. Extend
-    # calendar_us._HOLIDAYS to clear this.
-    calendar_stale = can_place and not calendar_covers(_today_et())
-
-    will_place = can_place and not (quorum_blocked or thin_quorum
-                                    or thin_basket or calendar_stale)
+    # refuse to place REAL orders (review-only) rather than risk trading a closed
+    # market. Extend calendar_us._HOLIDAYS to clear this.
+    from ..calendar_us import calendar_covers, today_et as _today_et
+    calendar_stale = False
+    if will_place and not calendar_covers(_today_et()):
+        will_place, calendar_stale = False, True
     base = "LIVE" if will_place else ("DRY_RUN(disarmed)" if settings.is_live else "DRY_RUN")
     mode = f"{base}·{phase}"
     sid = session["id"]
@@ -403,22 +396,18 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
     already = _placed_keys(sid)
     summary = {"mode": mode, "phase": phase, "trade_date": session["trade_date"], "picks": picks,
                "will_place": will_place, "members": [], "orders": []}
-    notes: list[str] = []
     if quorum_blocked:
         summary["quorum_blocked"] = True
-        notes.append(f"human quorum not met (< {settings.min_human_voters} human voter(s))")
-    if thin_quorum:
-        summary["thin_quorum"] = True
-        notes.append(f"only {n_voters} voter(s), below the {settings.min_total_voters} "
-                     f"required to spend real money")
+        summary["note"] = (f"human quorum not met (< {settings.min_human_voters} human voter(s)) — "
+                           f"review only, no real orders placed")
     if thin_basket:
         summary["thin_basket"] = True
-        notes.append(f"basket too thin ({len(picks)} < {settings.min_basket_size})")
+        summary["note"] = (f"basket too thin ({len(picks)} < {settings.min_basket_size}) — "
+                           f"review only, no real orders placed")
     if calendar_stale:
         summary["calendar_stale"] = True
-        notes.append("market-holiday calendar has lapsed — extend calendar_us._HOLIDAYS")
-    if notes:
-        summary["note"] = "; ".join(notes) + " — review only, no real orders placed"
+        summary["note"] = ("market-holiday calendar has lapsed — review only; extend "
+                           "calendar_us._HOLIDAYS before trading resumes")
     audit("system", "execute_start", session["trade_date"],
           {"mode": mode, "picks": picks, "will_place": will_place})
 

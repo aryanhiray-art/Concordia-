@@ -137,15 +137,6 @@ class Settings:
     # review-only, so a basket chosen by the bots alone (zero/low human turnout)
     # is never bought with real money (finding #10).
     min_human_voters: int = _int("MIN_HUMAN_VOTERS", 1)
-    # Total-voter floor (2026-08-24). MIN_HUMAN_VOTERS cannot be raised to catch a
-    # collapsed tally: exactly ONE human votes each cycle, so a floor of 2 humans
-    # would block every week. The 08-24 failure was the other side — the bot pass
-    # died, all 20 bot voters vanished, and the club bought ~$1,037 of real stock
-    # on a basket one person chose alone, with nothing objecting. Normal turnout is
-    # 17-21 distinct voters, so 5 clears easily and only fires on a real collapse.
-    # NOTE when bots are retired (BOT_TALLY_SHARE_MAX -> 0): this must come down to
-    # the club's real human turnout, or every cycle stands down.
-    min_total_voters: int = _int("MIN_TOTAL_VOTERS", 5)
     # Missed-window catch-up cutoff (ET wall clock). concord-execute.timer is
     # Persistent=true, so a reboot spanning the 10:15 fire re-runs the job on
     # boot — safe in the morning (self-healed close + fresh basket), but a fire

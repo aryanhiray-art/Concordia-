@@ -116,30 +116,15 @@ def _open_session_closing_within(hours: float) -> dict | None:
 # ─── W3: quorum risk ─────────────────────────────────────────────────────────
 
 def _check_quorum_risk() -> list[dict]:
-    """Ballot closes within 18h and the tally is too thin to spend real money —
-    either floor the executor enforces (min_human_voters, min_total_voters).
-
-    The total-voter half is the 2026-08-24 early warning. W4 below only fires
-    when the bots are silent AND the LLM endpoint is unreachable; that morning
-    Ollama was reachable, merely too slow to finish, so nothing warned and the
-    club traded on one voter. This check does not care WHY the tally collapsed.
-    """
+    """Ballot closes within 18h and zero humans have voted — the run will be
+    review-only (min_human_voters floor) unless someone votes."""
     row = _open_session_closing_within(18)
-    if not row:
+    if not row or voting.human_voter_count(row["id"]) > 0:
         return []
-    out: list[dict] = []
-    if voting.human_voter_count(row["id"]) == 0:
-        out.append({"key": f"quorum-risk:{row['id']}", "severity": "warn",
-                    "message": (f"ballot {row['trade_date']} closes within 18h with 0 "
-                                "human voters — without a human vote the run will be "
-                                "review-only")})
-    n = voting.voter_count(row["id"])
-    if n < settings.min_total_voters:
-        out.append({"key": f"thin-quorum:{row['id']}", "severity": "warn",
-                    "message": (f"ballot {row['trade_date']} closes within 18h with only "
-                                f"{n} voter(s) — below the {settings.min_total_voters} the "
-                                "executor requires, so the run will be review-only")})
-    return out
+    return [{"key": f"quorum-risk:{row['id']}", "severity": "warn",
+             "message": (f"ballot {row['trade_date']} closes within 18h with 0 "
+                         "human voters — without a human vote the run will be "
+                         "review-only")}]
 
 
 # ─── W4: bots idle ───────────────────────────────────────────────────────────

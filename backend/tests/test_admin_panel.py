@@ -172,9 +172,6 @@ def test_will_place_goes_true_when_every_gate_clears():
             "INSERT INTO votes(session_id,member_id,symbol,weight,created_at) "
             "VALUES(?,?,?,?,?)", (sid, mid, "AAPL", 100, now))
     object.__setattr__(settings, "execution_mode", "live")
-    # Not a quorum test: these fixtures vote with ONE member, which is below
-    # MIN_TOTAL_VOTERS. conftest restores the singleton after the test.
-    object.__setattr__(settings, "min_total_voters", 1)
     set_armed(True, actor="test")
     try:
         p = _panel(tok)

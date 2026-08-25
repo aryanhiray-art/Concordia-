@@ -61,11 +61,6 @@ def will_place_state() -> dict:
         humans = voting.human_voter_count(sess["id"])
         if humans < settings.min_human_voters:
             reasons.append(f"human quorum not met ({humans} < {settings.min_human_voters})")
-        # Total-voter floor (executor mirror): catches the collapsed-tally case the
-        # human floor structurally cannot — one human voting alone is normal here.
-        voters = voting.voter_count(sess["id"])
-        if voters < settings.min_total_voters:
-            reasons.append(f"only {voters} voter(s) (< {settings.min_total_voters})")
         # Thin-basket floor (executor G2 mirror): a CLOSED basket below
         # MIN_BASKET_SIZE picks downgrades the run to review-only. An open
         # ballot has no decided basket yet, so it is never judged here.

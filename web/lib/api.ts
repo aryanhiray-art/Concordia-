@@ -278,8 +278,7 @@ export type AdminRunMember = {
 export type AdminRunSummary = {
   mode?: string; phase?: string; trade_date?: string; picks?: string[];
   will_place?: boolean; note?: string | null;
-  quorum_blocked?: boolean; thin_quorum?: boolean; thin_basket?: boolean;
-  calendar_stale?: boolean; halted?: boolean;
+  quorum_blocked?: boolean; calendar_stale?: boolean; halted?: boolean;
   executed_deferred?: string; placed_total?: number;
   skipped?: Record<string, number>;
   members?: AdminRunMember[];
