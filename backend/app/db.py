@@ -47,7 +47,9 @@ CREATE TABLE IF NOT EXISTS member_settings (
     voting_power     REAL NOT NULL DEFAULT 0,         -- current weight (blended when POWER_MODEL=blend)
     alloc_type       TEXT NOT NULL DEFAULT 'percent', -- 'percent' | 'dollar'
     alloc_value      REAL NOT NULL DEFAULT 0,         -- pct of buying power, or fixed USD
-    accuracy            REAL NOT NULL DEFAULT 0,      -- EWMA vote-weighted excess return vs benchmark (signed)
+    accuracy            REAL NOT NULL DEFAULT 0,      -- blended (short+long) EWMA excess return vs benchmark (signed)
+    accuracy_short      REAL NOT NULL DEFAULT 0,      -- fast EWMA component ("current form")
+    accuracy_long       REAL NOT NULL DEFAULT 0,      -- slow EWMA component ("career record")
     cycles_participated INTEGER NOT NULL DEFAULT 0,   -- scored cycles → confidence ramp
     updated_at       INTEGER NOT NULL
 );
@@ -421,6 +423,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE member_settings ADD COLUMN accuracy REAL NOT NULL DEFAULT 0")
     if "cycles_participated" not in s:
         conn.execute("ALTER TABLE member_settings ADD COLUMN cycles_participated INTEGER NOT NULL DEFAULT 0")
+    # Two-timescale accuracy (short = current form, long = career record) — see
+    # config.accuracy_short_half_life_cycles / accuracy_long_half_life_cycles.
+    # `accuracy` remains the blended column every downstream reader already uses.
+    if "accuracy_short" not in s:
+        conn.execute("ALTER TABLE member_settings ADD COLUMN accuracy_short REAL NOT NULL DEFAULT 0")
+    if "accuracy_long" not in s:
+        conn.execute("ALTER TABLE member_settings ADD COLUMN accuracy_long REAL NOT NULL DEFAULT 0")
     # Ballot lifecycle emails (open / closing-soon). Default ON: a weekly-cadence
     # club lives or dies on members remembering the ballot exists.
     if "email_reminders" not in s:

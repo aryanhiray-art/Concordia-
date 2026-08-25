@@ -188,7 +188,22 @@ class Settings:
     power_model: str = os.environ.get("POWER_MODEL", "stake").strip().lower()
     capital_bps: int = _int("CAPITAL_BPS", 5000)          # 50% capital weight
     accuracy_bps: int = _int("ACCURACY_BPS", 5000)        # 50% accuracy weight
-    ewma_alpha_bps: int = _int("EWMA_ALPHA_BPS", 2500)    # 0.25 accuracy smoothing
+    # Capital concavity: CapitalShare is built on capital(i)**gamma, not capital(i)
+    # directly. gamma=1.0 (10000 bps) is exactly linear — today's behaviour, so
+    # shipping this is a no-op until an operator dials it down. gamma<1 (e.g. 0.5 =
+    # sqrt, the quadratic-voting curve) gives whale capital diminishing returns —
+    # 4x the stake buys 2x the power, not 4x — organically, with no hard cap/cliff.
+    capital_gamma_bps: int = _int("CAPITAL_GAMMA_BPS", 10000)
+    # Accuracy is a TWO-timescale EWMA blend, not one. A single EWMA can't be both
+    # "recent form matters a lot" and "a good multi-year record still counts" —
+    # its decay is one fixed exponential, so a short half-life (recency-sensitive)
+    # forces old cycles toward zero, while a long half-life (long memory) flattens
+    # recency too. Blending a fast + a slow component gets both at once: short
+    # half-life ~ current form, long half-life ~ career record.
+    accuracy_short_half_life_cycles: int = _int("ACCURACY_SHORT_HALF_LIFE_CYCLES", 13)   # ~1 quarter
+    accuracy_long_half_life_cycles: int = _int("ACCURACY_LONG_HALF_LIFE_CYCLES", 260)    # ~5 years
+    accuracy_short_weight_bps: int = _int("ACCURACY_SHORT_WEIGHT_BPS", 6000)  # 60% current form
+    accuracy_long_weight_bps: int = _int("ACCURACY_LONG_WEIGHT_BPS", 4000)    # 40% career record
     confidence_cycles: int = _int("CONFIDENCE_CYCLES", 12)  # accuracy phase-in length
     benchmark_symbol: str = os.environ.get("BENCHMARK_SYMBOL", "SPY").strip().upper()
     # While bots are test stand-ins for humans they carry a FAKE stake (capital),
