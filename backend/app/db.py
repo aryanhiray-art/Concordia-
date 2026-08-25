@@ -430,6 +430,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE member_settings ADD COLUMN accuracy_short REAL NOT NULL DEFAULT 0")
     if "accuracy_long" not in s:
         conn.execute("ALTER TABLE member_settings ADD COLUMN accuracy_long REAL NOT NULL DEFAULT 0")
+    # SEED both components from the accumulated single-EWMA score. Without this
+    # the next score_cycle blends from 0 — new = a_short*this + 0 — which
+    # collapses every member's hard-won accuracy to a ONE-CYCLE value while
+    # cycles_participated (and therefore confidence) stays maxed, i.e. full
+    # weight on a score that no longer carries any history. Seeding both to
+    # `accuracy` is exactly continuous: w_short*acc + w_long*acc == acc.
+    # The WHERE clause is a precise fingerprint of the un-seeded state — after
+    # any scoring run, accuracy is DERIVED from the two components, so
+    # (accuracy != 0 AND both components 0) is unreachable. Idempotent.
+    conn.execute("UPDATE member_settings SET accuracy_short=accuracy, accuracy_long=accuracy "
+                 "WHERE accuracy != 0 AND accuracy_short = 0 AND accuracy_long = 0")
     # Ballot lifecycle emails (open / closing-soon). Default ON: a weekly-cadence
     # club lives or dies on members remembering the ballot exists.
     if "email_reminders" not in s:

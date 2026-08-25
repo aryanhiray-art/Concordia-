@@ -317,3 +317,28 @@ def test_score_skips_cycle_when_benchmark_missing(monkeypatch):
     acc, cyc = _acc(mid)
     assert scored_at is None                         # not sealed → will retry with real benchmark
     assert acc == pytest.approx(0.05) and cyc == 3   # untouched
+
+
+def test_two_timescale_migration_seeds_from_accumulated_accuracy():
+    """Adding accuracy_short/accuracy_long must SEED them from the existing
+    single-EWMA score. Blending from 0 would collapse every member's history
+    to a one-cycle value on the next scoring run while cycles_participated
+    kept confidence maxed — full weight on a score with no history behind it."""
+    from app.db import _migrate, db, init_db
+    init_db()
+    with db() as conn:
+        conn.execute("INSERT OR IGNORE INTO members(id,email,display_name,role,created_at) "
+                     "VALUES(9411,'seed@rep.test','seed','member',0)")
+        conn.execute("INSERT OR REPLACE INTO member_settings"
+                     "(member_id,opted_in,buying_power_pct,daily_cap_usd,max_orders,"
+                     " voting_power,alloc_type,alloc_value,accuracy,accuracy_short,"
+                     " accuracy_long,cycles_participated,updated_at) "
+                     "VALUES(9411,1,0,0,25,0,'dollar',100,0.0412,0,0,7,0)")
+        _migrate(conn)
+        row = conn.execute("SELECT accuracy, accuracy_short, accuracy_long FROM "
+                           "member_settings WHERE member_id=9411").fetchone()
+    assert row["accuracy_short"] == pytest.approx(0.0412)
+    assert row["accuracy_long"] == pytest.approx(0.0412)
+    # continuity: the blend of the seeded pair reproduces the original score
+    from app.services.reputation import _blend_accuracy
+    assert _blend_accuracy(row["accuracy_short"], row["accuracy_long"]) == pytest.approx(0.0412)
