@@ -169,6 +169,41 @@ class Settings:
     # (instant rollback = flip back, no code deploy).
     club_position_source: str = os.environ.get("CLUB_POSITION_SOURCE", "ledger").strip().lower()
 
+    # ── Reference account (Alpaca) ────────────────────────────────────────────
+    # ONE operator-owned Alpaca account that mirrors the club's decided basket,
+    # so the track record is measured from first-party fills instead of being
+    # reconstructed out of members' commingled Robinhood accounts. Members are
+    # unaffected — they stay on Robinhood and nobody re-onboards.
+    #
+    # Deliberately THREE separate switches, because "the key is present" must
+    # never imply "you may trade":
+    #   alpaca_configured  — a key pair exists (reads work: probe, NAV, history)
+    #   reference_enabled  — the mirror path may run at all (still plans only)
+    #   reference_armed    — and only THEN may it place a real order
+    # Both of the latter default OFF, so deploying this code cannot place an
+    # order. Arming is a human action taken on the box, never a deploy's.
+    alpaca_key_id: str = os.environ.get("ALPACA_KEY_ID", "").strip()
+    alpaca_secret: str = os.environ.get("ALPACA_SECRET_KEY", "").strip()
+    alpaca_paper: bool = _bool("ALPACA_PAPER", True)      # paper until told otherwise
+    reference_enabled: bool = _bool("REFERENCE_ENABLED", False)
+    reference_armed: bool = _bool("REFERENCE_ARMED", False)
+    # Dollars deployed per cycle across the basket. The reference account is a
+    # CASH account by design: with margin it would never defer a buy on T+1 and
+    # would systematically beat members who do, making the published number
+    # unachievable rather than merely good.
+    reference_budget_usd: float = _float("REFERENCE_BUDGET_USD", 0.0)
+
+    @property
+    def alpaca_configured(self) -> bool:
+        return bool(self.alpaca_key_id and self.alpaca_secret)
+
+    @property
+    def reference_will_place(self) -> bool:
+        """Every gate that must be true before a real reference order is sent."""
+        return bool(self.alpaca_configured and self.reference_enabled
+                    and self.reference_armed and self.reference_budget_usd > 0
+                    and not self.demo_mode and not self.is_beta)
+
     # ── Voting-power model (the ETHGlobal Concordia 50/50 formula) ──
     # 'stake'  = voting power is committed stake only (legacy).
     # 'blend'  = VP = capital_share·CAPITAL + (accuracy_share·confidence)·ACCURACY,

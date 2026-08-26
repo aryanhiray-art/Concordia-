@@ -1,0 +1,11 @@
+[Unit]
+Description=Concord — reference-account snapshot nightly (23:40 ET, after the close)
+
+[Timer]
+# Ten minutes before the metrics job so the reference series is already current
+# when the day's numbers are rolled up.
+OnCalendar=*-*-* 23:40 America/New_York
+Persistent=true
+
+[Install]
+WantedBy=timers.target
