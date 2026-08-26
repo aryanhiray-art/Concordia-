@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from ..services import clubmirror, clubnav, performance
+from ..services import clubmirror, performance
 from ..services import voting as voting_svc
 from .deps import require_member
 
@@ -26,17 +26,27 @@ def club_performance(force: bool = False, member: dict = Depends(require_member)
     mirrored = clubmirror.performance()
     if mirrored is not None:
         return mirrored
-    # The REAL-money record (services/clubnav), read from the kept ledger.
-    # The old paper decisions-index is retained in services/performance for
-    # comparison but is no longer what the club claims as its track record.
-    if force and member.get("role") == "owner":
-        clubnav.refresh()
-    served = clubnav.series()
-    if served["points"]:
-        return served
-    # Ledger not built yet (fresh deploy) — build it once, then serve.
-    clubnav.refresh()
-    return clubnav.series()
+    # The DECISIONS index (services/performance): what the club's chosen basket
+    # returned equal-weight vs SPY buy-and-hold. It is PAPER and the UI says so,
+    # but it is the only series here that has been verified end to end — an
+    # independent recomputation over all 24 locked baskets, with every price
+    # spot-checked against Robinhood, reproduces it exactly (+6.85% vs +3.04%
+    # for 06-17..08-24).
+    #
+    # The real-money record (services/clubnav) is still computed and stored
+    # nightly — it is simply not honest enough to publish yet:
+    #   * Through 2026-08-24 it measured members' WHOLE brokerage accounts, so
+    #     idle cash and personal positions counted as club performance. A member
+    #     who joined with $1,000 in uninvested cash was 88% of the weight and
+    #     returned 0.00% for five days, pinning the line flat.
+    #   * daily_values() gates each member on their CURRENT allocation and
+    #     applies it to ALL history, so one settings change on 2026-08-25
+    #     silently rewrote the record from +2.05% to +9.76%.
+    # club_value — the actual club-managed slice — only began recording
+    # 2026-08-24, so the honest real-money series needs history it does not have
+    # yet. Revisit once that column has a real run behind it.
+    return performance.club_performance(
+        force=bool(force and member.get("role") == "owner"))
 
 
 @router.get("/history")

@@ -115,7 +115,8 @@ export function ClubPerformance() {
         {pts.length > 1 && <span>{fmtTradeDate(pts[pts.length - 1].d)}</span>}
       </div>
       <div className="mt-1 text-[11px] text-subtle">
-        Basket decisions, equal-weight, vs SPY buy &amp; hold — not your account balance.
+        Basket decisions, equal-weight, vs SPY buy &amp; hold. A paper index of what the
+        club chose — not money made, and not your account balance.
       </div>
     </div>
   );

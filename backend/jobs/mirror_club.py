@@ -28,7 +28,7 @@ import tempfile
 import time
 
 from app.config import settings
-from app.services import clubnav, voting
+from app.services import performance, voting
 
 # Member-scoped OR operational keys must never appear in a mirrored row.
 # club_history is not supposed to emit any of these; this is a belt-and-braces
@@ -53,7 +53,7 @@ def build(limit: int = 60) -> dict:
         raise SystemExit("refusing to run on a demo instance — this mirrors FROM the real club")
     history = voting.club_history(limit)
     _assert_clean(history)
-    perf = clubnav.series()
+    perf = performance.club_performance()
     # The LIVE ballot's aggregate tally (symbol/name/votes/weight + counts) —
     # no member identity, same numbers every real member already sees on their
     # own Vote page. The demo overlays it so its consensus reflects the club
