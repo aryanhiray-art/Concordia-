@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import time
+from bisect import bisect_right
 from zoneinfo import ZoneInfo
 
 from ..db import db
@@ -92,6 +93,22 @@ def flow_days() -> set[tuple[int, str]]:
     return {(r["member_id"], _et_date(r["ts"])) for r in rows}
 
 
+def _close_asof(dates: list[str], closes: dict[str, float], d: str) -> float | None:
+    """The benchmark's last close at or before `d`.
+
+    A reading date is frequently a day the market never traded — the account
+    snapshots ran WEEKLY ON SUNDAYS through July — and on such a day the
+    benchmark's true value is Friday's close, not "unknown". The previous code
+    asked for `closes[d]` and, finding nothing, carried the last INDEX value
+    forward; since the first five reading dates after inception (06-21, 06-28,
+    07-05, 07-12, 07-19 — every one a Sunday) had no close, SPY sat pinned at
+    exactly 100.0 for five weeks and hid a real ~2.8% drawdown (it was 97.16 on
+    06-26). Resolving as-of the date fixes the base the same way.
+    """
+    i = bisect_right(dates, d) - 1
+    return closes[dates[i]] if i >= 0 else None
+
+
 def compute(spy_closes: dict[str, float] | None = None) -> list[dict]:
     """The chained real-money index, oldest first: [{d, club, spy, members}].
 
@@ -105,14 +122,10 @@ def compute(spy_closes: dict[str, float] | None = None) -> list[dict]:
     flows = flow_days()
     dates = sorted(byday)
     spy_closes = spy_closes or {}
-    spy_base = None
-    for d in dates:
-        if spy_closes.get(d):
-            spy_base = spy_closes[d]
-            break
+    spy_dates = sorted(spy_closes)
+    spy_base = _close_asof(spy_dates, spy_closes, dates[0])
 
     index = 100.0
-    last_spy = 100.0 if spy_base else None
     prev_vals: dict[int, tuple] = dict(byday[dates[0]])
     points = [{"d": dates[0], "club": 100.0,
                "spy": 100.0 if spy_base else None,
@@ -145,14 +158,12 @@ def compute(spy_closes: dict[str, float] | None = None) -> list[dict]:
             counted += 1
         if den > 0:
             index *= num / den
-        # Benchmark: index the day's close, or CARRY the last known one across a
-        # day we could not price (a missing close is missing information, not a
-        # move). Days before the benchmark's first close stay None.
-        if spy_base and spy_closes.get(d):
-            spy_idx = round(100.0 * spy_closes[d] / spy_base, 4)
-            last_spy = spy_idx
-        else:
-            spy_idx = last_spy
+        # Benchmark: index the last close AT OR BEFORE this reading date. On a
+        # weekend or holiday that close IS the day's value; on a trading day
+        # whose close has not printed yet it is provisional and the nightly
+        # refresh upserts the real one (record() is ON CONFLICT DO UPDATE).
+        px = _close_asof(spy_dates, spy_closes, d)
+        spy_idx = round(100.0 * px / spy_base, 4) if (spy_base and px) else None
         points.append({"d": d, "club": round(index, 4), "spy": spy_idx,
                        "members": counted})
         # Carry members forward so a day with a missing reading doesn't break
