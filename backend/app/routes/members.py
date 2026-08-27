@@ -483,7 +483,22 @@ def revoke_api_key(key_id: int, member: dict = Depends(require_session_member)):
 
 @router.put("/me/participate")
 def participate(body: ParticipateBody, member: dict = Depends(require_member)):
-    """The one on/off switch. Persists immediately; OFF disables voting."""
+    """The one on/off switch. Persists immediately; OFF disables voting.
+
+    Same vote-weight freeze as /me/allocation and /me/compound. Without it,
+    opting out is a free option on a real-money basket: vote at full weight,
+    watch the tally, then opt out before execution and fund none of it. The
+    executor selects `WHERE s.opted_in=1`, so the defection reads as a routine
+    skip row — and accuracy is scored off the `votes` table, never `executions`,
+    so the defector would still be credited for picks their money never bought.
+    """
+    from ..services import voting as _voting
+    if _voting.member_in_closed_unexecuted_session(member["id"]):
+        raise HTTPException(
+            status_code=409,
+            detail="participation is locked while this cycle's basket is executing — "
+                   "try again once it completes",
+        )
     with db() as conn:
         conn.execute(
             "UPDATE member_settings SET opted_in=?, updated_at=? WHERE member_id=?",
@@ -556,9 +571,16 @@ def delete_account(body: DeleteAccountBody, member: dict = Depends(require_sessi
             # FULL settings reset, not just the switch: stake, caps and
             # reputation are personal state, and if the same person rejoins
             # later they must start from scratch, remembering nothing
+            # accuracy_short/accuracy_long MUST be zeroed alongside `accuracy`.
+            # `accuracy` is DERIVED from those two components on every scoring
+            # run, so zeroing only the derived column left the components intact
+            # and the next score_cycle recomputed the deleted member's
+            # reputation straight back out of them.
             conn.execute("UPDATE member_settings SET opted_in=0, buying_power_pct=0, "
-                         "daily_cap_usd=0, voting_power=0, alloc_type='percent', alloc_value=0, "
-                         "accuracy=0, cycles_participated=0, updated_at=strftime('%s','now') "
+                         "daily_cap_usd=0, voting_power=0, voting_power_share=0, "
+                         "last_capital_usd=0, alloc_type='percent', alloc_value=0, "
+                         "accuracy=0, accuracy_short=0, accuracy_long=0, "
+                         "cycles_participated=0, updated_at=strftime('%s','now') "
                          "WHERE member_id=?", (mid,))
             # revoke broker access + every way to authenticate
             conn.execute("DELETE FROM rh_accounts WHERE member_id=?", (mid,))
@@ -571,8 +593,15 @@ def delete_account(body: DeleteAccountBody, member: dict = Depends(require_sessi
             conn.execute("DELETE FROM oauth_identities WHERE member_id=?", (mid,))
             conn.execute("DELETE FROM login_events WHERE member_id=?", (mid,))
             # erase identity; bump session_version so every live session dies now
+            # left_at is the membership primitive every service now filters on;
+            # the anonymized email alone was an implicit convention that four
+            # call sites (voting tally, power snapshot, cycle scoring, admin
+            # overview) never checked, so a departed member could still weigh a
+            # ballot that gets traded with other people's money.
             conn.execute("UPDATE members SET email=?, display_name='Deleted member', "
-                         "password_hash=NULL, session_version=session_version+1 WHERE id=?",
+                         "password_hash=NULL, session_version=session_version+1, "
+                         "left_at=COALESCE(left_at, CAST(strftime('%s','now') AS INTEGER)) "
+                         "WHERE id=?",
                          (f"deleted-{mid}@deleted.invalid", mid))
             conn.execute("COMMIT")
         except BaseException:

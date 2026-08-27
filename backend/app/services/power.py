@@ -79,6 +79,49 @@ def snapshot_member(member_id: int, week: str | None = None) -> dict | None:
     loose cash and would wrongly crater the member's power (the $100-stake →
     $5.20-power bug). resolve_allocation stays as-is for initial-buy sizing.
     """
+    # Under POWER_MODEL=blend this function is the WRONG formula, and it is
+    # called unconditionally on connect and on every allocation change. It writes
+    # raw committed stake as voting power, so a member who connected saw their
+    # power equal their dollars — then the next scheduled blended snapshot
+    # recomputed it properly and the UI rendered the difference as a loss they
+    # had caused. (Observed: a $1,000 member stamped 1000.00 on connect, then
+    # 650.13 four days later with a -349.87 delta, having done nothing.) Under
+    # blend, the club-wide snapshot owns the number; do not write a second one.
+    from ..config import settings as _settings
+    if _settings.power_model == "blend":
+        # SEED the member's dollar weight, but write NO history row.
+        #
+        # The history row is what rendered the phantom loss (the delta column),
+        # so it must not be written here. But simply returning was worse: this
+        # is the ONLY writer on connect and on an allocation change, and the
+        # club-wide snapshot runs on a biweekly cadence — so a member who
+        # committed $2,000 sat at voting._tally_rows' MAX(voting_power, 1.0)
+        # floor for up to 13 days, voting at 0.99% of the club instead of ~95%,
+        # through live executions, while their own UI showed $0. A cosmetic bug
+        # is not worth disenfranchising the people who just funded the club.
+        #
+        # Seeding the committed stake is the right interim value: under the
+        # merit form cold start IS raw stake, so this is what they would be
+        # awarded anyway, and the next scheduled snapshot normalises it against
+        # everyone else's multiplier.
+        bal = alloc.member_balance(member_id)
+        if bal is None:
+            return None
+        with db() as conn:
+            row = conn.execute(
+                "SELECT alloc_type, alloc_value FROM member_settings WHERE member_id=?",
+                (member_id,)).fetchone()
+        stake = alloc.rebalance_budget(
+            row["alloc_type"] if row else "percent", row["alloc_value"] if row else 0.0,
+            bal.get("total_value"), bal.get("buying_power")) or 0.0
+        stake = round(max(0.0, stake), 2)
+        with db() as conn:
+            conn.execute("UPDATE member_settings SET voting_power=?, last_capital_usd=?, "
+                         "updated_at=? WHERE member_id=?",
+                         (stake, stake, int(time.time()), member_id))
+        return {"member_id": member_id, "week_start": week or week_start_et(),
+                "power": stake, "equity": bal.get("total_value"),
+                "prev_power": None, "delta": None, "seeded": True}
     week = week or week_start_et()
     bal = alloc.member_balance(member_id)
     if bal is None:

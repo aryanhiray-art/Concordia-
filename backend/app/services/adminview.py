@@ -22,7 +22,7 @@ import json
 from ..calendar_us import calendar_covers, today_et
 from ..config import settings
 from ..db import db, is_armed, kv_get
-from . import mailer, voting
+from . import mailer, membership, reputation, voting
 
 _PERF_CACHE_KEY = "club_perf_v1"   # performance._CACHE_KEY (kept literal: read-only view)
 
@@ -96,11 +96,11 @@ def member_rows() -> list[dict]:
             "LEFT JOIN member_settings s ON s.member_id=m.id "
             "LEFT JOIN rh_accounts a ON a.member_id=m.id "
             "LEFT JOIN account_snapshots snap ON snap.member_id=m.id "
-            # self-service deletion ANONYMIZES rows in place (deleted-N@…) —
-            # without this filter every departed member is a forever-exception
-            # in the panel and the morning digest
-            "WHERE COALESCE(m.is_bot,0)=0 "
-            "AND m.email NOT LIKE 'deleted-%@deleted.invalid' ORDER BY m.id"
+            # Departed members must not be forever-exceptions in the panel and
+            # the morning digest. This used to test the anonymized-email
+            # fingerprint by hand; it now shares the one membership predicate,
+            # so an owner-side removal is honoured here too.
+            f"WHERE COALESCE(m.is_bot,0)=0 AND {membership.active_clause('m')} ORDER BY m.id"
         ).fetchall()
         # Last-known broker account type per member ('cash' waits T+1 on
         # settlement; 'limited_margin' redeploys same-day). Written by
@@ -149,6 +149,13 @@ def member_rows() -> list[dict]:
             # UI shows as —, not 0% (an unearned zero reads like a grade).
             "accuracy": (float(r["accuracy"] or 0)
                          if int(r["cycles_participated"] or 0) > 0 else None),
+            # The multiplier is what actually moves power — accuracy is the input,
+            # M is the effect (1.00 = neutral, 2.00 = the cap). Suppressed with
+            # accuracy for an unscored member so a neutral 1.00 doesn't read as a
+            # rating they earned. Only meaningful under POWER_FORM=merit.
+            "merit": (round(reputation.merit_multiplier(float(r["accuracy"] or 0)), 4)
+                      if int(r["cycles_participated"] or 0) > 0
+                      and settings.power_form == "merit" else None),
             "cycles": int(r["cycles_participated"] or 0),
             # club-slice unrealized P&L ($ + %), straight from the cached account
             # snapshot the 10-min refresher maintains — the panel stays DB-only.

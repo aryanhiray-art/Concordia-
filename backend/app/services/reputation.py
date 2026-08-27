@@ -1,42 +1,69 @@
-"""Reputation & blended voting power — the ETHGlobal Concordia 50/50 formula.
+"""Reputation & blended voting power. Two score forms, selected by POWER_FORM.
 
-    VP(i) = CAPITAL · CapitalShare(i) + ACCURACY · [ AccuracyShare(i) · confidence(i) ]
-      CapitalShare(i)  = capital(i)**gamma / Σ capital(j)**gamma   # gamma<1 dampens whales
-      AccuracyShare(i) = max(acc(i),0) / Σ max(acc(j),0)           # negatives floored to 0
-      confidence(i)    = min(cycles(i) / CONFIDENCE_CYCLES, 1)
-      acc(i)           = w_short·EWMA(α_short) + w_long·EWMA(α_long) of the
-                          vote-weighted excess return vs the benchmark
+MERIT (v2) — a single product, normalised ONCE:
 
-Money AND merit, 50/50 by default. Accuracy is scored one cycle after each vote
-from prices captured at close (paper basis — you're credited for what you BACKED,
-even picks that lost the vote). The snapshot is peer-relative then rescaled to the
-$ capital pool.
+    score(i) = capital(i)**gamma · M(i)
+    M(i)     = MERIT_MAX_MULTIPLE ** tanh( accuracy(i) / MERIT_ACCURACY_SCALE )
+    VP(i)    = P · score(i) / Σ score(j)          where P = Σ capital(j)
 
-`gamma` (config.capital_gamma_bps, default 1.0 = linear = today's behaviour) lets
-capital weighting be dialed toward sqrt-style diminishing returns — 4x the stake
-buys 2x the power at gamma=0.5 — without a hard cap or cliff.
+  In one sentence for a member: your voting power is the money you committed,
+  multiplied by a track-record score, expressed as your share of the club's
+  total committed dollars.
 
-`acc(i)` blends TWO EWMAs, not one (config.accuracy_{short,long}_half_life_cycles,
-config.accuracy_{short,long}_weight_bps): a single EWMA can't simultaneously make
-recent form dominant AND keep a multi-year track record meaningful, since its
-decay is one fixed exponential — shortening the half-life to chase recency also
-erases old cycles almost entirely. Two components (short ~ current form, long ~
-career record) give both: a hot/cold streak moves the score fast via the short
-half-life, while a 5-year-old result still contributes visibly via the long one
-instead of decaying to ~0. Cold start (no accuracy, default gamma) still reduces
-to pure linear stake — the switch from POWER_MODEL=stake to blend stays a no-op
-until an operator dials capital_gamma_bps below 10000.
+  Three properties follow, and they are the reason the form changed:
+
+  1. AN EXIT IS A PURE RENORMALISATION. M(i) reads ONLY member i's own accuracy —
+     no sum, no mean, no cohort, no member count. So removing member k changes no
+     numerator and only removes score(k) from the denominator:
+         share'(i) = share(i) / (1 − share(k))     for EVERY survivor
+     One common factor, so every pairwise ratio and the whole rank order survive
+     exactly. Nobody is reset; the pool is simply re-divided. Joining is the
+     mirror. This is why nothing cross-sectional may ever enter M().
+  2. NO ZERO-CLIFF. tanh is strictly increasing through zero, so "unproven" and
+     "proven bad" are finally different numbers. Under the old max(acc,0) they
+     were the same number: on the live roster a member 1bp underwater, one 70x
+     worse, and one with no record at all all landed on identical power.
+  3. BOUNDED COMPRESSION. tanh saturates, so M ∈ [1/MM, MM] and best:worst can
+     never exceed MM² — an a-priori bound, not an observed one. MM is the single
+     spread dial; lowering it brings members closer together without making them
+     equal and without re-ranking anyone. accuracy 0 ⇒ M == 1.0 exactly, so an
+     unscored club weighs exactly its dollars and enabling the form is a no-op.
+
+LEGACY — the additive form, kept as the default and as the rollback:
+
+    raw(i) = CAPITAL·CapitalShare(i) + ACCURACY·[AccuracyShare(i)·confidence(i)]
+
+  It normalises capital and accuracy SEPARATELY and adds them, which is what
+  breaks property 1: an exit inflates the capital channel by 1/(1−C_k) and the
+  accuracy channel by 1/(1−A_k) — two different factors — so survivors are
+  re-weighted according to where their score came from. Measured on the live
+  roster, one departure drifts pairwise ratios by up to 24.7% and can flip ranks
+  between two members who did nothing. It also multiplies accuracy share by
+  tenure, double-counting newness (accuracy already ramps from zero) and
+  producing rank inversions where a longer-serving member with a worse record
+  outranks a better one.
+
+Accuracy is scored one cycle after each vote from prices captured at close
+(paper basis — you're credited for what you BACKED, even picks that lost the
+vote), winsorised per cycle, and smoothed by a two-timescale EWMA whose
+half-lives lengthen as the club grows (see _inertia_ratio).
+
+`gamma` (config.capital_gamma_bps, default 1.0 = linear) dials capital toward
+sqrt-style diminishing returns. NOTE it is sybil-UNSAFE below 1.0: splitting one
+stake across k accounts multiplies its weight by k**(1-gamma), so gamma<1 needs
+identity assurance before it is enabled.
 
 Enabled by POWER_MODEL=blend; dormant (prices still captured) otherwise. See the
 hackathon repo cx18121/concordia — DESIGN.md §3, Governance.sol, scoring.ts.
 """
 from __future__ import annotations
 
+import math
 import time
 
 from ..config import settings
 from ..db import audit, db
-from . import alloc, market
+from . import alloc, market, membership
 from . import power as power_svc
 
 
@@ -56,6 +83,19 @@ def capture_cycle_prices(session_id: int) -> dict:
     with db() as conn:
         syms = [r["symbol"] for r in conn.execute(
             "SELECT DISTINCT symbol FROM votes WHERE session_id=?", (session_id,)).fetchall()]
+        # ALSO price the PREVIOUS cycle's voted symbols. Scoring uses this
+        # session's prices as the EXIT for the previous one, so capturing only
+        # today's names means a pick is measurable solely when the same ticker
+        # was voted again — accuracy was being computed on a survivorship-biased
+        # subset (names that stayed popular), and a member whose picks all
+        # rotated out registered as a NON-measurement instead of a result.
+        prev = conn.execute(
+            "SELECT id FROM vote_sessions WHERE trade_date < "
+            "(SELECT trade_date FROM vote_sessions WHERE id=?) "
+            "ORDER BY trade_date DESC LIMIT 1", (session_id,)).fetchone()
+        if prev:
+            syms += [r["symbol"] for r in conn.execute(
+                "SELECT DISTINCT symbol FROM votes WHERE session_id=?", (prev["id"],)).fetchall()]
     want = sorted(set(s.upper() for s in syms) | {settings.benchmark_symbol})
     try:
         px = market.quotes(want)
@@ -90,6 +130,17 @@ def _half_life_alpha(half_life_cycles: int) -> float:
     return 1.0 - 2.0 ** (-1.0 / h)
 
 
+def _half_life_alpha_scaled(half_life_cycles: int, ratio: float) -> float:
+    """The same constant with the half-life stretched by `ratio` (>= 1.0).
+
+    Goes through _half_life_alpha so (1-alpha)**H == 0.5 keeps holding exactly at
+    the stretched half-life; ratio 1.0 is bit-identical to the unscaled alpha,
+    which is what makes shipping R1 a no-op at the anchor roster size.
+    """
+    h = max(1.0, float(half_life_cycles) * max(1.0, ratio))
+    return 1.0 - 2.0 ** (-1.0 / h)
+
+
 def _alpha_short() -> float:
     return _half_life_alpha(settings.accuracy_short_half_life_cycles)
 
@@ -102,6 +153,49 @@ def _blend_accuracy(short: float, long: float) -> float:
     w_short = settings.accuracy_short_weight_bps / 1e4
     w_long = settings.accuracy_long_weight_bps / 1e4
     return w_short * short + w_long * long
+
+
+def active_member_count() -> int:
+    """Members currently IN the club — the R1 input. Counted at scoring time."""
+    with db() as conn:
+        row = conn.execute(
+            f"SELECT COUNT(*) AS n FROM members m WHERE {membership.active_clause('m')}"
+        ).fetchone()
+    return int(row["n"] or 0)
+
+
+def _inertia_ratio(n_members: int) -> float:
+    """R1 — the club gets SLOWER as it grows: half-lives are multiplied by
+    max(1, sqrt(N / REF_N)).
+
+    N is the ACTIVE MEMBER COUNT, not the cycle's turnout. That distinction
+    matters: keyed to turnout this never fired even once across the club's whole
+    12-cycle history (turnout peaked at 21 against a REF_N of 24), and it would
+    have made inertia depend on who happened to show up rather than on how big
+    the club is — the opposite of "more members, steadier standings".
+
+    Why sqrt and why one-sided. A single cycle is one noisy sample of a member's
+    skill, and as the club grows each member's picks are a smaller fraction of
+    the decided basket, so the per-cycle estimate gets noisier roughly like
+    sqrt(N) — matching the averaging rate to it keeps the score's
+    signal-to-noise roughly constant instead of letting a big club whipsaw on
+    one week. max(1, ...) is one-sided on purpose: a SHRINKING club must never
+    sharpen the score, otherwise a wave of departures would suddenly make
+    everyone's record volatile.
+
+    N is read HERE and stamped into cycle_scores forever. It must never be
+    evaluated at snapshot time: an exit changes N, and an N-dependent term in
+    the snapshot would destroy the single-factor rescale that R3 depends on.
+    """
+    ref = settings.accuracy_inertia_ref_n
+    if ref <= 0 or n_members <= 0:
+        return 1.0
+    return max(1.0, math.sqrt(n_members / float(ref)))
+
+
+def _winsorise(x: float) -> float:
+    cap = abs(settings.accuracy_excess_cap)
+    return max(-cap, min(cap, x))
 
 
 def score_cycle(scored_session_id: int, exit_prices: dict[str, float]) -> dict:
@@ -119,46 +213,112 @@ def score_cycle(scored_session_id: int, exit_prices: dict[str, float]) -> dict:
                 "reason": "missing_benchmark_price", "members": []}
     sp_ret = bx / be - 1.0
     with db() as conn:
+        # DEPARTED members are excluded by identity: their ballot stays on record
+        # but stops earning a reputation that no longer belongs to anyone.
+        #
+        # OPTED-OUT members are excluded too. Participation off means off: the
+        # ballot they already cast still stands (opting out is not a vote
+        # retraction lever), but they stop ACCRUING a record while they are out,
+        # and resume when they switch back on. This also closes a free option —
+        # accuracy is measured from `votes` and never from `executions`, while
+        # the executor hard-filters opted_in=1, so without this a member could
+        # vote, opt out before the orders landed, fund none of the basket, and
+        # still be credited for how the picks performed.
         rows = conn.execute(
-            "SELECT member_id, symbol, weight FROM votes WHERE session_id=?", (scored_session_id,)).fetchall()
+            "SELECT v.member_id, v.symbol, v.weight FROM votes v "
+            "JOIN members m ON m.id = v.member_id "
+            "JOIN member_settings ms ON ms.member_id = v.member_id "
+            f"WHERE v.session_id=? AND {membership.active_clause('m')} "
+            "AND COALESCE(ms.opted_in,0) = 1",
+            (scored_session_id,)).fetchall()
     by_member: dict[int, list[tuple[str, float]]] = {}
     for r in rows:
         by_member.setdefault(r["member_id"], []).append((r["symbol"].upper(), r["weight"] or 0.0))
-    a_short, a_long = _alpha_short(), _alpha_long()
-    scored = []
+
+    # PASS 1 — measure everyone before mutating anyone, so N (and the alphas
+    # derived from it) is the same for every member in the cycle. Computing it
+    # incrementally would make a member's smoothing depend on their position in
+    # the loop.
+    measured: dict[int, tuple[float, float, int]] = {}   # mid -> (excess, raw, picks)
+    unmeasurable: list[int] = []
     for mid, picks in by_member.items():
-        this = 0.0
+        raw = 0.0
         used = 0
         for sym, w in picks:
             e, x = entry.get(sym), exit_prices.get(sym)
             if not e or not x or w <= 0:
                 continue
-            this += (w / 100.0) * ((x / e - 1.0) - sp_ret)   # vote-weighted excess vs benchmark
+            raw += (w / 100.0) * ((x / e - 1.0) - sp_ret)   # vote-weighted excess vs benchmark
             used += 1
         if used == 0:
             # Not a single pick had both an entry AND exit price → this is a NON-
             # measurement, not "the member scored 0". Do NOT decay their accuracy or
             # ramp their confidence on it.
-            scored.append({"member_id": mid, "picks_scored": 0, "skipped": "no_measurable_picks"})
+            unmeasurable.append(mid)
             continue
-        with db() as conn:
-            row = conn.execute(
-                "SELECT accuracy_short, accuracy_long FROM member_settings WHERE member_id=?", (mid,)
-            ).fetchone()
-            old_short = float(row["accuracy_short"]) if row and row["accuracy_short"] is not None else 0.0
-            old_long = float(row["accuracy_long"]) if row and row["accuracy_long"] is not None else 0.0
-            new_short = a_short * this + (1 - a_short) * old_short
-            new_long = a_long * this + (1 - a_long) * old_long
-            new = _blend_accuracy(new_short, new_long)
-            conn.execute(
-                "UPDATE member_settings SET accuracy=?, accuracy_short=?, accuracy_long=?, "
-                "cycles_participated=cycles_participated+1, updated_at=? WHERE member_id=?",
-                (new, new_short, new_long, int(time.time()), mid))
-        scored.append({"member_id": mid, "cycle_excess_pct": round(this * 100, 3),
-                       "accuracy": round(new, 5), "accuracy_short": round(new_short, 5),
-                       "accuracy_long": round(new_long, 5), "picks_scored": used})
+        measured[mid] = (_winsorise(raw), raw, used)
+
+    if not measured:
+        # The benchmark priced but not one member had a measurable pick. Today this
+        # was sealed with scored_at and could never be re-scored; leave it unscored
+        # so a later run with better price coverage can still measure it.
+        return {"scored_session": scored_session_id, "scored": False,
+                "reason": "no_measurable_members", "members": []}
+
+    n_measured = len(measured)
+    # R1 is keyed to how big the CLUB is, not to this cycle's turnout.
+    n_members = active_member_count()
+    ratio = _inertia_ratio(n_members)
+    a_short = _half_life_alpha_scaled(settings.accuracy_short_half_life_cycles, ratio)
+    a_long = _half_life_alpha_scaled(settings.accuracy_long_half_life_cycles, ratio)
+    vals = [v[0] for v in measured.values()]
+    mean = sum(vals) / n_measured
+    dispersion = (math.sqrt(sum((v - mean) ** 2 for v in vals) / (n_measured - 1))
+                  if n_measured > 1 else None)
+
+    # PASS 2 — apply. A REAL transaction (the connection is autocommit, so the
+    # explicit BEGIN IMMEDIATE is required): a crash mid-loop must not leave half
+    # the club scored against a cycle the caller has already stamped as done.
+    now = int(time.time())
+    scored = []
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for mid, (excess, raw, used) in measured.items():
+                row = conn.execute(
+                    "SELECT accuracy_short, accuracy_long FROM member_settings WHERE member_id=?", (mid,)
+                ).fetchone()
+                old_short = float(row["accuracy_short"]) if row and row["accuracy_short"] is not None else 0.0
+                old_long = float(row["accuracy_long"]) if row and row["accuracy_long"] is not None else 0.0
+                new_short = a_short * excess + (1 - a_short) * old_short
+                new_long = a_long * excess + (1 - a_long) * old_long
+                new = _blend_accuracy(new_short, new_long)
+                conn.execute(
+                    "UPDATE member_settings SET accuracy=?, accuracy_short=?, accuracy_long=?, "
+                    "cycles_participated=cycles_participated+1, updated_at=? WHERE member_id=?",
+                    (new, new_short, new_long, now, mid))
+                conn.execute(
+                    "INSERT INTO cycle_scores(session_id,member_id,excess,excess_raw,alpha_short,"
+                    "alpha_long,n_measured,picks_scored,dispersion,created_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id,member_id) DO NOTHING",
+                    (scored_session_id, mid, excess, raw, a_short, a_long,
+                     n_measured, used, dispersion, now))
+                scored.append({"member_id": mid, "cycle_excess_pct": round(excess * 100, 3),
+                               "cycle_excess_raw_pct": round(raw * 100, 3),
+                               "winsorised": excess != raw,
+                               "accuracy": round(new, 5), "accuracy_short": round(new_short, 5),
+                               "accuracy_long": round(new_long, 5), "picks_scored": used})
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+    for mid in unmeasurable:
+        scored.append({"member_id": mid, "picks_scored": 0, "skipped": "no_measurable_picks"})
     return {"scored_session": scored_session_id, "scored": True,
-            "benchmark_return_pct": round(sp_ret * 100, 3), "members": scored}
+            "benchmark_return_pct": round(sp_ret * 100, 3),
+            "n_measured": n_measured, "n_members": n_members,
+            "inertia_ratio": round(ratio, 4),
+            "alpha_short": a_short, "alpha_long": a_long, "members": scored}
 
 
 def score_matured_cycles() -> list[dict]:
@@ -177,14 +337,35 @@ def score_matured_cycles() -> list[dict]:
                 (s["trade_date"],)).fetchone()
         if not nxt:
             continue   # not matured yet — no exit prices captured for a later cycle
-        res = score_cycle(s["id"], _prices_for(nxt["id"]))
-        if not res.get("scored"):
-            continue   # e.g. missing benchmark price — leave unscored so it retries
+        # CLAIM FIRST, then score. The EWMA is not idempotent, so the claim has to
+        # happen BEFORE the mutation: claiming afterwards leaves a window in which
+        # two concurrent runs both apply the same cycle to every member's accuracy,
+        # and a crash between mutation and claim re-applies it on the next run.
         with db() as conn:
-            # Claim atomically (guard scored_at IS NULL) so a concurrent run / retry
-            # can't double-apply the non-idempotent EWMA to the same cycle.
-            conn.execute("UPDATE vote_sessions SET scored_at=? WHERE id=? AND scored_at IS NULL",
-                         (int(time.time()), s["id"]))
+            claimed = conn.execute(
+                "UPDATE vote_sessions SET scored_at=? WHERE id=? AND scored_at IS NULL",
+                (int(time.time()), s["id"])).rowcount == 1
+        if not claimed:
+            continue   # someone else is scoring (or already scored) this cycle
+        try:
+            res = score_cycle(s["id"], _prices_for(nxt["id"]))
+        except BaseException:
+            # RELEASE on ANY failure, not just a declined score. The claim is set
+            # before the mutation (it has to be — the EWMA is not idempotent), so
+            # a raised exception, a locked database or a deploy restart would
+            # otherwise leave scored_at stamped on a cycle that was never applied.
+            # The driver query is `WHERE scored_at IS NULL`, so that cycle would be
+            # lost forever — and under the merit form accuracy is the SOLE merit
+            # input, making a lost cycle a permanently mis-priced real-money vote.
+            with db() as conn:
+                conn.execute("UPDATE vote_sessions SET scored_at=NULL WHERE id=?", (s["id"],))
+            raise
+        if not res.get("scored"):
+            # Nothing was applied — RELEASE the claim so the cycle retries once the
+            # missing prices land, rather than being sealed as permanently scored.
+            with db() as conn:
+                conn.execute("UPDATE vote_sessions SET scored_at=NULL WHERE id=?", (s["id"],))
+            continue
         out.append(res)
     if out:
         audit("system", "accuracy_scored", None, {"cycles": len(out)})
@@ -232,68 +413,253 @@ def _member_snapshot_inputs(m: dict) -> tuple[float, float, bool]:
     return cap, (bal.get("total_value") or 0.0), True
 
 
+def merit_multiplier(accuracy: float) -> float:
+    """M = MERIT_MAX_MULTIPLE ** tanh(accuracy / MERIT_ACCURACY_SCALE).
+
+    The whole of R2 in one line, with properties that hold a priori rather than
+    being observed on a particular roster:
+      * bounded: tanh in (-1,1) so M in (1/MM, MM); overflow is impossible and
+        best:worst can never exceed MM**2, whatever anyone's accuracy is;
+      * neutral: accuracy 0 gives M == 1.0 EXACTLY, so cold start equals raw
+        stake to the cent and switching the form on an unscored club is a no-op;
+      * no cliff: strictly increasing through zero, so an unproven member and a
+        proven-bad member are finally different numbers. Under the old
+        max(acc,0) they were identical — Chip Charlie at -0.00010, Mega-Cap Max
+        at -0.00716 (seventy times worse) and Neil with no record at all all
+        landed on exactly the same power;
+      * SELF-CONTAINED: reads only this member's own accuracy. No sum, no mean,
+        no cohort, no member count. That is the entire proof of the exit
+        property below — anything cross-sectional here would break it.
+    """
+    mm = settings.merit_max_multiple
+    scale = settings.merit_accuracy_scale
+    if mm <= 1.0 or scale <= 0:
+        return 1.0
+    return mm ** math.tanh(accuracy / scale)
+
+
+def _apply_share_ceiling(shares: dict[int, float]) -> tuple[dict[int, float], set[int]]:
+    """Cap any member above MAX_VOTING_SHARE, redistributing the excess.
+
+    Water-fill: pin everyone over the ceiling, hand their excess to the members
+    below it in proportion to what they already hold, repeat until nobody is
+    over (each pass pins at least one member, so it terminates).
+
+    Because the redistribution is a COMMON multiplicative factor, any two
+    members who are NOT pinned keep their pairwise ratio exactly — the exit
+    guarantee survives for everyone the ceiling does not touch. Only a member
+    actually sitting at the ceiling moves relative to the rest, which is what a
+    ceiling is for.
+
+    OFF unless both knobs are set, and refuses to act when it would be
+    destructive rather than protective:
+      * below MAX_VOTING_SHARE_MIN_MEMBERS the club is too small to bother;
+      * a ceiling C is unsatisfiable when C * N <= 1 (shares sum to 1), and a C
+        barely above 1/N pins nearly everyone and silently turns the club into
+        one-member-one-vote. Both cases leave shares untouched and audit.
+    """
+    ceiling = settings.max_voting_share
+    if not ceiling or ceiling <= 0 or not shares:
+        return shares, set()
+    n = len(shares)
+    # Threshold derives from the ceiling when unset: below ceil(2/C) members a
+    # cap of C pins a large fraction of the club rather than an outlier.
+    floor_n = settings.max_voting_share_min_members or math.ceil(2.0 / ceiling)
+    if n < floor_n:
+        return shares, set()
+    if ceiling * n <= 1.0:
+        audit("system", "voting_ceiling_infeasible", None,
+              {"ceiling": ceiling, "members": n,
+               "needs_members_above": int(1.0 / ceiling)})
+        return shares, set()
+    out = dict(shares)
+    pinned: set[int] = set()
+    for _ in range(n + 1):
+        over = [m for m in out if m not in pinned and out[m] > ceiling + 1e-15]
+        if not over:
+            break
+        for m in over:
+            out[m] = ceiling
+            pinned.add(m)
+        rest = [m for m in out if m not in pinned]
+        base = sum(out[m] for m in rest)
+        if not rest or base <= 0:
+            break
+        excess = 1.0 - sum(out.values())
+        for m in rest:
+            out[m] += excess * out[m] / base
+    if pinned:
+        audit("system", "voting_ceiling_applied", None,
+              {"ceiling": ceiling, "members": n, "pinned": sorted(pinned)})
+    return out, pinned
+
+
 def snapshot_power_all() -> list[dict]:
-    """Blended VP for every member. Peer-relative shares, then rescaled to the $
-    capital pool so numbers stay dollar-readable and cold-start (no accuracy) == the
-    member's raw stake. Writes voting_power + a weekly history row (legacy shape)."""
+    """Blended VP for every ACTIVE member, rescaled to the $ capital pool.
+
+    Two score forms (POWER_FORM), one normalisation and one writer:
+
+      merit   score_i = capital_i**gamma * M(accuracy_i)         [v2, default off]
+      legacy  score_i = cap_w*capShare_i + acc_w*accShare_i*conf_i
+
+    `merit` is a single product normalised once. Because score_i depends only on
+    member i's own data, removing member k divides every survivor's share by the
+    SAME factor (1 - share_k): pairwise ratios and rank order are preserved
+    exactly, and an exit becomes one club-level pool change instead of 23
+    individual losses. `legacy` normalises capital and accuracy separately and
+    adds them, so an exit re-weights survivors by where their score came from
+    (measured on the live roster: ratios drift up to 24.7%, and ranks can flip).
+    """
     with db() as conn:
         members = [dict(r) for r in conn.execute(
             "SELECT m.id AS member_id, COALESCE(m.is_bot,0) AS is_bot, s.alloc_type, s.alloc_value, "
             "       COALESCE(s.accuracy,0) AS accuracy, COALESCE(s.cycles_participated,0) AS cycles_participated, "
+            "       COALESCE(s.last_capital_usd,0) AS last_capital_usd, "
+            "       COALESCE(s.voting_power,0) AS voting_power, "
             "       a.status AS rh_status "
             "FROM members m JOIN member_settings s ON s.member_id=m.id "
-            "LEFT JOIN rh_accounts a ON a.member_id=m.id").fetchall()]
+            "LEFT JOIN rh_accounts a ON a.member_id=m.id "
+            f"WHERE {membership.active_clause('m')}").fetchall()]
     inputs = {m["member_id"]: _member_snapshot_inputs(m) for m in members}
-    # FAIL-SAFE: drop members whose live balance read failed — carry their prior power.
-    active = [m for m in members if inputs[m["member_id"]][2]]
-    skipped = [m["member_id"] for m in members if not inputs[m["member_id"]][2]]
-    caps = {m["member_id"]: max(0.0, inputs[m["member_id"]][0]) for m in active}
-    eqs = {m["member_id"]: inputs[m["member_id"]][1] for m in active}   # real account value for history/graph
-    total_cap = sum(caps.values())   # the $ pool VP rescales to — stays LINEAR regardless of gamma
-    total_pos_acc = sum(max(0.0, float(m["accuracy"])) for m in active)
-    cap_w = settings.capital_bps / 1e4
-    acc_w = settings.accuracy_bps / 1e4
-    conf_n = max(1, settings.confidence_cycles)
 
-    # Capital SHARE (the ratio, not the rescale target) is built on capital**gamma.
-    # gamma=1.0 (default) is exactly the old linear ratio — a no-op. gamma<1 makes
-    # each additional dollar buy a shrinking increment of share: doubling your
-    # stake never quite doubles your slice of the vote.
-    gamma = settings.capital_gamma_bps / 1e4
-    cap_weight = {mid: (caps[mid] ** gamma if caps[mid] > 0 else 0.0) for mid in caps}
-    total_cap_weight = sum(cap_weight.values())
-
-    raw: dict[int, float] = {}
-    for m in active:
+    # A member whose live balance read FAILED keeps their last known capital and
+    # STAYS in the denominator, but is not written. Dropping them out of the
+    # denominator (the old behaviour) inflated every other member's share by
+    # 1/(1-share_held) while the held member's own stale dollar power kept
+    # voting — a transient broker error silently re-weighted the whole club.
+    roster: list[dict] = []      # everyone counted in the denominator
+    writable: list[dict] = []    # everyone whose fresh read succeeded
+    held: list[int] = []
+    caps: dict[int, float] = {}
+    eqs: dict[int, float] = {}
+    for m in members:
         mid = m["member_id"]
-        cap_share = (cap_weight[mid] / total_cap_weight) if total_cap_weight > 0 else 0.0
-        acc_share = (max(0.0, float(m["accuracy"])) / total_pos_acc) if total_pos_acc > 0 else 0.0
-        conf = min(float(m["cycles_participated"]) / conf_n, 1.0)
-        raw[mid] = cap_w * cap_share + acc_w * acc_share * conf
-    total_raw = sum(raw.values())
+        cap, eq, ok = inputs[mid]
+        if ok:
+            caps[mid] = max(0.0, cap)
+            eqs[mid] = eq
+            roster.append(m)
+            writable.append(m)
+        else:
+            held.append(mid)
+            # Fall back through EVERY record of this member's committed capital
+            # before giving up on them. last_capital_usd is only populated from
+            # the first successful snapshot, so on the very first run after the
+            # migration it is 0 for everyone — and gating the carry on it alone
+            # meant one transient Robinhood error dropped the largest member out
+            # of the denominator entirely. (Reproduced: a $1,000 member held on
+            # the first snapshot left a $100 member holding 100% of a live vote.)
+            # Only a member whose capital has NEVER been observed is dropped.
+            last = max(0.0, float(m["last_capital_usd"] or 0.0)) or \
+                max(0.0, float(m["voting_power"] or 0.0))
+            if last > 0:
+                caps[mid] = last
+                roster.append(m)
+
+    total_cap = sum(caps.values())   # the $ pool VP rescales to — LINEAR regardless of gamma
+    gamma = settings.capital_gamma_bps / 1e4
+    merit = settings.power_form == "merit"
+
+    score: dict[int, float] = {}
+    if merit:
+        for m in roster:
+            mid = m["member_id"]
+            c = caps[mid]
+            score[mid] = (c ** gamma) * merit_multiplier(float(m["accuracy"])) if c > 0 else 0.0
+    else:
+        cap_w = settings.capital_bps / 1e4
+        acc_w = settings.accuracy_bps / 1e4
+        conf_n = max(1, settings.confidence_cycles)
+        total_pos_acc = sum(max(0.0, float(m["accuracy"])) for m in roster)
+        cap_weight = {m["member_id"]: (caps[m["member_id"]] ** gamma
+                                       if caps[m["member_id"]] > 0 else 0.0) for m in roster}
+        total_cap_weight = sum(cap_weight.values())
+        for m in roster:
+            mid = m["member_id"]
+            cap_share = (cap_weight[mid] / total_cap_weight) if total_cap_weight > 0 else 0.0
+            acc_share = (max(0.0, float(m["accuracy"])) / total_pos_acc) if total_pos_acc > 0 else 0.0
+            conf = min(float(m["cycles_participated"]) / conf_n, 1.0)
+            score[mid] = cap_w * cap_share + acc_w * acc_share * conf
+    total_score = sum(score.values())
+
+    # FAIL CLOSED. A degenerate roster must not zero anyone's vote: write nothing
+    # and carry every member's prior power. Never refuses a lifecycle transition —
+    # an empty club simply produces an empty snapshot.
+    degenerate = (not roster or total_cap <= 0 or total_score <= 0
+                  or not math.isfinite(total_score) or not math.isfinite(total_cap))
+    if degenerate:
+        audit("system", "power_snapshot_degenerate", power_svc.week_start_et(),
+              {"roster": len(roster), "total_cap": total_cap, "total_score": total_score,
+               "held": held, "form": settings.power_form})
+        return []
 
     week = power_svc.week_start_et()
     now = int(time.time())
+    shares = {mid: score[mid] / total_score for mid in score}
+    shares, pinned = _apply_share_ceiling(shares)
+    vps = {mid: round(total_cap * shares[mid], 2) for mid in shares}
+    ranked = sorted(shares, key=lambda mid: (-shares[mid], mid))
+    rank_of = {mid: i + 1 for i, mid in enumerate(ranked)}
+
+    # Pre-write assertions. Any failure aborts the WHOLE snapshot rather than
+    # leaving the club half-re-weighted.
+    ssum = sum(shares.values())
+    if abs(ssum - 1.0) > 1e-9 or any(not math.isfinite(v) or v < 0 for v in shares.values()):
+        audit("system", "power_snapshot_degenerate", week, {"reason": "share_sum", "sum": ssum})
+        return []
+    # Pool conservation: the dollars handed out must be the dollars committed,
+    # up to one cent of rounding per member.
+    if abs(sum(vps.values()) - total_cap) > 0.01 * len(roster) + 0.01:
+        audit("system", "power_snapshot_degenerate", week,
+              {"reason": "pool_conservation", "sum_vp": sum(vps.values()), "pool_usd": total_cap})
+        return []
+
     out = []
-    for m in active:
-        mid = m["member_id"]
-        # rescale to the $ pool: cold-start (all accuracy 0) → power == raw stake
-        vp = round((total_cap * raw[mid] / total_raw) if total_raw > 0 else caps[mid], 2)
-        prev = power_svc._prev_power(mid, week)
-        delta = (vp - prev) if prev is not None else None
-        with db() as conn:
-            conn.execute(
-                "INSERT INTO voting_power_history(member_id,week_start,power,equity,prev_power,delta,created_at) "
-                "VALUES(?,?,?,?,?,?,?) ON CONFLICT(member_id,week_start) DO UPDATE SET "
-                "power=excluded.power, equity=excluded.equity, prev_power=excluded.prev_power, delta=excluded.delta",
-                (mid, week, vp, round(eqs[mid], 2), prev, delta, now))
-            conn.execute("UPDATE member_settings SET voting_power=?, updated_at=? WHERE member_id=?",
-                         (vp, now, mid))
-        out.append({"member_id": mid, "is_bot": bool(m["is_bot"]), "capital": round(caps[mid], 2),
-                    "accuracy": round(float(m["accuracy"]), 5),
-                    "confidence": round(min(float(m["cycles_participated"]) / conf_n, 1.0), 3),
-                    "power": vp, "delta": delta})
-    audit("system", "blended_power", week, {"members": len(out), "skipped_read_fail": skipped})
+    # ONE transaction for the whole club. The connection is autocommit
+    # (isolation_level=None), so this needs an EXPLICIT BEGIN IMMEDIATE — without
+    # it every execute() commits on its own and a crash halfway through leaves
+    # half the club weighted on the new denominator and half on the old, under
+    # the same week_start key, which is then what the next execution trades.
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for m in writable:
+                mid = m["member_id"]
+                vp = vps[mid]
+                prev = power_svc._prev_power(mid, week)
+                delta = (vp - prev) if prev is not None else None
+                conn.execute(
+                    "INSERT INTO voting_power_history(member_id,week_start,power,equity,prev_power,"
+                    "delta,created_at,share,pool_usd,n_active,rank_at_snapshot) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(member_id,week_start) DO UPDATE SET "
+                    "power=excluded.power, equity=excluded.equity, prev_power=excluded.prev_power, "
+                    "delta=excluded.delta, share=excluded.share, pool_usd=excluded.pool_usd, "
+                    "n_active=excluded.n_active, rank_at_snapshot=excluded.rank_at_snapshot",
+                    (mid, week, vp, round(eqs[mid], 2), prev, delta, now,
+                     shares[mid], round(total_cap, 2), len(roster), rank_of[mid]))
+                conn.execute(
+                    "UPDATE member_settings SET voting_power=?, voting_power_share=?, "
+                    "last_capital_usd=?, updated_at=? WHERE member_id=?",
+                    (vp, shares[mid], caps[mid], now, mid))
+                out.append({"member_id": mid, "is_bot": bool(m["is_bot"]),
+                            "capital": round(caps[mid], 2),
+                            "accuracy": round(float(m["accuracy"]), 5),
+                            "merit": round(merit_multiplier(float(m["accuracy"])), 4),
+                            "confidence": round(min(float(m["cycles_participated"])
+                                                    / max(1, settings.confidence_cycles), 1.0), 3),
+                            "share": shares[mid], "rank": rank_of[mid],
+                        "capped": mid in pinned,
+                            "power": vp, "delta": delta})
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+    audit("system", "blended_power", week,
+          {"members": len(out), "form": settings.power_form, "roster": len(roster),
+           "pool_usd": round(total_cap, 2), "held_read_fail": held,
+           "capped": sorted(pinned),
+           "merit_min": round(min((o["merit"] for o in out), default=1.0), 4),
+           "merit_max": round(max((o["merit"] for o in out), default=1.0), 4)})
     return out
 
 

@@ -148,6 +148,27 @@ CREATE TABLE IF NOT EXISTS cycle_prices (
     PRIMARY KEY (session_id, symbol)
 );
 
+-- Append-only per-cycle scoring ledger. NOT read by the formula (the live value
+-- stays member_settings.accuracy) — it exists so "rescale, never reset" is
+-- AUDITABLE: every accuracy change is attributable to one cycle, with the exact
+-- alphas and roster size that produced it. It also makes any future formula
+-- change replayable from history instead of un-derivable, and records the
+-- per-cycle dispersion needed to decide later whether cross-sectional
+-- standardisation is warranted (see reputation.py).
+CREATE TABLE IF NOT EXISTS cycle_scores (
+    session_id   INTEGER NOT NULL REFERENCES vote_sessions(id) ON DELETE CASCADE,
+    member_id    INTEGER NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+    excess       REAL NOT NULL,        -- winsorised, the value that entered the EWMA
+    excess_raw   REAL NOT NULL,        -- pre-winsorisation, so clipping is visible
+    alpha_short  REAL NOT NULL,        -- the membership-scaled alphas actually applied
+    alpha_long   REAL NOT NULL,
+    n_measured   INTEGER NOT NULL,     -- roster size STAMPED at scoring time (never re-read)
+    picks_scored INTEGER NOT NULL,
+    dispersion   REAL,                 -- stdev of this cycle's excess across members
+    created_at   INTEGER NOT NULL,
+    PRIMARY KEY (session_id, member_id)
+);
+
 -- A bot's per-session picks with the price at vote time, so we can score the
 -- bot's realized return next week (its "accuracy"). Mirrors `votes` but keeps
 -- the weight + entry price + thesis the consensus tally doesn't need.
@@ -369,6 +390,18 @@ def db() -> Iterator[sqlite3.Connection]:
 
 
 def init_db() -> None:
+    # Voting-power knobs are validated HERE, not only in main.startup, because
+    # the API is 1 of ~17 entrypoints: every unit in backend/jobs/ is its own
+    # process calling init_db() directly. A refusing API does not stop
+    # concord-weekly-power, concord-close-vote or concord-execute, so a bad knob
+    # (say CAPITAL_GAMMA_BPS with one extra zero, which AMPLIFIES large stakes)
+    # would take the website down loudly while the timers quietly re-weighted
+    # the club and traded the result in members' live accounts.
+    from .config import invalid_power_config
+    bad = invalid_power_config()
+    if bad:
+        raise RuntimeError("Refusing to start: invalid voting-power configuration — "
+                           + "; ".join(bad))
     with db() as conn:
         conn.executescript(_SCHEMA)
         _migrate(conn)
@@ -387,7 +420,8 @@ def init_db() -> None:
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Add columns to pre-existing tables (deployed DBs predate these fields)."""
-    _ALLOWED = {"members", "member_settings", "votes", "vote_sessions"}
+    _ALLOWED = {"members", "member_settings", "votes", "vote_sessions",
+                "voting_power_history"}
 
     def cols(t: str) -> set[str]:
         assert t in _ALLOWED, f"unexpected table {t!r}"  # PRAGMA can't be parameterized
@@ -406,6 +440,22 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE members ADD COLUMN {ddl}")
     if "email_verified_at" not in m:
         conn.execute("ALTER TABLE members ADD COLUMN email_verified_at INTEGER")
+    # Membership lifecycle. Until v2 there was NONE — no left_at, no is_active —
+    # so the only departure signal was self-service deletion anonymizing the row
+    # to deleted-N@deleted.invalid. adminview/metrics/watchdog filtered on that
+    # email pattern; reputation.snapshot_power_all and voting._tally_rows did
+    # not, so a departed member could still sit in the voting-power denominator
+    # and still land a ticker in the basket. NULL = active.
+    if "left_at" not in m:
+        conn.execute("ALTER TABLE members ADD COLUMN left_at INTEGER")
+        # Backfill: rows already anonymized by self-service deletion are departed
+        # by definition. Idempotent (guarded on left_at IS NULL), and scoped by
+        # the same email fingerprint the other services already trust.
+        conn.execute(
+            "UPDATE members SET left_at = COALESCE("
+            "  (SELECT s.updated_at FROM member_settings s WHERE s.member_id = members.id),"
+            "  CAST(strftime('%s','now') AS INTEGER)) "
+            "WHERE email LIKE 'deleted-%@deleted.invalid' AND left_at IS NULL")
     if "weight" not in cols("votes"):
         conn.execute("ALTER TABLE votes ADD COLUMN weight REAL NOT NULL DEFAULT 100")
     # Optional per-pick rationale — the "why" a member attaches to a vote.
@@ -441,6 +491,38 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # (accuracy != 0 AND both components 0) is unreachable. Idempotent.
     conn.execute("UPDATE member_settings SET accuracy_short=accuracy, accuracy_long=accuracy "
                  "WHERE accuracy != 0 AND accuracy_short = 0 AND accuracy_long = 0")
+    # Last SUCCESSFULLY read committed capital. Used only by the held-member path:
+    # when a CONNECTED member's balance read fails transiently, they keep this
+    # value in the denominator instead of being dropped from it — dropping them
+    # inflates every survivor's share by 1/(1-share_held) while the held member's
+    # stale dollar power keeps voting.
+    if "last_capital_usd" not in s:
+        conn.execute("ALTER TABLE member_settings ADD COLUMN last_capital_usd REAL NOT NULL DEFAULT 0")
+        # SEED from the last snapshotted power. Without this the column is 0 for
+        # everyone on the first run, so the held-member carry has nothing to
+        # carry and a single transient broker error drops that member out of the
+        # denominator — on a real roster that hands the remaining members a
+        # wildly inflated share of a live-money vote. Idempotent.
+        conn.execute("UPDATE member_settings SET last_capital_usd = voting_power "
+                     "WHERE last_capital_usd = 0 AND voting_power > 0")
+    # The CANONICAL voting weight is the unrounded share; member_settings.voting_power
+    # keeps holding DOLLARS (voting._tally_rows and every web money() call site
+    # read it, and voting.py floors it at 1.0 — a 0..1 share would put every
+    # member under that floor and silently collapse the club to one-member-one-vote).
+    if "voting_power_share" not in s:
+        conn.execute("ALTER TABLE member_settings ADD COLUMN voting_power_share REAL NOT NULL DEFAULT 0")
+    # History rows gain the share + the club context needed to render a snapshot
+    # HONESTLY. Today the member chart shows only a dollar delta, so when someone
+    # else leaves or deposits, every remaining member sees a personal "loss" they
+    # did not cause. share/pool_usd/n_active separate "my standing changed" from
+    # "the pool changed". All nullable and additive — old rows stay readable.
+    v = cols("voting_power_history")
+    for col, ddl in (("share", "share REAL"),
+                     ("pool_usd", "pool_usd REAL"),
+                     ("n_active", "n_active INTEGER"),
+                     ("rank_at_snapshot", "rank_at_snapshot INTEGER")):
+        if col not in v:
+            conn.execute(f"ALTER TABLE voting_power_history ADD COLUMN {ddl}")
     # Ballot lifecycle emails (open / closing-soon). Default ON: a weekly-cadence
     # club lives or dies on members remembering the ballot exists.
     if "email_reminders" not in s:

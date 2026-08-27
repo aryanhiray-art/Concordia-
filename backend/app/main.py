@@ -10,7 +10,7 @@ import json
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .config import cors_origins, insecure_prod_config, settings
+from .config import cors_origins, insecure_prod_config, invalid_power_config, settings
 from .db import audit, init_db, is_armed, kv_get, kv_set
 from .routes import admin, adminmetrics, auth, club, members, program, rh_oauth, stocks, voting
 from .seed import seed_universe
@@ -85,6 +85,14 @@ def _startup() -> None:
             "Refusing to boot: insecure default(s) in prod — "
             + ", ".join(problems)
             + ". Set strong random values in the environment before starting."
+        )
+    # Voting power decides real trades: refuse to boot on a knob that would
+    # silently re-weight the club (see config.invalid_power_config).
+    bad_power = invalid_power_config()
+    if bad_power:
+        raise RuntimeError(
+            "Refusing to boot: invalid voting-power configuration — "
+            + "; ".join(bad_power)
         )
     init_db()
     seed_universe()

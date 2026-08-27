@@ -196,3 +196,89 @@ cd /opt/concord/backend && sudo -u concord ./.venv/bin/python jobs/backup.py
 # list backups
 ls -la /opt/concord/backups/
 ```
+
+## 8. Voting power — turning on v2, and when to tighten it
+
+The score function is selected by `POWER_FORM` inside `POWER_MODEL=blend`:
+
+| | formula |
+|---|---|
+| `legacy` | `raw = 0.5·capShare + 0.5·accShare·conf` (two channels, normalised separately, added) |
+| `merit` | `score = capital^γ · M`, `M = MERIT_MAX_MULTIPLE ^ tanh(accuracy / MERIT_ACCURACY_SCALE)` |
+
+`merit` is one product with one normalisation. That single change is what makes a
+departure a pure renormalisation — `share'ᵢ = shareᵢ / (1 − share_leaver)`, one
+common factor, so pairwise ratios and rank order survive an exit exactly. Under
+`legacy` the two channels inflate by different factors and members who did
+nothing get re-ranked (measured on the live roster: up to 24.7% ratio drift).
+
+**`merit` requires `POWER_MODEL=blend`.** The app refuses to boot otherwise —
+without that guard `POWER_FORM=merit` would silently keep running `legacy`.
+
+### Turning it on
+
+Cold start is exact: with no accuracy anywhere, `M == 1.0` and every member's
+power equals their committed dollars to the cent. On a club that already has
+accuracy it is NOT a no-op — check `/api/admin/panel` for the merit column
+first, then:
+
+```bash
+ssh root@159.195.19.53 "sed -i 's/^POWER_MODEL=blend/POWER_MODEL=blend\nPOWER_FORM=merit/' /opt/concord/.env && systemctl restart concord-api && grep -E '^POWER_' /opt/concord/.env"
+```
+
+Rollback is the same edit back to `legacy`. The transform is read-side only —
+nothing is recomputed, no history is rewritten, no accuracy is lost.
+
+### The share ceiling — leave it OFF until ~50 members
+
+`MAX_VOTING_SHARE` caps any one member's share of the vote, water-filling the
+excess to everyone below. Shares sum to 1, so a ceiling of `C` is
+**unsatisfiable unless `C · N > 1`**, and a `C` only slightly above `1/N` pins
+most of the club and quietly collapses it to one-member-one-vote. Simulated
+pinned fraction by club size:
+
+| ceiling | N=25 | N=50 | N=100 | N=250 | N=1000 |
+|---|---|---|---|---|---|
+| 2%  | impossible | impossible | **22% pinned** | 2.9% | 0.1% |
+| 5%  | 58% | 14% | 2.7% | 0.3% | 0.0% |
+| 10% | 11.6% | **2.6%** | 0.6% | 0.0% | 0.0% |
+| *natural top-1 share* | *22.4%* | *16.5%* | *11.3%* | *5.9%* | *2.4%* |
+
+**Schedule.** Set the ceiling at roughly **2× the natural top share**, never
+below `2/N`. At today's 24 members leave it off — a 10% cap would pin ~12% of
+the club and flatten the largest real contributor rather than bound an outlier.
+
+| club size | `MAX_VOTING_SHARE` |
+|---|---|
+| under 50 | `0.0` (off) |
+| 50+   | `0.10` |
+| 150+  | `0.05` |
+| 500+  | `0.02` |
+
+```bash
+ssh root@159.195.19.53 "printf 'MAX_VOTING_SHARE=0.10\n' >> /opt/concord/.env && systemctl restart concord-api && grep -E '^MAX_VOTING' /opt/concord/.env"
+```
+
+`MAX_VOTING_SHARE_MIN_MEMBERS=0` derives the activation threshold as
+`ceil(2/C)` (10% → 20, 5% → 40, 2% → 100). Startup refuses an impossible pair.
+
+Only a member actually pinned at the ceiling moves relative to the rest — two
+**uncapped** members keep their pairwise ratio through an exit exactly
+(measured 6.7e-16). That is the cap doing its job, not a regression.
+
+### Which knob to turn
+
+`MERIT_ACCURACY_SCALE` is the dial. `MERIT_MAX_MULTIPLE` is the *bound*
+(`M ∈ [1/MM, MM]`, best:worst ≤ MM²) and should be left at 2.0 — for small
+accuracy `tanh(x) ≈ x`, so only the ratio `ln(MM)/scale` matters and the two
+knobs are near-degenerate. Raise `scale` to make records count for less.
+
+`CAPITAL_GAMMA_BPS` must stay at 10000 (γ=1.0) unless identity is verified:
+below 1.0, splitting one stake across k accounts multiplies its weight by
+`k^(1−γ)` — +26% at γ=0.9 with ten accounts, +216% at γ=0.5.
+
+`ACCURACY_INERTIA_REF_N=24` anchors today's club as the reference speed;
+accuracy then moves `max(1, sqrt(N/24))` times more slowly as the club grows
+(2.0× at 96 members, 4.6× at 500). N is read at scoring time and frozen into
+`cycle_scores` — evaluating it at snapshot time would make an exit change N and
+break the exit property above.

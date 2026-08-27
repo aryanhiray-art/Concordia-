@@ -196,6 +196,69 @@ class Settings:
     accuracy_short_weight_bps: int = _int("ACCURACY_SHORT_WEIGHT_BPS", 6000)  # 60% current form
     accuracy_long_weight_bps: int = _int("ACCURACY_LONG_WEIGHT_BPS", 4000)    # 40% career record
     confidence_cycles: int = _int("CONFIDENCE_CYCLES", 12)  # accuracy phase-in length
+    # ── v2 'merit' score form (POWER_FORM) ────────────────────────────────────
+    # 'legacy' = today's ADDITIVE form: raw = cap_w·capShare + acc_w·accShare·conf.
+    # 'merit'  = MULTIPLICATIVE: score_i = capital_i**gamma · M_i, one normalisation.
+    #
+    # The additive form normalises capital and accuracy SEPARATELY and adds them.
+    # That is what makes a departure re-rank the members who stayed: an exit
+    # inflates the capital channel by 1/(1-C_k) and the accuracy channel by
+    # 1/(1-A_k) — two different factors — so survivors are re-weighted by where
+    # their score came from (measured on the live roster: pairwise ratios drift up
+    # to 24.7%). The product form has ONE denominator, so removing k scales every
+    # survivor's share by the single common factor 1/(1-share_k): pairwise ratios
+    # and rank order are preserved EXACTLY. See services/reputation.py.
+    power_form: str = os.environ.get("POWER_FORM", "legacy").strip().lower()
+    # The merit multiplier: M_i = MERIT_MAX_MULTIPLE ** tanh(accuracy_i / SCALE).
+    # tanh saturates, so M is bounded in [1/MM, MM] with NO hard cap or cliff, and
+    # accuracy 0 gives M == 1.0 exactly (cold start = raw stake, to the cent).
+    # MM is the ONLY spread dial: best:worst multiplier can never exceed MM**2.
+    merit_max_multiple: float = _float("MERIT_MAX_MULTIPLE", 2.0)
+    # One unit of track record, in absolute accuracy: 0.010 = 100bps of
+    # vote-weighted excess return vs the benchmark reaches tanh(1)=0.762 of the cap.
+    #
+    # Chosen over the tighter 0.005 for two MEASURED reasons. (1) SATURATION: on
+    # the live roster 0.005 already pushes the best member to 1.94x against a
+    # 2.00x ceiling, so the multiplier stops discriminating exactly where the
+    # competition is; at 0.010 nobody is pinned and the club still spreads
+    # 0.65x..1.67x. (2) FIRST-CYCLE JUMP: one cycle moves a new member's accuracy
+    # by ~3.2% of that cycle's excess, so at 0.005 a single capped cycle was
+    # worth 1.48x; at 0.010 it is 1.24x, and a typical (+2%) cycle moves them
+    # 1.05x rather than 1.09x. A record should take several cycles to build.
+    merit_accuracy_scale: float = _float("MERIT_ACCURACY_SCALE", 0.010)
+    # Winsorises ONE cycle's vote-weighted excess before it enters the EWMA, so a
+    # single freak cycle can't dominate a member's record. Bounds the damage from
+    # a stale/gapped price pair booking a multi-week move as one cycle.
+    accuracy_excess_cap: float = _float("ACCURACY_EXCESS_CAP", 0.10)
+    # GOVERNANCE CEILING ON SHARE — no single member may exceed this fraction of
+    # the vote. 0 = off (the shipped default).
+    #
+    # Enforced by water-filling: anyone above the ceiling is pinned to it and the
+    # excess is redistributed pro-rata among everyone below, repeated until no
+    # one is over. Two properties make this safe rather than a re-run of the old
+    # additive defect: (a) the redistribution is a COMMON factor, so any two
+    # UNCAPPED members keep their pairwise ratio exactly through an exit
+    # (measured 6.7e-16); (b) only a member actually pinned at the ceiling moves
+    # relative to the rest, which is the definition of a cap, not a bug.
+    #
+    # FEASIBILITY IS NOT OPTIONAL: shares sum to 1, so a ceiling of C is
+    # unsatisfiable unless C > 1/N. Worse, a C only slightly above 1/N pins most
+    # of the club and silently collapses it to one-member-one-vote — a 2% cap at
+    # 100 members pins 22% of members. Hence the companion threshold below, and
+    # the hard guard in reputation.snapshot_power_all.
+    max_voting_share: float = _float("MAX_VOTING_SHARE", 0.0)
+    # Club size at which the ceiling switches on. 0 = DERIVE it as ceil(2/C),
+    # the smallest club in which the cap bounds an outlier instead of flattening
+    # everyone (5% -> 40, 2% -> 100 — which is where simulation puts the pinned
+    # fraction under ~5%). Set explicitly only to override that.
+    max_voting_share_min_members: int = _int("MAX_VOTING_SHARE_MIN_MEMBERS", 0)
+    # R1 — inertia grows with the club. The EWMA half-lives are multiplied by
+    # max(1, sqrt(N_measured / REF_N)), so accuracy moves more slowly as more
+    # members are scored. One-sided by construction: a shrinking roster can never
+    # sharpen the score. N is read ONLY at scoring time and STAMPED into
+    # cycle_scores — a member-count term evaluated at SNAPSHOT time would make an
+    # exit change N and destroy the single-factor rescale above. 0 disables.
+    accuracy_inertia_ref_n: int = _int("ACCURACY_INERTIA_REF_N", 24)
     benchmark_symbol: str = os.environ.get("BENCHMARK_SYMBOL", "SPY").strip().upper()
     # While bots are test stand-ins for humans they carry a FAKE stake (capital),
     # so under blend they participate like funded members instead of collapsing to
@@ -308,6 +371,66 @@ def insecure_prod_config() -> list[str]:
     if not settings.fernet_key:
         problems.append("CONCORD_FERNET_KEY")
     return problems
+
+
+def invalid_power_config() -> list[str]:
+    """Voting-power knobs that are out of range. Empty list = safe to boot.
+
+    None of these were validated before v2, and several fail SILENTLY in the
+    direction opposite to their intent — most dangerously CAPITAL_GAMMA_BPS above
+    10000, which AMPLIFIES whale capital instead of dampening it (a typo of one
+    extra zero hands one member nearly the whole vote, with no error). Voting
+    power governs real trades, so a nonsense knob must refuse to boot rather than
+    quietly re-weight the club.
+    """
+    p: list[str] = []
+    if settings.power_form not in ("legacy", "merit"):
+        p.append(f"POWER_FORM={settings.power_form!r} (expected 'legacy' or 'merit')")
+    # POWER_FORM only takes effect inside POWER_MODEL=blend — power.snapshot_all
+    # dispatches on power_model, and reputation.snapshot_power_all (the sole
+    # reader of power_form) is unreachable under 'stake'. Setting merit without
+    # blend therefore boots clean and silently keeps running the legacy formula,
+    # which is the most likely deployment mistake and fails in the direction of
+    # "I believe v2 is live". Refuse it instead.
+    if settings.power_form == "merit" and settings.power_model != "blend":
+        p.append("POWER_FORM=merit requires POWER_MODEL=blend "
+                 f"(got POWER_MODEL={settings.power_model!r}) — merit would be silently ignored")
+    if settings.power_model not in ("stake", "blend"):
+        p.append(f"POWER_MODEL={settings.power_model!r} (expected 'stake' or 'blend')")
+    if not 1.0 < settings.merit_max_multiple <= 5.0:
+        p.append(f"MERIT_MAX_MULTIPLE={settings.merit_max_multiple} (expected 1.0 < x <= 5.0)")
+    if settings.merit_accuracy_scale <= 0:
+        p.append(f"MERIT_ACCURACY_SCALE={settings.merit_accuracy_scale} (expected > 0)")
+    if not 0 < settings.accuracy_excess_cap <= 1.0:
+        p.append(f"ACCURACY_EXCESS_CAP={settings.accuracy_excess_cap} (expected 0 < x <= 1.0)")
+    if not 0.0 <= settings.max_voting_share < 1.0:
+        p.append(f"MAX_VOTING_SHARE={settings.max_voting_share} (expected 0 <= x < 1; 0 = off)")
+    if settings.max_voting_share_min_members < 0:
+        p.append(f"MAX_VOTING_SHARE_MIN_MEMBERS={settings.max_voting_share_min_members} (expected >= 0)")
+    # A ceiling that can never be satisfied by the club it is configured for
+    # would pin every member and collapse the vote to one-member-one-vote.
+    if (settings.max_voting_share > 0 and settings.max_voting_share_min_members > 0
+            and settings.max_voting_share * settings.max_voting_share_min_members <= 1.0):  # noqa: E501
+        p.append(
+            f"MAX_VOTING_SHARE={settings.max_voting_share} is unsatisfiable at "
+            f"MAX_VOTING_SHARE_MIN_MEMBERS={settings.max_voting_share_min_members} "
+            f"(shares sum to 1, so the cap needs > {1/settings.max_voting_share:.0f} members)")
+    if settings.accuracy_inertia_ref_n < 0:
+        p.append(f"ACCURACY_INERTIA_REF_N={settings.accuracy_inertia_ref_n} (expected >= 0)")
+    # gamma > 1 amplifies whales — the exact opposite of the knob's purpose.
+    if not 0 < settings.capital_gamma_bps <= 10000:
+        p.append(f"CAPITAL_GAMMA_BPS={settings.capital_gamma_bps} (expected 0 < x <= 10000; "
+                 "above 10000 AMPLIFIES large stakes)")
+    if settings.accuracy_short_weight_bps + settings.accuracy_long_weight_bps != 10000:
+        p.append("ACCURACY_SHORT_WEIGHT_BPS + ACCURACY_LONG_WEIGHT_BPS must total 10000 "
+                 f"(got {settings.accuracy_short_weight_bps + settings.accuracy_long_weight_bps})")
+    # Under 'merit' there are no additive channels, so these two weight NOTHING.
+    # Refuse rather than let an operator tune a knob that has no effect.
+    if settings.power_form == "merit" and (settings.capital_bps != 5000
+                                           or settings.accuracy_bps != 5000):
+        p.append("CAPITAL_BPS/ACCURACY_BPS are inert under POWER_FORM=merit "
+                 "(the merit form has no additive channels to weight) — unset them")
+    return p
 
 
 settings = Settings()

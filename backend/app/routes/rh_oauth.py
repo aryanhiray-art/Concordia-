@@ -93,6 +93,11 @@ def _finish(member_id: int, code: str, state: str) -> dict:
     try:
         bundle = oauth.exchange_code(code, pending["verifier"], pending["client_id"])
         info = vault.complete_connection(member_id, bundle)
+    except vault.DuplicateAccount as e:
+        # One brokerage account, one member — otherwise the same balance backs
+        # several member rows and multiplies one person's vote. Must be its own
+        # message: "token exchange failed" would send them round the loop again.
+        raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:  # noqa: BLE001
         audit(f"member:{member_id}", "rh_oauth_error", None, {"err": str(e)})
         raise HTTPException(status_code=502, detail="Robinhood token exchange failed — try connecting again")
@@ -161,6 +166,8 @@ def callback(request: Request):
         except Exception:  # noqa: BLE001 — never fail the connect over a snapshot
             pass
         accountsnap.invalidate(pending["member_id"])
+    except vault.DuplicateAccount:
+        return RedirectResponse(f"{web}/connected?status=error&reason=account_already_linked")
     except Exception as e:  # noqa: BLE001
         audit(f"member:{pending['member_id']}", "rh_oauth_error", None, {"err": str(e)})
         return RedirectResponse(f"{web}/connected?status=error&reason=exchange_failed")

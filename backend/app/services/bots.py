@@ -230,12 +230,15 @@ def score_and_reweight(week: str | None = None) -> dict:
     prior week and compound each bot's power by its realized return, recording a
     voting_power_history row + delta — the same shape as members' weekly snapshot.
     """
-    if settings.power_model == "blend":
-        # In blend mode the unified reputation model (reputation.snapshot_power_all)
-        # scores AND weights bots on the same 50/50 formula as humans, so the legacy
-        # multiplicative bot reweight is a no-op — avoid double-writing power.
+    if settings.power_model == "blend" or settings.power_form == "merit":
+        # Under the unified reputation model (reputation.snapshot_power_all) bots
+        # are scored and weighted by the SAME formula as humans, so this legacy
+        # multiplicative reweight is a no-op — avoid double-writing power.
+        # power_form is checked too: it is the operator's stated intent, and a
+        # merit-without-blend misconfiguration must not silently re-arm a
+        # compounding reweight over the majority of the tally.
         return {"week": power.week_start_et(), "scored_from": None, "bots": [],
-                "note": "POWER_MODEL=blend — bots weighted by the unified reputation model"}
+                "note": "unified reputation model owns bot weighting"}
     this_week = week or power.week_start_et()
     prev_week = power.week_start_et(_dt.date.fromisoformat(this_week) - _dt.timedelta(days=1))
     prices = market.quotes([u["symbol"] for u in voting.universe()[: settings.bots_universe_size]])

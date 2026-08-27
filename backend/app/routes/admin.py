@@ -18,7 +18,8 @@ from ..calendar_us import cycle_phase, next_trading_day, today_et
 from ..config import settings
 from ..db import audit, db, is_armed, kv_get, kv_set, set_armed
 from ..robinhood import vault
-from ..services import adminview, alloc, apikeys, bots, executor, invites, power, reconcile, research
+from ..services import (adminview, alloc, apikeys, bots, executor, invites, membership,
+                        power, reconcile, research)
 from ..services import voting as svc
 from .deps import load_member, owner_member_id, require_admin, require_owner
 
@@ -558,6 +559,51 @@ def reconcile_member(member_id: int, dry_run: bool = True, admin: dict = Depends
           {"dry_run": dry_run, "changed": res.get("changed"),
            "promoted": len(res.get("promoted", [])), "demoted": len(res.get("demoted", []))})
     return res
+
+
+class LeaveBody(BaseModel):
+    confirm: str = ""
+    reason: str = "removed by admin"
+
+
+@router.post("/member/{member_id}/leave")
+def member_leave(member_id: int, body: LeaveBody, admin: dict = Depends(require_owner)):
+    """Mark a member as DEPARTED — they stop counting, nothing is erased.
+
+    This is the owner-side counterpart to self-service deletion, for a member who
+    stops participating without deleting their account. It sets members.left_at
+    and nothing else: accuracy, cycles and every voting_power_history row are
+    left exactly as they are, so the removal is reversible and auditable, and the
+    next snapshot simply re-divides the pool over whoever is left. It does NOT
+    touch their brokerage connection or their positions — those are theirs.
+
+    Owner-only (not require_admin): removing a member changes who governs real
+    money. The typed confirmation matches the self-service delete contract.
+    """
+    if (body.confirm or "").strip().upper() != "REMOVE":
+        raise HTTPException(400, "type REMOVE to confirm")
+    m = load_member(member_id)
+    if not m:
+        raise HTTPException(404, "no such member")
+    if m.get("role") == "owner":
+        raise HTTPException(403, "the owner can't be removed — transfer ownership first")
+    changed = membership.set_left(member_id, admin["email"], body.reason)
+    if not changed:
+        return {"ok": True, "already_departed": True, "member_id": member_id}
+    audit(admin["email"], "member_leave", str(member_id), {"reason": body.reason})
+    return {"ok": True, "member_id": member_id, "reason": body.reason}
+
+
+@router.post("/member/{member_id}/reinstate")
+def member_reinstate(member_id: int, admin: dict = Depends(require_owner)):
+    """Undo a removal. The member returns with their record and rank intact —
+    nothing was reset, so there is nothing to rebuild. Anonymized (self-deleted)
+    accounts cannot be reinstated: their identity is genuinely gone."""
+    if not load_member(member_id):
+        raise HTTPException(404, "no such member")
+    if not membership.clear_left(member_id, admin["email"]):
+        raise HTTPException(400, "not reinstatable (never departed, or self-deleted)")
+    return {"ok": True, "member_id": member_id}
 
 
 @router.post("/reconcile")

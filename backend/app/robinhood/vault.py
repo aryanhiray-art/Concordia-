@@ -47,10 +47,34 @@ def take_pending_state(state: str) -> dict | None:
 
 # ─── token bundles ───────────────────────────────────────────────────────────
 
+class DuplicateAccount(Exception):
+    """This brokerage account is already connected to a different member."""
+
+
 def save_connection(member_id: int, bundle: dict, account_number: str | None,
                     agentic_allowed: bool) -> None:
     enc = encrypt_tokens(bundle)
     now = int(time.time())
+    # ONE brokerage account, ONE member. rh_accounts is keyed by member_id, and
+    # account_number carries no UNIQUE constraint, so the same account could back
+    # any number of member rows — and each row resolves its committed capital
+    # from that same balance independently. Ten signups pointed at one $1,000
+    # account would put $10,000 into the voting-power pool off $1,000 of real
+    # money, a straight 10x multiplication of one person's vote. This needs no
+    # second brokerage account, so "you can only have one Robinhood account" is
+    # not the protection it appears to be.
+    if account_number:
+        with db() as conn:
+            clash = conn.execute(
+                "SELECT a.member_id FROM rh_accounts a JOIN members m ON m.id = a.member_id "
+                "WHERE a.account_number = ? AND a.member_id != ? AND a.status = 'connected' "
+                "AND m.left_at IS NULL AND m.email NOT LIKE 'deleted-%@deleted.invalid'",
+                (account_number, member_id)).fetchone()
+        if clash:
+            audit(f"member:{member_id}", "rh_connect_duplicate_blocked", account_number,
+                  {"already_held_by": clash["member_id"]})
+            raise DuplicateAccount(
+                "that brokerage account is already connected to another member of this club")
     with db() as conn:
         conn.execute(
             "INSERT INTO rh_accounts(member_id,account_number,agentic_allowed,enc_tokens,"

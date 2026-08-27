@@ -14,6 +14,7 @@ import time
 from ..calendar_us import at_et, is_sell_day, next_sell_day, now_et, today_et
 from ..config import settings
 from ..db import audit, db
+from . import membership
 
 
 # ─── universe ────────────────────────────────────────────────────────────────
@@ -296,7 +297,15 @@ def symbol_theses(session_id: int, per_symbol: int = 3) -> dict[str, list[dict]]
 
 
 def _tally_rows(conn: sqlite3.Connection, session_id: int) -> list[sqlite3.Row]:
-    """Per-symbol vote rows with total weight + the bot slice of that weight."""
+    """Per-symbol vote rows with total weight + the bot slice of that weight.
+
+    DEPARTED members are excluded by IDENTITY (membership.active_clause), not by
+    deleting their ballots. A member who has left must not put a ticker into a
+    basket that gets traded with other people's money — and because voting_power
+    is floored at 1.0 below, a departed member with zero power still counted as a
+    full vote. Excluding at tally time rather than deleting the row keeps the
+    ballot auditable and means opting out never destroys a vote already cast.
+    """
     return conn.execute(
         "SELECT v.symbol, COUNT(*) AS votes, "
         "       SUM(MAX(COALESCE(s.voting_power,0), 1.0) * COALESCE(v.weight,100)/100.0) AS weight, "
@@ -306,9 +315,9 @@ def _tally_rows(conn: sqlite3.Connection, session_id: int) -> list[sqlite3.Row]:
         "       u.name "
         "FROM votes v "
         "LEFT JOIN member_settings s ON s.member_id=v.member_id "
-        "LEFT JOIN members m ON m.id=v.member_id "
+        "JOIN members m ON m.id=v.member_id "
         "LEFT JOIN universe u ON u.symbol=v.symbol "
-        "WHERE v.session_id=? GROUP BY v.symbol "
+        f"WHERE v.session_id=? AND {membership.active_clause('m')} GROUP BY v.symbol "
         "ORDER BY weight DESC, votes DESC, v.symbol",
         (session_id,),
     ).fetchall()
