@@ -116,8 +116,18 @@ def _clean_display_name(raw: str) -> str:
     return s[:40] or "Member"
 
 
-CONSENT_KIND = "club_agreement_v2"   # v2 2026-07-24: self-service deletion + explicit RH access scope
-PRIVACY_KIND = "privacy_v1"          # the signup checkbox covers the privacy note too
+# Bumped whenever the DOCUMENT changes, not on a schedule: a `kind` has to mean
+# exactly one text, or a stored acceptance stops being evidence of what was
+# agreed to. v3 2026-08-28: weekly cadence throughout, the operator described as
+# one individual rather than a company, and the governing-law clause removed
+# (there is no entity to attach one to). privacy_v2 the same day: login-IP
+# retention and the three processors.
+#
+# Members who accepted v2 stay recorded against v2 — which is still true of them.
+# `consents` is written at signup only and nothing re-asks, so re-acceptance is a
+# conversation the operator has directly, not something this constant triggers.
+CONSENT_KIND = "club_agreement_v3"   # v2 2026-07-24: self-service deletion + explicit RH access scope
+PRIVACY_KIND = "privacy_v2"          # the signup checkbox covers the privacy note too
 
 
 def _record_consent(member_id: int) -> None:
