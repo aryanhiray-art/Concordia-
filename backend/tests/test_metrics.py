@@ -147,7 +147,7 @@ def test_compute_day_on_seeded_fixture():
     assert abs(row["committed_capital_usd"] - 2000.0) < 1e-9   # 1200 (latest) + 800
     assert abs(row["executed_notional_usd"] - 200.0) < 1e-9    # skipped $25 excluded
     assert row["error_count"] == 1
-    assert row["waitlist_count"] is None       # no waitlist table exists
+    assert row["waitlist_count"] == 0          # waitlist table exists; this fixture seeds no rows
 
 
 def test_no_ballot_day_has_null_participation():

@@ -27,8 +27,8 @@ deleted-% anonymization pattern matches adminview.member_rows):
   club's weekly power snapshot most recently observed as of that day.
 - executed_notional_usd / error_count: that day's executor activity
   (status='placed' dollars, status='error' rows).
-- waitlist_count: NULL — no waitlist table exists yet; the sqlite_master probe
-  makes this light up automatically if one lands.
+- waitlist_count: live rows in `waitlist` — the marketing site's capture form
+  landed the table, and the sqlite_master probe picked it up automatically.
 """
 from __future__ import annotations
 

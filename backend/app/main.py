@@ -12,7 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import cors_origins, insecure_prod_config, invalid_power_config, settings
 from .db import audit, init_db, is_armed, kv_get, kv_set
-from .routes import admin, adminmetrics, auth, club, members, program, rh_oauth, stocks, voting
+from .routes import (admin, adminmetrics, auth, club, members, program, public,
+                     rh_oauth, stocks, voting)
 from .seed import seed_universe
 
 app = FastAPI(title="Concord", version="1.0")
@@ -141,3 +142,4 @@ app.include_router(program.router)
 app.include_router(club.router)
 app.include_router(admin.router)
 app.include_router(adminmetrics.router)
+app.include_router(public.router)   # the marketing site — the only unauthenticated routes

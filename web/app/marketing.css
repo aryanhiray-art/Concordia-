@@ -1,0 +1,255 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Concordia — public marketing surface
+   ───────────────────────────────────────────────────────────────────────────
+   Scoped under .mkt so NOTHING here can leak into the member app or the ops
+   console, which share this Next build and have their own (finished) look.
+
+   Two hard-won rules from the member app carry over verbatim:
+
+   1. NO position:fixed decorative layers. globals.css learned this the
+      expensive way — a fixed tint is pinned to the viewport, so content
+      scrolls THROUGH it and the page visibly "transitions" between two
+      backgrounds. Every glow in here is position:absolute inside the section
+      it belongs to, so it travels with the content.
+   2. The BODY must carry a real background-color on phones. Safari 26 ignores
+      <meta theme-color> and samples body's computed background-color for its
+      browser chrome; a transparent body sampled nothing and drew a black bar.
+      Marketing sets body[data-surface="mkt"] and syncs theme-color to match.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.mkt {
+  /* Canvas — deeper and greener than the app's #06080C. The app is a working
+     instrument; the marketing page is a room with the lights low. */
+  --mkt-bg: #050809;
+  --mkt-bg-2: #070c0e;
+  --mkt-ink: #ecf2f0;          /* a hair warmer than the app's cool #F4F7FA */
+  /* Contrast is measured, not eyeballed, because most of the microtype on this
+     page is 11px mono carrying real facts (the ticker, stat captions, the trust
+     row). Ratios against --mkt-bg #050809: ink 17.7, muted 9.4, subtle 7.1 —
+     all above WCAG AAA (7:1), with roughly a doubling of contrast between each
+     tier so the hierarchy still reads. The first pass had subtle at #6d807d,
+     which measured 4.82: legal for AA, but visibly murky at 11px on near-black. */
+  --mkt-muted: #a4b5b2;
+  --mkt-subtle: #8a9d9a;
+
+  --mkt-teal: #2dd4bf;
+  --mkt-green: #34e3a8;
+  --mkt-signal: #5ff3c4;       /* the one hot accent; used sparingly */
+
+  /* Tinted glass, not white glass — borrowed from the reference sites, where
+     panels take a wash of the ACCENT hue rather than plain white at 4%. It
+     keeps a near-black page from going grey and muddy. */
+  --mkt-panel: rgba(52, 227, 168, 0.045);
+  --mkt-panel-2: rgba(52, 227, 168, 0.075);
+  --mkt-hair: rgba(236, 242, 240, 0.09);
+  --mkt-hair-warm: rgba(52, 227, 168, 0.16);
+
+  --mkt-ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  background: var(--mkt-bg);
+  color: var(--mkt-ink);
+  /* NO overflow guard here on purpose. globals.css already sets
+     html,body{overflow-x:hidden}, so a runaway section is contained either
+     way — and putting `overflow-x: clip` on this wrapper would establish a
+     clip box that some engines apply to position:fixed descendants, which is
+     exactly what the marketing nav is. Belt-and-braces would have cost the
+     nav. */
+}
+
+/* Anchor targets sit under a fixed nav, so a raw jump to #record buries the
+   heading behind it. scroll-margin-top is the only correct fix (padding on the
+   target would show up visually). Smooth scrolling is opt-in per surface so the
+   member app's behaviour is untouched. */
+.mkt { scroll-behavior: smooth; }
+.mkt :target,
+.mkt section[id] { scroll-margin-top: 96px; }
+@media (prefers-reduced-motion: reduce) { .mkt { scroll-behavior: auto; } }
+
+/* Body tint so Safari has something to sample (see rule 2 above). Wins over
+   the phone block in globals.css because it is more specific. */
+body[data-surface="mkt"] { background-color: #050809; }
+@media (max-width: 768px) { body[data-surface="mkt"] { background-color: #050809; } }
+
+/* ── Type ──────────────────────────────────────────────────────────────────
+   Both reference sites set their display type at weight 500, not 700, with
+   tight negative tracking and sub-1 leading. That is what reads "editorial"
+   instead of "startup landing page". Sizes use clamp() so the hero is fluid
+   from 360px to 1600px without a single breakpoint. */
+
+.mkt-display {
+  font-family: var(--font-outfit), var(--font-inter), sans-serif;
+  font-weight: 500;
+  letter-spacing: -0.035em;
+  line-height: 0.96;
+  text-wrap: balance;
+}
+/* The floor matters more than the ceiling here: the headline is three full
+   sentences, so at 375px a 2.6rem minimum pushed it to five lines and pushed
+   the CTAs below the fold. 2.15rem keeps it to four and leaves the buttons
+   visible on a small phone. The vw term still governs everything above ~360px. */
+.mkt-h1 { font-size: clamp(2.15rem, 7.2vw, 5.6rem); }
+.mkt-h2 { font-size: clamp(2rem, 4.4vw, 3.4rem); line-height: 1.0; }
+.mkt-h3 { font-size: clamp(1.25rem, 2vw, 1.6rem); line-height: 1.12; letter-spacing: -0.025em; }
+
+/* Mono microtype — eyebrows, labels, stat captions, nav meta. Uppercase with
+   wide tracking; this is the texture that ties the whole page together. */
+.mkt-mono {
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.mkt-lead {
+  font-size: clamp(1rem, 1.35vw, 1.15rem);
+  line-height: 1.62;
+  color: var(--mkt-muted);
+  text-wrap: pretty;
+}
+
+/* ── Surfaces ────────────────────────────────────────────────────────────── */
+.mkt-card {
+  position: relative;
+  border: 1px solid var(--mkt-hair);
+  border-radius: 20px;
+  background: var(--mkt-panel);
+  transition: border-color 0.45s var(--mkt-ease), background 0.45s var(--mkt-ease), transform 0.45s var(--mkt-ease);
+}
+.mkt-card-hover:hover {
+  border-color: var(--mkt-hair-warm);
+  background: var(--mkt-panel-2);
+  transform: translateY(-3px);
+}
+
+/* Section glow. position:ABSOLUTE (never fixed) — it scrolls with its
+   section, so there is no seam for content to cross. */
+.mkt-glow {
+  position: absolute;
+  pointer-events: none;
+  z-index: 0;
+  border-radius: 9999px;
+  filter: blur(90px);
+  opacity: 0.5;
+}
+
+/* Hairline rule that fades at both ends — cleaner than a full-width border
+   on a dark page, where a hard 1px line reads as a scar. */
+.mkt-rule {
+  height: 1px;
+  border: 0;
+  background: linear-gradient(90deg, transparent, var(--mkt-hair) 18%, var(--mkt-hair) 82%, transparent);
+}
+
+/* ── Pills & buttons ─────────────────────────────────────────────────────── */
+.mkt-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 9999px;
+  border: 1px solid var(--mkt-hair);
+  background: var(--mkt-panel);
+  padding: 0.4rem 0.85rem;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--mkt-muted);
+}
+
+.mkt-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 9999px;
+  padding: 0.82rem 1.5rem;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  transition: transform 0.3s var(--mkt-ease), background 0.3s var(--mkt-ease),
+              border-color 0.3s var(--mkt-ease), box-shadow 0.3s var(--mkt-ease), color 0.3s var(--mkt-ease);
+}
+.mkt-btn:active { transform: scale(0.975); }
+
+.mkt-btn-primary {
+  background: var(--mkt-ink);
+  color: #04100c;
+  border: 1px solid transparent;
+}
+.mkt-btn-primary:hover {
+  background: #fff;
+  box-shadow: 0 10px 34px -12px rgba(95, 243, 196, 0.55);
+}
+
+.mkt-btn-ghost {
+  border: 1px solid var(--mkt-hair);
+  color: var(--mkt-ink);
+  background: transparent;
+}
+.mkt-btn-ghost:hover { border-color: var(--mkt-hair-warm); background: var(--mkt-panel); }
+
+/* ── Numerals (01 / 02 / 03) ─────────────────────────────────────────────── */
+.mkt-num {
+  font-family: var(--font-outfit), sans-serif;
+  font-weight: 600;
+  font-size: clamp(2.4rem, 4.6vw, 3.6rem);
+  line-height: 0.85;
+  letter-spacing: -0.05em;
+  background: linear-gradient(160deg, rgba(236, 242, 240, 0.55), rgba(52, 227, 168, 0.14));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Marquee ─────────────────────────────────────────────────────────────── */
+/* Two identical tracks side by side, translated by exactly -50% of the pair.
+   Because both halves are the same width the wrap is seamless at any speed. */
+.mkt-marquee { display: flex; width: max-content; will-change: transform; animation: mkt-scroll var(--mkt-dur, 40s) linear infinite; }
+.mkt-marquee-track { display: flex; align-items: center; flex: none; }
+@keyframes mkt-scroll { from { transform: translate3d(0,0,0); } to { transform: translate3d(-50%,0,0); } }
+.mkt-marquee-mask {
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+}
+.mkt-marquee-pause:hover .mkt-marquee { animation-play-state: paused; }
+
+/* ── Scroll reveal ───────────────────────────────────────────────────────── */
+/* Opacity+translate only (both compositor properties). .is-in is added by an
+   IntersectionObserver; if JS never runs the .mkt-reveal default below still
+   has to leave content READABLE, so the no-JS fallback un-hides everything. */
+.mkt-reveal { opacity: 0; transform: translateY(18px); transition: opacity 0.85s var(--mkt-ease), transform 0.85s var(--mkt-ease); }
+.mkt-reveal.is-in { opacity: 1; transform: none; }
+.no-js .mkt-reveal { opacity: 1; transform: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .mkt-reveal { opacity: 1 !important; transform: none !important; transition: none !important; }
+  .mkt-marquee { animation: none !important; }
+  .mkt-caret { animation: none !important; }
+  .mkt-btn, .mkt-card { transition: none !important; }
+}
+
+/* ── Misc ────────────────────────────────────────────────────────────────── */
+.mkt-caret { display: inline-block; width: 2px; animation: mkt-blink 1.05s steps(2, start) infinite; }
+@keyframes mkt-blink { to { opacity: 0; } }
+
+.mkt-grain::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.032;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 180px 180px;
+}
+
+.mkt a:focus-visible, .mkt button:focus-visible, .mkt input:focus-visible, .mkt summary:focus-visible {
+  outline: 2px solid var(--mkt-signal);
+  outline-offset: 3px;
+  border-radius: 8px;
+}

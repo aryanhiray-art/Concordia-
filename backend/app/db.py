@@ -359,8 +359,22 @@ CREATE TABLE IF NOT EXISTS daily_metrics (
     committed_capital_usd REAL NOT NULL DEFAULT 0,    -- latest weekly equity sum as of this day
     executed_notional_usd REAL NOT NULL DEFAULT 0,    -- $ placed by the executor this day
     error_count           INTEGER NOT NULL DEFAULT 0, -- execution errors this day
-    waitlist_count        INTEGER,                    -- NULL until a waitlist table exists
+    waitlist_count        INTEGER,                    -- live count; NULL only on rows computed before the table existed
     computed_at           INTEGER NOT NULL            -- epoch of the last (re)computation
+);
+
+-- Addresses left on the PUBLIC marketing site (POST /api/public/waitlist).
+-- Deliberately thin, and deliberately NOT members: a row here grants nothing,
+-- is never emailed by the endpoint that writes it, and converts only when the
+-- owner sends an invite by hand. UNIQUE(email) is what lets that unauthenticated
+-- route answer identically whether or not the address is already known — the
+-- insert is an INSERT OR IGNORE, so a duplicate submit cannot be used to probe
+-- who is on the list.
+CREATE TABLE IF NOT EXISTS waitlist (
+    id         INTEGER PRIMARY KEY,
+    email      TEXT NOT NULL UNIQUE,
+    source     TEXT,                         -- which block of the page it came from
+    created_at INTEGER NOT NULL
 );
 
 -- The nightly aggregation (and its first-run backfill) scans events by

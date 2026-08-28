@@ -9,7 +9,8 @@ import { ConfirmEmail } from "@/components/ConfirmEmail";
 import { Nav } from "@/components/Nav";
 import { AdminConsole, AdminDenied } from "@/components/AdminConsole";
 import { LoadingScreen } from "@/components/ui";
-import { isAdminHost } from "@/lib/host";
+import { MarketingSite } from "@/components/marketing/MarketingSite";
+import { isAdminHost, isBetaHost, isDemoHost } from "@/lib/host";
 import { WIZARD_DONE_KEY, WIZARD_SKIP_KEY, getWizardFlag } from "@/components/wizard/flags";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -37,7 +38,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [member, connectedRH, isLegal, pathname, router]);
 
   if (!ready) return <LoadingScreen label="starting concordia" />;
-  if (!member) return <AuthGate notice={signedOutNote} onAuthed={() => refreshMember()} />;
+
+  // ── The public front door ────────────────────────────────────────────────
+  // Signed out at the root of the member site, a visitor now gets the
+  // marketing page instead of a bare sign-in card; sign-in moved to /join.
+  //
+  // Deliberately ONLY "/" — a signed-out deep link (/vote, /account, a link
+  // someone was sent) still lands on AuthGate, so signing in returns them
+  // where they were headed rather than dumping them on a sales page.
+  //
+  // The three sibling hosts keep exactly what they had: admin.* has its own ops
+  // sign-in, and demo.*/beta.* ARE the pitch — a visitor arrives there to use
+  // the thing, not to read about it.
+  if (!member) {
+    const isPublicFrontDoor =
+      pathname === "/" && !isAdminHost() && !isDemoHost() && !isBetaHost();
+    if (isPublicFrontDoor) return <MarketingSite />;
+    return <AuthGate notice={signedOutNote} onAuthed={() => refreshMember()} />;
+  }
 
   // admin.voteconcordia.com: same accounts, entirely different shell — no Nav,
   // no wizard/overview, no member banners. Ops console for owner/admin, a clean
