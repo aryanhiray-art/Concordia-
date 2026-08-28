@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { ConnectCard } from "@/components/ConnectCard";
+import { PageHeader } from "@/components/PageHeader";
 import { AllocationCard } from "@/components/AllocationCard";
 import { MemberKeys } from "@/components/MemberKeys";
 import { Profile } from "@/components/Profile";
@@ -26,9 +27,7 @@ export default function AccountPage() {
   // gets only the bar (the wizard owns first-time connect).
   return (
     <div className="stagger space-y-5">
-      <header className="enter">
-        <h1 className="font-display text-[34px] font-bold leading-none tracking-tight sm:text-[40px]">Account</h1>
-      </header>
+      <PageHeader title="Account" />
 
       {loaded && !complete && <SetupResumeBar done={done} />}
       {/* name · email · password, one panel, one idiom */}

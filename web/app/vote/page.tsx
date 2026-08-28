@@ -10,7 +10,8 @@ import { useState } from "react";
 import { useAuth } from "@/lib/auth";
 import type { SessionView } from "@/lib/types";
 import { AllocSliders } from "@/components/AllocSliders";
-import { Button, Card, Countdown, LoadingScreen, Pill } from "@/components/ui";
+import { PageHeader } from "@/components/PageHeader";
+import { Button, Card, Countdown, EmptyState, IconTally, LoadingScreen, Pill } from "@/components/ui";
 import { StockLink } from "@/components/StockLink";
 import { fmtTime, fmtTradeDate } from "@/lib/format";
 
@@ -70,7 +71,7 @@ export default function VotePage() {
     return (
       <div className="pt-10">
         <Card className="enter mx-auto max-w-[460px]">
-          <span className="label">Today&apos;s ballot</span>
+          <span className="label">This cycle&apos;s ballot</span>
           <p className="mt-3 text-[13px] text-red">⚠ Couldn&apos;t load the ballot — {sessionError}</p>
           <Button variant="glass" busy={retrying} onClick={retry} className="mt-4">Retry</Button>
         </Card>
@@ -87,23 +88,29 @@ export default function VotePage() {
 
   return (
     <div className="stagger space-y-5">
-      <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
-        <div className="min-w-0">
-          <h1 className="font-display text-[28px] font-bold leading-none tracking-tight sm:text-[34px]">Vote</h1>
-          <div className="mt-2.5 flex flex-wrap items-center gap-2 text-[12.5px] text-muted">
-            <span>{fmtTradeDate(session.trade_date)}</span>
-            {open
-              ? <Pill tone="teal">closes in <b><Countdown to={session.closes_at} /></b></Pill>
-              : <Pill tone="danger">voting closed</Pill>}
-          </div>
-        </div>
-        {/* wraps under the title on a phone, so it left-aligns there and only
-            hugs the right edge once it shares the row with the title */}
-        <div className="text-left sm:text-right">
-          <div className="label !text-[10px]">Your voting power</div>
-          <div className="mt-1.5 font-display text-[27px] font-bold leading-none tnum sm:text-[31px]">{money(power?.power)}</div>
-        </div>
-      </header>
+      <PageHeader
+        title="Vote"
+        stats={[
+          { label: "cycle", value: fmtTradeDate(session.trade_date) },
+          open
+            ? { label: "closes in", value: <Countdown to={session.closes_at} />, tone: "teal" as const }
+            : { label: "ballot", value: "closed" },
+          {
+            label: "your voting power",
+            // as_of_week is null exactly when no voting_power_history row
+            // exists yet (services/power.py:198, and the accountsnap
+            // fallback) — every member's state until the first reweight after
+            // they commit. Printing the accompanying 0.0 as a hard "$0" told
+            // them their vote was worth nothing; an em-dash plus the reason is
+            // the same fact without the false precision.
+            value: power?.as_of_week ? money(power?.power) : "\u2014",
+            muted: !power?.as_of_week,
+            sub: power?.as_of_week
+              ? `as of ${fmtTradeDate(power.as_of_week)}`
+              : "set at the first reweight after you commit",
+          },
+        ]}
+      />
 
       {/* [&>*]:min-w-0 is load-bearing, and the sibling of the min-width:0 note
           on .slider in globals.css: a grid item's automatic minimum size is its
@@ -114,7 +121,7 @@ export default function VotePage() {
           row of equal-height panels — when either side grows (a long ballot, a
           full consensus list) the other stretches to match instead of leaving
           a ragged bottom edge (owner call). */}
-      <div className="grid items-stretch gap-5 [&>*]:min-w-0 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+      <div className="grid items-stretch gap-5 [&>*]:min-w-0 lg:min-h-[min(58vh,540px)] lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
         {/* three distinct states: participation actually OFF → AllocSliders'
             turn-it-on-in-Account message; ON but the ballot closed → the
             read-only locked ballot; ON and open → the live ballot. */}
@@ -133,7 +140,12 @@ export default function VotePage() {
               </span>
             </div>
             {basket.length === 0 ? (
-              <p className="my-auto py-7 text-center text-[13px] text-subtle">No votes yet.</p>
+              <EmptyState
+                className="my-auto"
+                icon={IconTally}
+                title="No votes yet"
+                body="The tally builds as members cast their ballots — yours will show here too."
+              />
             ) : (
               <div className="mt-3.5 flex max-h-[min(46vh,400px)] flex-col gap-2.5 overflow-y-auto">
                 {basket.map((b) => (

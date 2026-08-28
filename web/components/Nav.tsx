@@ -45,7 +45,7 @@ export function Nav() {
       <div className="ml-auto flex items-center gap-3">
         {member && (
           <span className="hidden font-display text-[12.5px] font-semibold tnum sm:block">
-            <span className="font-medium text-subtle">power </span>{money(power?.power)}
+            <span className="font-medium text-subtle">power </span>{power?.as_of_week ? money(power?.power) : "—"}
           </span>
         )}
         <button onClick={logout}

@@ -57,9 +57,15 @@ export function Button({
 }
 
 type Tone = "ok" | "teal" | "warn" | "danger" | "neutral";
-export function Pill({ children, tone = "neutral" }: { children: React.ReactNode; tone?: Tone }) {
+export function Pill({ children, tone = "neutral", plain = false }: {
+  children: React.ReactNode;
+  tone?: Tone;
+  /** The pill carries a phrase with a figure in it (a countdown, an amount)
+   *  rather than a one-word status — keep it on Inter so the number reads. */
+  plain?: boolean;
+}) {
   const cls = tone === "neutral" ? "" : `pill-${tone}`;
-  return <span className={`pill ${cls}`}>{children}</span>;
+  return <span className={`pill ${cls} ${plain ? "pill-plain" : ""}`}>{children}</span>;
 }
 
 export function Dot({ tone = "ok", pulse = false }: { tone?: "ok" | "warn" | "danger" | "gray"; pulse?: boolean }) {
@@ -87,6 +93,58 @@ export function AllocRow({ ticker, pct, votes, max }: { ticker: string; pct?: nu
       <span className="w-[44px] text-right font-display text-[13px] font-semibold text-muted tnum">
         {pct != null ? `${pct}%` : votes}
       </span>
+    </div>
+  );
+}
+
+/* ── Empty states ──────────────────────────────────────────────────────────
+   A bare sentence in the middle of a card reads as a failed load rather than
+   as "nothing here yet" — and on /vote that sentence IS the first thing a new
+   member sees on the screen they are supposed to use. One shape for all of
+   them: a quiet icon, what the state is, and what happens next.
+
+   Icons are drawn here rather than pulled from a set so they share the 20px
+   box, 1.6 stroke and round cap the rest of the app uses, and inherit
+   currentColor from the tile. */
+
+function EmptyIcon({ children }: { children: React.ReactNode }) {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+      strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      {children}
+    </svg>
+  );
+}
+
+/** Ballot slot — for "you have not picked anything yet". */
+export const IconBallot = (
+  <EmptyIcon>
+    <path d="M5 10.5V19a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-8.5" />
+    <path d="M3 10.5h18l-2.2-3.3A2 2 0 0 0 17.1 6H6.9a2 2 0 0 0-1.7.9Z" />
+    <path d="M12 3v3" />
+  </EmptyIcon>
+);
+
+/** Rising bars — for "no tally yet". */
+export const IconTally = (
+  <EmptyIcon>
+    <path d="M4 20V13" /><path d="M9.3 20V8" /><path d="M14.7 20v-4.5" /><path d="M20 20V4" />
+  </EmptyIcon>
+);
+
+export function EmptyState({
+  icon, title, body, className = "",
+}: { icon: React.ReactNode; title: string; body: React.ReactNode; className?: string }) {
+  return (
+    <div className={`flex flex-col items-center gap-3 px-4 py-9 text-center ${className}`}>
+      <span aria-hidden
+        className="grid h-11 w-11 place-items-center rounded-[13px] border border-hair bg-white/[0.03] text-teal">
+        {icon}
+      </span>
+      <div>
+        <p className="font-display text-[14px] font-semibold text-ink">{title}</p>
+        <p className="mx-auto mt-1 max-w-[34ch] text-[12.5px] leading-relaxed text-subtle">{body}</p>
+      </div>
     </div>
   );
 }

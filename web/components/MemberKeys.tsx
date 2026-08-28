@@ -61,7 +61,7 @@ export function MemberKeys() {
         <span className="text-[11.5px] text-subtle">connect your own bot</span>
       </div>
       <p className="mt-1.5 text-[13px] text-muted">
-        Let your own program cast your daily vote — same voting power, same ballot, no money moved.
+        Let your own program cast your vote each cycle — same voting power, same ballot, no money moved.
       </p>
 
       <div className="mt-4 flex flex-wrap items-end gap-2.5">

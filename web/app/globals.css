@@ -2,15 +2,29 @@
 @tailwind components;
 @tailwind utilities;
 
+/* The app and the public site are one product and now share one language.
+   These values are the `.mkt` block in app/marketing.css, brought inward:
+
+   * The canvas drops to #050809. The old #06080C was a blue-black; against a
+     mint accent it read cold and slightly plastic.
+   * Ink/muted/subtle move off the cool blue-grey ramp (#9AA7B4 / #7E8A98) onto
+     a neutral one measured against the canvas — 17.7 / 9.4 / 7.1 contrast, all
+     above WCAG AAA. The old --subtle measured 4.6 and was the reason small
+     labels looked washed out.
+   * Panels take a wash of the ACCENT rather than white. White at 4% on a
+     near-black page goes grey and muddy; the same opacity of mint keeps the
+     surface tinted and alive. This is the single biggest visual change, since
+     every card, input and pill in the app is built on --panel. */
 :root {
   color-scheme: dark;
-  --bg: #06080c;
-  --panel: rgba(255, 255, 255, 0.04);
-  --panel2: rgba(255, 255, 255, 0.06);
-  --ink: #f4f7fa;
-  --muted: #9aa7b4;
-  --subtle: #7e8a98;
-  --hair: rgba(255, 255, 255, 0.1);
+  --bg: #050809;
+  --panel: rgba(52, 227, 168, 0.045);
+  --panel2: rgba(52, 227, 168, 0.075);
+  --ink: #ecf2f0;
+  --muted: #a4b5b2;
+  --subtle: #8a9d9a;
+  --hair: rgba(236, 242, 240, 0.09);
+  --hair-warm: rgba(52, 227, 168, 0.16);
   --teal: #2dd4bf;
   --teal-deep: #0fa896;
   --green: #34e3a8;
@@ -71,8 +85,8 @@ body { background: transparent; }
    background necessarily covers the fixed layers, so they are switched off
    here rather than left painting invisibly. Desktop keeps the full aurora. */
 @media (max-width: 768px) {
-  html { background: #091416; }
-  body { background-color: #091416; }   /* ← Safari 26 samples THIS for its UI */
+  html { background: #050809; }
+  body { background-color: #050809; }   /* ← Safari 26 samples THIS for its UI */
   .bgfx,
   .aurora { display: none; }
 }
@@ -96,12 +110,12 @@ body { background: transparent; }
 /* frosted glass — replicated exactly from Concordia shell.css */
 .glass {
   position: relative;
-  background: rgba(12, 16, 22, 0.5);
-  border: 1px solid var(--glassbd, rgba(255, 255, 255, 0.1));
-  border-radius: 18px;
+  background: var(--panel);
+  border: 1px solid var(--glassbd, var(--hair));
+  border-radius: 20px;
   -webkit-backdrop-filter: blur(22px) saturate(160%);
   backdrop-filter: blur(22px) saturate(160%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 18px 46px -26px rgba(0, 0, 0, 0.8);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 18px 46px -26px rgba(0, 0, 0, 0.85);
 }
 .glass-2 { background: var(--panel2); }
 
@@ -128,9 +142,13 @@ body { background: transparent; }
 /* ── Label / inputs ─────────────────────────────────────────────────────── */
 .label {
   display: block;
-  font: 600 11.5px/1 var(--font-inter), sans-serif;
-  letter-spacing: 0.08em;
+  /* Mono, not Inter. Every card header in the app is a .label, so this one
+     rule is what makes the app read like the site — the microtype is the
+     texture that ties the two surfaces together. */
+  font: 500 10.5px/1 var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
+  font-variant-numeric: tabular-nums slashed-zero;
   color: var(--subtle);
 }
 .input {
@@ -152,7 +170,14 @@ body { background: transparent; }
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font: 600 12px/1 var(--font-inter), sans-serif;
+  font: 500 11px/1 var(--font-mono), ui-monospace, monospace;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  /* Pills carry money ("$1,000 buying power"), and JetBrains Mono's default
+     zero is DOTTED — at 10.5px on a dark ground that dot reads as the crossbar
+     of an 8, so $1,000 looked like $1,080. Slashed zero is unmistakable, and
+     tabular figures stop the pill resizing as a number ticks. */
+  font-variant-numeric: tabular-nums slashed-zero;
   color: var(--muted);
   background: var(--panel2);
   border: 1px solid var(--hair);
@@ -161,6 +186,18 @@ body { background: transparent; }
   white-space: nowrap;
 }
 .pill b { color: var(--ink); font-weight: 700; }
+
+/* Mono uppercase is right for a STATUS token — CLOSED, EXECUTED, CONNECTED.
+   It is wrong for a pill that carries a phrase with a live figure in it: it
+   uppercases the number to the same weight and rhythm as the words around it,
+   so "closes in 15h 15m" loses the only part a member is reading. Phrase pills
+   keep the original Inter setting, with the figure emphasised. */
+.pill-plain {
+  font: 500 12px/1 var(--font-inter), sans-serif;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.pill-plain b { font-weight: 700; font-variant-numeric: tabular-nums; }
 .pill-ok { color: var(--green); border-color: rgba(52, 227, 168, 0.32); background: rgba(52, 227, 168, 0.08); }
 .pill-teal { color: var(--teal); border-color: rgba(45, 212, 191, 0.32); background: rgba(45, 212, 191, 0.08); }
 .pill-warn { color: var(--amber); border-color: rgba(245, 196, 81, 0.32); background: rgba(245, 196, 81, 0.08); }
@@ -172,9 +209,9 @@ body { background: transparent; }
   align-items: center;
   justify-content: center;
   gap: 9px;
-  font: 700 14px/1 var(--font-inter), sans-serif;
-  padding: 12px 18px;
-  border-radius: 12px;
+  font: 600 14px/1 var(--font-inter), sans-serif;
+  padding: 12px 20px;
+  border-radius: 9999px;
   border: 1px solid transparent;
   cursor: pointer;
   transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s, border-color 0.15s;
@@ -182,12 +219,12 @@ body { background: transparent; }
 .btn:disabled { opacity: 0.5; cursor: default; transform: none !important; }
 .btn-go {
   color: #04201c;
-  background: linear-gradient(150deg, #3fe9d2, #0fa896);
-  box-shadow: 0 16px 36px -16px rgba(45, 212, 191, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  background: linear-gradient(150deg, var(--green), var(--teal-deep));
+  box-shadow: 0 10px 30px -14px rgba(45, 212, 191, 0.5);
 }
-.btn-go:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 20px 42px -16px rgba(45, 212, 191, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.5); }
+.btn-go:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 16px 38px -14px rgba(45, 212, 191, 0.65); }
 .btn-glass { color: var(--ink); background: var(--panel2); border-color: var(--hair); }
-.btn-glass:hover:not(:disabled) { border-color: rgba(255, 255, 255, 0.24); transform: translateY(-1px); }
+.btn-glass:hover:not(:disabled) { border-color: var(--hair-warm); transform: translateY(-1px); }
 .btn-ok { color: var(--green); background: rgba(52, 227, 168, 0.1); border-color: rgba(52, 227, 168, 0.32); }
 .btn-ok:hover:not(:disabled) { background: rgba(52, 227, 168, 0.18); }
 .btn-danger { color: var(--red); background: transparent; border-color: rgba(255, 107, 107, 0.32); }
@@ -211,8 +248,8 @@ body { background: transparent; }
 .mark svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
 
 /* ── Allocation bars ────────────────────────────────────────────────────── */
-.bar { height: 9px; border-radius: 6px; background: rgba(255, 255, 255, 0.06); overflow: hidden; }
-.bar > i { display: block; height: 100%; border-radius: 6px; background: linear-gradient(90deg, var(--teal), var(--teal-deep)); transition: width 0.5s cubic-bezier(0.2, 0, 0, 1); }
+.bar { height: 7px; border-radius: 999px; background: rgba(236, 242, 240, 0.07); overflow: hidden; }
+.bar > i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--teal), var(--green)); transition: width 0.5s cubic-bezier(0.2, 0, 0, 1); }
 
 /* ── Spinner + motion ───────────────────────────────────────────────────── */
 .spin { width: 16px; height: 16px; border: 2px solid rgba(4, 32, 28, 0.4); border-top-color: #04201c; border-radius: 50%; animation: sp 0.7s linear infinite; }
@@ -368,7 +405,7 @@ body { background: transparent; }
   overflow: hidden; background: rgba(12, 16, 22, 0.55);
   border: 1px solid var(--glassbd, rgba(255,255,255,0.1));
   -webkit-backdrop-filter: blur(22px) saturate(160%); backdrop-filter: blur(22px) saturate(160%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 18px 46px -26px rgba(0, 0, 0, 0.8);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 18px 46px -26px rgba(0, 0, 0, 0.85);
   animation: navin 0.55s cubic-bezier(0.55,0.05,0.18,1) both;
 }
 @keyframes navin { from { opacity: 0; transform: translateX(-50%) translateY(-12px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
@@ -500,7 +537,9 @@ a:focus-visible, button:focus-visible { background: rgba(255,255,255,0.06); }
 .cine .donutring .ctr { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; }
 .cine .donutring .ctr b { font: 700 38px/1 var(--font-outfit); }
 .cine .donutring .ctr span { font: 600 11px/1 var(--font-inter); letter-spacing: .12em; text-transform: uppercase; color: var(--subtle); margin-top: 5px; }
-.cine .leg { display: flex; flex-direction: column; gap: 13px; min-width: 230px; transition: opacity .28s var(--ease); }
+/* .15s, and paintLegend()'s LEG_SWAP is deliberately longer than it: the row
+   rewrite has to land AFTER this fade has finished, never during it. */
+.cine .leg { display: flex; flex-direction: column; gap: 13px; min-width: 230px; transition: opacity .15s var(--ease); }
 .cine .leg .row { display: flex; align-items: center; gap: 12px; }
 .cine .leg .sw { width: 13px; height: 13px; border-radius: 4px; flex: none; box-shadow: 0 0 11px -1px currentColor; }
 .cine .leg .nm { font: 500 14.5px/1.1 var(--font-inter); flex: 1; }
@@ -517,7 +556,18 @@ a:focus-visible, button:focus-visible { background: rgba(255,255,255,0.06); }
 .cine .scrolldn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; animation: bob 1.8s ease-in-out infinite; }
 @keyframes bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(5px); } }
 .cine #hold { position: relative; z-index: 1; max-width: 1080px; margin: 0 auto; padding: 60px max(20px,4vw) 50px; }
-html, body { overflow-x: hidden; }
+/* html ONLY — deliberately not `html, body`.
+   Because html's overflow-x is not `visible`, giving body the same declaration
+   made body's overflow-y compute to `auto`, which turns body into a scroll
+   container — and a scroll container silently defeats EVERY position:sticky
+   descendant on the page (measured: sticky elements resolved to top -738 with
+   the body half present, and to 0 the moment it was removed; the note at the
+   top of components/admin/OpsHeader.tsx describes working around exactly this).
+   html's clip alone still prevents horizontal page scroll — documentElement
+   .scrollWidth stays at the viewport width on a 360px screen — so nothing is
+   lost. Nothing in the member app or the console uses sticky today, so this
+   cannot resurrect an unintended one; it just lets the marketing page use it. */
+html { overflow-x: hidden; }
 .cine .holdrow { display: flex; align-items: center; gap: 20px; padding: 16px 12px; margin: 0 -12px; border-radius: 12px; border-top: 1px solid var(--hair); cursor: pointer; transition: background .2s; }
 .cine .holdrow:first-of-type { border-top: none; }
 .cine .holdrow:hover { background: rgba(255,255,255,.03); }
@@ -554,6 +604,51 @@ html, body { overscroll-behavior-x: none; }
 .cine .legback:hover { color: var(--ink); background: rgba(45,212,191,.1); border-color: rgba(45,212,191,.3); }
 .cine .legback svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 .cine .donutring .ctr span { max-width: 168px; text-align: center; white-space: normal; line-height: 1.25; }
+
+/* Phones: the drill-in used to render UNDER the sector list it replaced.
+   .alloc is one flex row (donut 280 + gap 56 + a legend whose max-content runs
+   to ~250 on the longest sector names), so below ~590px the legend wraps onto
+   its own line — and once the lines wrap, `align-content: stretch` shares the
+   leftover height between them while `align-items: center` centres the legend
+   inside its share. That makes the legend's POSITION a function of its own
+   height: swapping a six-row sector list for a four-row drill-down slid it
+   ~100px down the stage in the same frame the rows were rewritten, so the
+   outgoing list and the incoming one occupied different boxes and iOS painted
+   both. Wider viewports are NOT immune to the shift — an unwrapped line's cross
+   size is max(donut 280, legend), and eight sector rows are ~335 tall, so a
+   desktop legend still slides ~65px on the same swap. They are immune to the
+   ARTIFACT only because they re-rasterize honestly; what protects them is
+   paintLegend() swapping the rows at a settled opacity 0 (LEG_SWAP 190ms >
+   this file's `.cine .leg` .15s fade). Keep that inequality if either number
+   is ever touched.
+   A top-pinned column removes the feedback loop outright: the donut and the
+   legend's top edge sit at fixed offsets, and content only ever grows or
+   shrinks downward, so there is no vacated box for a stale list to survive in.
+   The ring is sized off the SHORT side too — top-pinning a 280px ring on a
+   small phone would push the legend past the fold. */
+@media (max-width: 640px) {
+  .cine .alloc {
+    flex-wrap: nowrap;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 20px;
+    padding: 86px 22px 100px;   /* clear the floating nav pill and the slide dots */
+  }
+  .cine .donutring { width: min(216px, 58vw, 26vh); height: min(216px, 58vw, 26vh); }
+  .cine .donutring .ctr b { font-size: 30px; }
+  .cine .donutring .ctr span { max-width: 62%; }
+  .cine .leg { width: 100%; max-width: 340px; min-width: 0; }
+
+  /* The prev/next arrows are pinned to the STAGE's vertical centre, which in
+     this column layout is the middle of the legend — they landed on top of a
+     holding row, and being z-index 5 they swallowed the tap that should have
+     opened that stock. The stage already handles pointer swipes (the
+     pointerdown/move/up trio in CinematicOverview) and the dots are tappable,
+     so on a phone the arrows are redundant navigation sitting on live
+     controls. Hidden rather than repositioned: anywhere else on this slide is
+     either the donut or the dots. */
+  .cine .arw { display: none; }
+}
 
 /* ═══ Stock detail slide-over (StockPanel) ══════════════════════════════
    Portaled to <body> — in-page fixed overlays break under ancestor

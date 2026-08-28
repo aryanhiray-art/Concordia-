@@ -14,6 +14,7 @@ import type { Alloc, SessionView } from "@/lib/types";
 import { mergePick } from "./AddToBallot";
 import { StockLink } from "./StockLink";
 import { StockSearch } from "./StockSearch";
+import { EmptyState, IconBallot } from "./ui";
 
 /** Mirrors backend settings.max_picks (MAX_PICKS, default 20). */
 const MAX_PICKS = 20;
@@ -124,9 +125,11 @@ export function AllocSliders({
       </div>
 
       {rows.length === 0 ? (
-        <p className="py-7 text-center text-[13px] text-subtle">
-          No picks yet — search above to add a name.
-        </p>
+        <EmptyState
+          icon={IconBallot}
+          title="Your ballot is empty"
+          body="Search above to add a name. Your voting power splits across whatever you pick."
+        />
       ) : (
         <div className="mt-1 max-h-[min(44vh,380px)] overflow-y-auto">
           {rows.map((r, i) => (

@@ -178,7 +178,7 @@ export function ConnectCard({ member, onChange }: { member: Member; onChange: ()
           <div className="mt-5 flex items-center justify-between gap-4 border-t border-white/10 pt-5">
             <div>
               <div className="font-display text-[15px] font-semibold">
-                {optedIn ? <span className="text-teal">Participating today</span> : "Sitting out today"}
+                {optedIn ? <span className="text-teal">Participating this cycle</span> : "Sitting out this cycle"}
               </div>
             </div>
             <Toggle on={optedIn} onChange={toggle} />

@@ -115,6 +115,12 @@ export function CinematicOverview() {
   const { openStock } = useStockPanel();  // stable callback from the app-level provider
   const root = useRef<HTMLDivElement>(null);
   const counted = useRef(false); // the hero count-up is a first-paint flourish, not a per-poll one
+  // Which sector the member has drilled into, if any. It has to live OUTSIDE
+  // the effect: the effect re-runs whenever itemsKey changes, and itemsKey
+  // carries every holding's dollar value, so a price tick on the 5-minute
+  // snapshot poll re-runs it — which used to bounce a member reading a
+  // sector's stocks back out to the sector list with no interaction at all.
+  const drilled = useRef<string | null>(null);
   const [lastPicks, setLastPicks] = useState<{ symbol: string; name?: string; weight?: number }[]>([]);
   const loaded = accountReady;              // the snapshot attempt has settled
   const failed = !acc && !!accountError;    // …and we still have no numbers at all
@@ -255,6 +261,19 @@ export function CinematicOverview() {
     const pctOf = (v: number, tot: number) => Math.round((v / (tot || 1)) * 1000) / 10;
 
     const CC = 2 * Math.PI * 80, GAP = 2.2, arcsEl = $("#arcs"), legEl = $("#leg"), ringEl = $("#donutring");
+    // The legend rewrite is deferred so the outgoing rows can fade, and LEG_SWAP
+    // has to stay LONGER than `.cine .leg`'s opacity transition. It used to be
+    // shorter than it (150ms into a 280ms fade) and flipped opacity back to 1 in
+    // the same frame, so the element was mutated while its own transition was
+    // still running — iOS never re-rasterized the composited layer for that, and
+    // a phone kept the sector rows painted at their pre-drill coordinates
+    // underneath the drilled ones. Fading fully out first means there is never a
+    // live animation to interrupt.
+    const LEG_SWAP = 190;
+    // …and only one rewrite may be pending. Without this an earlier callback can
+    // land after a later one (a second drill, or this effect re-running on the
+    // 5-minute snapshot poll) and repaint a list the member already left.
+    let legTimer: ReturnType<typeof setTimeout> | null = null;
     function paintArcs(slices: Slc[]) {
       while (arcsEl.children.length < slices.length)
         arcsEl.insertAdjacentHTML("beforeend", `<circle class="arc" cx="100" cy="100" r="80" stroke="#2DD4BF" stroke-dasharray="0 ${CC.toFixed(2)}"/>`);
@@ -282,18 +301,21 @@ export function CinematicOverview() {
       }
     }
     function paintLegend(slices: Slc[], sector: string | null) {
+      if (legTimer) clearTimeout(legTimer);
       legEl.style.opacity = "0";
-      setTimeout(() => {
+      legTimer = setTimeout(() => {
+        legTimer = null;
         const back = sector ? `<button class="legback" data-back="1"><svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg>All sectors</button>` : "";
         legEl.innerHTML = back + slices.map((x) =>
           `<div class="row" ${x.drill ? `data-sec="${x.key}"` : x.stock ? `data-stock="${x.stock}"` : ""}><span class="sw" style="background:${x.c};color:${x.c}"></span><span class="nm">${x.label}${x.sub ? `<s>${x.sub}</s>` : ""}</span><span class="pc tnum">${x.pc}%</span></div>`).join("");
         legEl.style.opacity = "1";
         (legEl.querySelector("[data-back]") as HTMLElement | null)?.addEventListener("click", (e) => { e.stopPropagation(); renderSectors(); });
         legEl.querySelectorAll("[data-sec]").forEach((el: any) => el.addEventListener("click", (e: any) => { e.stopPropagation(); drillInto(el.getAttribute("data-sec")); }));
-      }, 150);
+      }, LEG_SWAP);
     }
     function pop() { ringEl.classList.remove("pop"); void (ringEl as HTMLElement).offsetWidth; ringEl.classList.add("pop"); }
     function renderSectors() {
+      drilled.current = null;
       if (!items.length) {
         // nothing held, no basket anywhere yet — the account is 100% settled cash
         const cash: Slc = { key: "cash", label: "Cash", sub: "the next buy cycle deploys it",
@@ -313,6 +335,7 @@ export function CinematicOverview() {
     }
     function drillInto(sector: string) {
       const g = bySector[sector]; if (!g) return;
+      drilled.current = sector;
       const sorted = [...g.items].sort((a, b) => (b.val || 0) - (a.val || 0));
       const tot = g.val || sorted.reduce((a, x) => a + (x.val || 0), 0) || 1;
       const base = sectorColor(sector);
@@ -340,7 +363,10 @@ export function CinematicOverview() {
       ? items.map((h) => `<div class="holdrow" data-stock="${h.sym}"><span class="htk">${h.sym}</span><div class="hn"><b>${h.name || h.sym}</b><s>${h.sym}${h.club === false ? ` · <em class="ptag">personal</em>` : ""}</s></div>${hold.length ? pnlCell(h.pnl) : `<span style="flex:1"></span>`}${hold.length ? `<span class="hwt tnum">$${Math.round(h.val || 0).toLocaleString()}</span>` : ""}</div>`).join("")
       : `<div style="color:var(--subtle);font:500 13px/1.6 var(--font-inter);padding:8px 2px">No holdings yet. <a href="/vote" style="color:var(--teal)">Cast your vote →</a></div>`;
 
-    renderSectors();
+    // Restore the drill rather than resetting to sectors — but only if that
+    // sector still exists in the fresh holdings; otherwise fall back cleanly.
+    const keep = drilled.current;
+    if (keep && bySector[keep]) drillInto(keep); else renderSectors();
 
     // ── carousel ──
     const stage = $("#stage");
@@ -382,6 +408,7 @@ export function CinematicOverview() {
     stage.addEventListener("wheel", onWheel, { passive: false });
 
     return () => {
+      if (legTimer) clearTimeout(legTimer);
       document.removeEventListener("keydown", onKey);
       r.removeEventListener("click", onNav);
       window.removeEventListener("pointermove", pm); window.removeEventListener("pointerup", pu);

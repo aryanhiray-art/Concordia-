@@ -36,8 +36,8 @@ export function StepFinish({ onEnter }: { onEnter: () => void }) {
           </div>
           <div className="mt-0.5 text-[12px] leading-relaxed text-subtle">
             {on
-              ? "You vote daily and the decided basket trades your slice."
-              : "Flip on to vote daily and trade the decided basket."}
+              ? "You vote each cycle and the decided basket trades your slice."
+              : "Flip on to vote each cycle and trade the decided basket."}
           </div>
         </div>
         <Toggle on={on} onChange={toggle} />

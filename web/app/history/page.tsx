@@ -13,6 +13,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { ClubHistorySession, ClubHistoryView, MyVoteSession, MyVotesView } from "@/lib/types";
 import { Card, Dots, LoadingScreen, Pill } from "@/components/ui";
+import { PageHeader } from "@/components/PageHeader";
 import { StockLink } from "@/components/StockLink";
 import { fmtTradeDate } from "@/lib/format";
 
@@ -57,13 +58,18 @@ function ClubCycleRow({ s }: { s: ClubHistorySession }) {
         {shown === "closed" && (
           <span className="text-[11px] text-amber/80">sell settled, buy pending</span>
         )}
+        {/* A cycle that decided nothing gets a note ON the header row instead
+            of a second line of its own. As a block it was the same height as a
+            real basket, so a run of them read as the list's main content and
+            buried the cycles that actually traded. */}
+        {s.basket.length === 0 && (
+          <span className="text-[11px] text-subtle">no basket decided</span>
+        )}
       </div>
-      {s.basket.length > 0 ? (
+      {s.basket.length > 0 && (
         <div className="mt-2.5 flex flex-wrap gap-1.5">
           {s.basket.map((sym) => <StockLink key={sym} symbol={sym} />)}
         </div>
-      ) : (
-        <p className="mt-2 text-[12px] text-subtle">no basket</p>
       )}
     </div>
   );
@@ -155,9 +161,7 @@ export default function HistoryPage() {
 
   return (
     <div className="stagger space-y-5">
-      <header className="enter">
-        <h1 className="font-display text-[34px] font-bold leading-none tracking-tight sm:text-[40px]">History</h1>
-      </header>
+      <PageHeader title="History" />
 
       <div className="seg enter" role="tablist" aria-label="History view">
         <button role="tab" aria-selected={tab === "club"} className={tab === "club" ? "on" : ""} onClick={() => setTab("club")}>
@@ -236,7 +240,7 @@ export default function HistoryPage() {
           {mine && (ballots.length === 0 ? (
             <Card>
               <p className="text-[13px] text-subtle">
-                No ballots yet — today&apos;s is on the{" "}
+                No ballots yet — this cycle&apos;s is on the{" "}
                 <Link href="/vote" className="font-semibold text-teal hover:underline">Vote page</Link>.
               </p>
             </Card>
