@@ -27,7 +27,9 @@ MERIT (v2) — a single product, normalised ONCE:
      never exceed MM² — an a-priori bound, not an observed one. MM is the single
      spread dial; lowering it brings members closer together without making them
      equal and without re-ranking anyone. accuracy 0 ⇒ M == 1.0 exactly, so an
-     unscored club weighs exactly its dollars and enabling the form is a no-op.
+     unscored club weighs exactly its dollars AT gamma == 1 (the default) and
+     enabling the form is a no-op. Below gamma 1 the shares are c**gamma
+     normalised, so cold start is proportional to stake but not equal to it.
 
 LEGACY — the additive form, kept as the default and as the rollback:
 
@@ -198,7 +200,8 @@ def _winsorise(x: float) -> float:
     return max(-cap, min(cap, x))
 
 
-def score_cycle(scored_session_id: int, exit_prices: dict[str, float]) -> dict:
+def score_cycle(scored_session_id: int, exit_prices: dict[str, float],
+                claim: bool = False) -> dict:
     """EWMA-update every voter's accuracy from session `scored`'s vote-weighted
     excess return vs the benchmark. entry = that session's captured prices,
     exit = `exit_prices`. Idempotency (scored_at) is the caller's responsibility."""
@@ -282,6 +285,20 @@ def score_cycle(scored_session_id: int, exit_prices: dict[str, float]) -> dict:
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            if claim:
+                # The claim lives INSIDE this transaction. Claiming in a separate
+                # committed statement left two failure windows: a hard kill
+                # between claim and apply sealed a cycle with nothing applied and
+                # the driver query (WHERE scored_at IS NULL) never retried it,
+                # and the compensating release could clear a claim whose EWMA had
+                # already committed, applying a non-idempotent update twice.
+                # One transaction makes both impossible.
+                if conn.execute(
+                        "UPDATE vote_sessions SET scored_at=? WHERE id=? AND scored_at IS NULL",
+                        (now, scored_session_id)).rowcount != 1:
+                    conn.execute("ROLLBACK")
+                    return {"scored_session": scored_session_id, "scored": False,
+                            "reason": "already_claimed", "members": []}
             for mid, (excess, raw, used) in measured.items():
                 row = conn.execute(
                     "SELECT accuracy_short, accuracy_long FROM member_settings WHERE member_id=?", (mid,)
@@ -297,10 +314,10 @@ def score_cycle(scored_session_id: int, exit_prices: dict[str, float]) -> dict:
                     (new, new_short, new_long, now, mid))
                 conn.execute(
                     "INSERT INTO cycle_scores(session_id,member_id,excess,excess_raw,alpha_short,"
-                    "alpha_long,n_measured,picks_scored,dispersion,created_at) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id,member_id) DO NOTHING",
+                    "alpha_long,n_measured,n_members,picks_scored,dispersion,created_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id,member_id) DO NOTHING",
                     (scored_session_id, mid, excess, raw, a_short, a_long,
-                     n_measured, used, dispersion, now))
+                     n_measured, n_members, used, dispersion, now))
                 scored.append({"member_id": mid, "cycle_excess_pct": round(excess * 100, 3),
                                "cycle_excess_raw_pct": round(raw * 100, 3),
                                "winsorised": excess != raw,
@@ -335,34 +352,14 @@ def score_matured_cycles() -> list[dict]:
                 (s["trade_date"],)).fetchone()
         if not nxt:
             continue   # not matured yet — no exit prices captured for a later cycle
-        # CLAIM FIRST, then score. The EWMA is not idempotent, so the claim has to
-        # happen BEFORE the mutation: claiming afterwards leaves a window in which
-        # two concurrent runs both apply the same cycle to every member's accuracy,
-        # and a crash between mutation and claim re-applies it on the next run.
-        with db() as conn:
-            claimed = conn.execute(
-                "UPDATE vote_sessions SET scored_at=? WHERE id=? AND scored_at IS NULL",
-                (int(time.time()), s["id"])).rowcount == 1
-        if not claimed:
-            continue   # someone else is scoring (or already scored) this cycle
-        try:
-            res = score_cycle(s["id"], _prices_for(nxt["id"]))
-        except BaseException:
-            # RELEASE on ANY failure, not just a declined score. The claim is set
-            # before the mutation (it has to be — the EWMA is not idempotent), so
-            # a raised exception, a locked database or a deploy restart would
-            # otherwise leave scored_at stamped on a cycle that was never applied.
-            # The driver query is `WHERE scored_at IS NULL`, so that cycle would be
-            # lost forever — and under the merit form accuracy is the SOLE merit
-            # input, making a lost cycle a permanently mis-priced real-money vote.
-            with db() as conn:
-                conn.execute("UPDATE vote_sessions SET scored_at=NULL WHERE id=?", (s["id"],))
-            raise
+        # score_cycle claims scored_at inside its OWN transaction, atomically with
+        # the EWMA it applies. A cycle is therefore either fully scored and
+        # sealed, or untouched and still retryable — never sealed-but-unapplied
+        # (which the driver's `WHERE scored_at IS NULL` would never revisit) and
+        # never applied twice. No compensating release is needed, so there is no
+        # release path that can race a commit.
+        res = score_cycle(s["id"], _prices_for(nxt["id"]), claim=True)
         if not res.get("scored"):
-            # Nothing was applied — RELEASE the claim so the cycle retries once the
-            # missing prices land, rather than being sealed as permanently scored.
-            with db() as conn:
-                conn.execute("UPDATE vote_sessions SET scored_at=NULL WHERE id=?", (s["id"],))
             continue
         out.append(res)
     if out:
@@ -418,8 +415,10 @@ def merit_multiplier(accuracy: float) -> float:
     being observed on a particular roster:
       * bounded: tanh in (-1,1) so M in (1/MM, MM); overflow is impossible and
         best:worst can never exceed MM**2, whatever anyone's accuracy is;
-      * neutral: accuracy 0 gives M == 1.0 EXACTLY, so cold start equals raw
-        stake to the cent and switching the form on an unscored club is a no-op;
+      * neutral: accuracy 0 gives M == 1.0 EXACTLY. At gamma == 1 (the default)
+        that makes cold start equal raw stake to the cent, so switching the form
+        on an unscored club is a no-op; at gamma < 1 the capital term is
+        c**gamma, so cold start stays proportional but is no longer equal;
       * no cliff: strictly increasing through zero, so an unproven member and a
         proven-bad member are finally different numbers. Under the old
         max(acc,0) they were identical — Chip Charlie at -0.00010, Mega-Cap Max
@@ -459,7 +458,15 @@ def _apply_share_ceiling(shares: dict[int, float]) -> tuple[dict[int, float], se
     ceiling = settings.max_voting_share
     if not ceiling or ceiling <= 0 or not shares:
         return shares, set()
-    n = len(shares)
+    # Count members who actually BEAR share, not raw headcount. A member with
+    # zero committed capital scores 0 and holds 0 share, so they can neither be
+    # capped nor absorb anyone else's excess — counting them made both guards
+    # pass on a roster the ceiling could not actually be satisfied on. With 8
+    # funded members and 52 signed-up-but-unconnected ones a 10% ceiling looked
+    # feasible (0.10 * 60 = 6.0 > 1) while the real bearers could only ever
+    # reach 0.10 * 8 = 0.8, and the water-fill returned a vector summing to 0.8
+    # that aborted the ENTIRE snapshot every run.
+    n = sum(1 for v in shares.values() if v > 0)
     # Threshold derives from the ceiling when unset: below ceil(2/C) members a
     # cap of C pins a large fraction of the club rather than an outlier.
     floor_n = settings.max_voting_share_min_members or math.ceil(2.0 / ceiling)
@@ -482,7 +489,16 @@ def _apply_share_ceiling(shares: dict[int, float]) -> tuple[dict[int, float], se
         rest = [m for m in out if m not in pinned]
         base = sum(out[m] for m in rest)
         if not rest or base <= 0:
-            break
+            # Nobody left who can absorb the excess: the ceiling is not
+            # satisfiable on this roster after all. Returning here would leave
+            # shares summing to less than 1, which the pre-write assertion
+            # correctly rejects — aborting the whole snapshot and freezing the
+            # club's power indefinitely. Abandon the CEILING instead, which
+            # degrades to "uncapped" rather than to "no snapshot at all".
+            audit("system", "voting_ceiling_infeasible", None,
+                  {"ceiling": ceiling, "members": n,
+                   "reason": "no unpinned member could absorb the excess"})
+            return shares, set()
         excess = 1.0 - sum(out.values())
         for m in rest:
             out[m] += excess * out[m] / base
@@ -492,7 +508,7 @@ def _apply_share_ceiling(shares: dict[int, float]) -> tuple[dict[int, float], se
     return out, pinned
 
 
-def snapshot_power_all() -> list[dict]:
+def snapshot_power_all(dry_run: bool = False) -> list[dict]:
     """Blended VP for every ACTIVE member, rescaled to the $ capital pool.
 
     Two score forms (POWER_FORM), one normalisation and one writer:
@@ -627,6 +643,21 @@ def snapshot_power_all() -> list[dict]:
             prev_power[r["member_id"]] = float(r["power"])
 
     out = []
+    if dry_run:
+        # COMPUTE ONLY — no history row, no member_settings write, no audit.
+        # This is what makes the pre-flip check in RUNBOOK section 8 possible:
+        # an operator can see what POWER_FORM=merit would produce while the club
+        # is still running legacy.
+        return [{"member_id": m["member_id"], "is_bot": bool(m["is_bot"]),
+                 "capital": round(caps[m["member_id"]], 2),
+                 "accuracy": round(float(m["accuracy"]), 5),
+                 "merit": round(merit_multiplier(float(m["accuracy"])), 4),
+                 "share": shares[m["member_id"]], "rank": rank_of[m["member_id"]],
+                 "capped": m["member_id"] in pinned,
+                 "power": vps[m["member_id"]],
+                 "delta": (vps[m["member_id"]] - prev_power[m["member_id"]])
+                          if m["member_id"] in prev_power else None}
+                for m in writable]
     # ONE transaction for the whole club. The connection is autocommit
     # (isolation_level=None), so this needs an EXPLICIT BEGIN IMMEDIATE — without
     # it every execute() commits on its own and a crash halfway through leaves
@@ -673,6 +704,50 @@ def snapshot_power_all() -> list[dict]:
            "merit_min": round(min((o["merit"] for o in out), default=1.0), 4),
            "merit_max": round(max((o["merit"] for o in out), default=1.0), 4)})
     return out
+
+
+def preview_forms() -> dict:
+    """What each score form WOULD produce right now, writing nothing.
+
+    Both branches run against the same live balances, so the comparison is
+    apples-to-apples. Used by GET /api/admin/power-preview so the flip can be
+    inspected before it happens rather than discovered afterwards.
+    """
+    import dataclasses
+
+    from .. import config as _cfg
+    base = settings
+    out = {}
+    for form in ("legacy", "merit"):
+        patched = dataclasses.replace(base, power_form=form)
+        globals()["settings"] = patched
+        _cfg.settings = patched
+        try:
+            out[form] = {r["member_id"]: r for r in snapshot_power_all(dry_run=True)}
+        finally:
+            globals()["settings"] = base
+            _cfg.settings = base
+    rows = []
+    for mid, leg in out["legacy"].items():
+        mer = out["merit"].get(mid)
+        if not mer:
+            continue
+        rows.append({
+            "member_id": mid, "is_bot": leg["is_bot"], "capital": leg["capital"],
+            "accuracy": leg["accuracy"], "merit": mer["merit"],
+            "legacy_power": leg["power"], "merit_power": mer["power"],
+            "change_pct": (round((mer["power"] / leg["power"] - 1) * 100, 2)
+                           if leg["power"] else None),
+            "legacy_rank": leg["rank"], "merit_rank": mer["rank"],
+            "capped": mer["capped"],
+        })
+    rows.sort(key=lambda r: -r["merit_power"])
+    return {"form_in_effect": base.power_form, "members": rows,
+            "biggest_gain_pct": max((r["change_pct"] for r in rows
+                                     if r["change_pct"] is not None), default=None),
+            "biggest_loss_pct": min((r["change_pct"] for r in rows
+                                     if r["change_pct"] is not None), default=None),
+            "rank_changes": sum(1 for r in rows if r["legacy_rank"] != r["merit_rank"])}
 
 
 def resolve_and_snapshot() -> dict:

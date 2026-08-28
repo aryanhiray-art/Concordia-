@@ -116,9 +116,20 @@ def snapshot_member(member_id: int, week: str | None = None) -> dict | None:
             bal.get("total_value"), bal.get("buying_power")) or 0.0
         stake = round(max(0.0, stake), 2)
         with db() as conn:
-            conn.execute("UPDATE member_settings SET voting_power=?, last_capital_usd=?, "
-                         "updated_at=? WHERE member_id=?",
-                         (stake, stake, int(time.time()), member_id))
+            # SEED ONLY — never overwrite a power the club-wide snapshot already
+            # computed. Without the voting_power<=0 guard, re-saving an existing
+            # allocation replaced a blended weight with raw stake: a member the
+            # blend had put at 500.00 became 1000.00 by pressing Save, and under
+            # merit the gain was exactly their accuracy penalty. The tally reads
+            # this column directly and the power cadence is biweekly, so the
+            # inflation survived ~13 days and live executions.
+            conn.execute("UPDATE member_settings SET voting_power=?, updated_at=? "
+                         "WHERE member_id=? AND COALESCE(voting_power,0) <= 0",
+                         (stake, int(time.time()), member_id))
+            # Capital is genuinely fresh on every save, and the held-member carry
+            # depends on it being current, so it updates unconditionally.
+            conn.execute("UPDATE member_settings SET last_capital_usd=? WHERE member_id=?",
+                         (stake, member_id))
         return {"member_id": member_id, "week_start": week or week_start_et(),
                 "power": stake, "equity": bal.get("total_value"),
                 "prev_power": None, "delta": None, "seeded": True}

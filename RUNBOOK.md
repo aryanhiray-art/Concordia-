@@ -236,8 +236,25 @@ against prod before deploying for real.
 
 ### Turning it on
 
-Cold start is exact: with no accuracy anywhere, `M == 1.0` and every member's
-power equals their committed dollars to the cent. On a club that already has
+**Preview the flip first.** `GET /api/admin/power-preview` computes BOTH forms
+against the same live balances and writes nothing, returning each member's
+legacy power, merit power, percentage change, rank under each, and the
+club-level `biggest_gain_pct` / `biggest_loss_pct` / `rank_changes`. On a
+realistic 8-member roster the flip moved members by −32% to +70%, and the
+direction is counterintuitive — a large member with a NEGATIVE record can gain,
+because legacy's separately-normalised accuracy channel paid out half the pool
+independently of capital. A connected member with a record but **zero committed
+capital right now** goes to exactly 0 under merit (score = capital × multiplier).
+Look at the preview before you flip, not after.
+
+```bash
+ssh root@159.195.19.53 "curl -s -H 'Authorization: Bearer $CONCORD_ADMIN_TOKEN' localhost:8780/api/admin/power-preview | head -c 2000"
+```
+
+Cold start is exact AT `CAPITAL_GAMMA_BPS=10000` (gamma 1.0, the default and
+what the live box runs): with no accuracy anywhere `M == 1.0` and every member's
+power equals their committed dollars to the cent. Below gamma 1 the capital term
+is `c**gamma`, so cold start stays proportional to stake but is not equal to it. On a club that already has
 accuracy it is NOT a no-op — check `/api/admin/panel` for the merit column
 first, then:
 

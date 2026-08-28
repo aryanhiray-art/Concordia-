@@ -211,7 +211,7 @@ class Settings:
     power_form: str = os.environ.get("POWER_FORM", "legacy").strip().lower()
     # The merit multiplier: M_i = MERIT_MAX_MULTIPLE ** tanh(accuracy_i / SCALE).
     # tanh saturates, so M is bounded in [1/MM, MM] with NO hard cap or cliff, and
-    # accuracy 0 gives M == 1.0 exactly (cold start = raw stake, to the cent).
+    # accuracy 0 gives M == 1.0 exactly (cold start = raw stake at gamma == 1).
     # MM is the ONLY spread dial: best:worst multiplier can never exceed MM**2.
     merit_max_multiple: float = _float("MERIT_MAX_MULTIPLE", 2.0)
     # One unit of track record, in absolute accuracy: 0.010 = 100bps of

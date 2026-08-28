@@ -162,7 +162,8 @@ CREATE TABLE IF NOT EXISTS cycle_scores (
     excess_raw   REAL NOT NULL,        -- pre-winsorisation, so clipping is visible
     alpha_short  REAL NOT NULL,        -- the membership-scaled alphas actually applied
     alpha_long   REAL NOT NULL,
-    n_measured   INTEGER NOT NULL,     -- roster size STAMPED at scoring time (never re-read)
+    n_measured   INTEGER NOT NULL,     -- members with a priced pick this cycle
+    n_members    INTEGER,              -- ACTIVE member count: the R1 input, stamped and never re-read
     picks_scored INTEGER NOT NULL,
     dispersion   REAL,                 -- stdev of this cycle's excess across members
     created_at   INTEGER NOT NULL,
@@ -435,7 +436,7 @@ def init_db() -> None:
 def _migrate(conn: sqlite3.Connection) -> None:
     """Add columns to pre-existing tables (deployed DBs predate these fields)."""
     _ALLOWED = {"members", "member_settings", "votes", "vote_sessions",
-                "voting_power_history"}
+                "voting_power_history", "cycle_scores"}
 
     def cols(t: str) -> set[str]:
         assert t in _ALLOWED, f"unexpected table {t!r}"  # PRAGMA can't be parameterized
@@ -517,8 +518,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
         # carry and a single transient broker error drops that member out of the
         # denominator — on a real roster that hands the remaining members a
         # wildly inflated share of a live-money vote. Idempotent.
-        conn.execute("UPDATE member_settings SET last_capital_usd = voting_power "
-                     "WHERE last_capital_usd = 0 AND voting_power > 0")
+        # Only under POWER_MODEL=stake, where voting_power IS the committed
+        # stake. Under blend it is BLENDED power, and seeding that would let the
+        # held-member carry put a blended number into the capital pool on the
+        # first post-cutover run (measured: $2,027 carried against $1,000 of real
+        # capital). It self-corrects on the first successful read, but the
+        # cutover is exactly when it must not happen.
+        if settings.power_model != "blend":
+            conn.execute("UPDATE member_settings SET last_capital_usd = voting_power "
+                         "WHERE last_capital_usd = 0 AND voting_power > 0")
     # The CANONICAL voting weight is the unrounded share; member_settings.voting_power
     # keeps holding DOLLARS (voting._tally_rows and every web money() call site
     # read it, and voting.py floors it at 1.0 — a 0..1 share would put every
@@ -530,6 +538,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # else leaves or deposits, every remaining member sees a personal "loss" they
     # did not cause. share/pool_usd/n_active separate "my standing changed" from
     # "the pool changed". All nullable and additive — old rows stay readable.
+    if "n_members" not in cols("cycle_scores"):
+        conn.execute("ALTER TABLE cycle_scores ADD COLUMN n_members INTEGER")
     v = cols("voting_power_history")
     for col, ddl in (("share", "share REAL"),
                      ("pool_usd", "pool_usd REAL"),

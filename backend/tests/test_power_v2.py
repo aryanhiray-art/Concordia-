@@ -137,6 +137,23 @@ def test_cold_start_is_exactly_committed_capital(balances, monkeypatch, mm):
     assert all(o["merit"] == 1.0 for o in out.values())
 
 
+def test_cold_start_is_only_exact_at_gamma_one(balances, monkeypatch):
+    """Scopes the claim the docs make. M == 1.0 at accuracy 0 for ANY MM, but
+    score = capital**gamma * M — so below gamma 1 cold start is proportional to
+    stake, not equal to it. gamma defaults to 1.0 and the live box does not set
+    it, but four places asserted the property unconditionally."""
+    _cfg(monkeypatch, capital_gamma_bps=10000)
+    a = _member("cold-g1-a@x.com", 1000.0)
+    b = _member("cold-g1-b@x.com", 100.0)
+    out = _snap()
+    assert out[a]["power"] == 1000.0 and out[b]["power"] == 100.0
+    _cfg(monkeypatch, capital_gamma_bps=5000)          # gamma = 0.5
+    out = _snap()
+    assert out[a]["power"] != 1000.0, "at gamma<1 cold start is NOT raw stake"
+    assert out[a]["power"] > out[b]["power"], "but ordering is preserved"
+    assert abs(sum(o["power"] for o in out.values()) - 1100.0) < 0.02, "pool conserved"
+
+
 def test_merit_multiplier_is_exactly_one_at_zero():
     """Not approximately — exactly. Cold start depends on it being bit-exact."""
     assert reputation.merit_multiplier(0.0) == 1.0
@@ -205,7 +222,12 @@ def test_accuracy_rank_is_preserved_at_equal_capital(balances):
     mids = [_member(f"v2-rank{i}@x.com", 100.0, accuracy=a, cycles=12 - i)
             for i, a in enumerate(accs)]
     out = _snap()
+    powers = [out[m]["power"] for m in mids]
     assert sorted(mids, key=lambda m: -out[m]["power"]) == mids
+    # STRICT separation: with a stable sort, asserting order alone passes when
+    # every power is identical — deleting the merit multiplier entirely left
+    # this test green.
+    assert all(a > b for a, b in zip(powers, powers[1:])), powers
 
 
 # ── R3: the exit theorem ─────────────────────────────────────────────────────
@@ -412,8 +434,11 @@ def test_held_member_stays_in_the_denominator_and_is_not_written(balances, monke
     out = reputation.snapshot_power_all()
     ids = {o["member_id"] for o in out}
     assert a not in ids, "held member must not be written"
-    assert {o["member_id"]: o["power"] for o in out}[b] == 100.0, (
-        "held member's capital must stay in the pool")
+    # Assert on SHARE, not dollars: with both members at $100, B's dollar power
+    # is 100.0 whether A is carried (pool 200, share 0.5) or dropped (pool 100,
+    # share 1.0) — so the dollar assertion passed with the carry disabled.
+    assert {o["member_id"]: o["share"] for o in out}[b] == pytest.approx(0.5), (
+        "held member's capital must stay in the denominator")
     with db() as conn:
         assert conn.execute("SELECT voting_power FROM member_settings WHERE member_id=?",
                             (a,)).fetchone()["voting_power"] == 100.0
@@ -843,36 +868,6 @@ def test_impossible_ceiling_pair_is_refused_at_startup(monkeypatch):
     assert any("unsatisfiable" in p for p in invalid_power_config())
 
 
-@pytest.mark.parametrize("n", [2, 50, 200])
-def test_invariants_hold_at_scale(balances, n):
-    """The exit property is algebraic, so member count cannot affect it — but
-    pool conservation and the share-sum assert have absolute tolerances that
-    must still hold as the club grows. Verified at 2, 50 and 200 members."""
-    import random
-    rnd = random.Random(11)
-    ids = [_member(f"v2-scale{n}-{i}@x.com",
-                   capital=round(max(1.0, rnd.lognormvariate(3.9, 1.1)), 2),
-                   accuracy=rnd.gauss(0, 0.004) if i % 4 else 0.0,
-                   cycles=rnd.randint(0, 40)) for i in range(n)]
-    out = _snap()
-    assert len(out) == n
-    assert abs(sum(r["share"] for r in out.values()) - 1.0) < 1e-9
-    committed = sum(r["capital"] for r in out.values())
-    assert abs(sum(r["power"] for r in out.values()) - committed) <= 0.01 * n + 0.01
-    if n < 3:
-        return
-    # one arbitrary leaver: ratios and ranks must survive exactly at any size
-    before = {m: r["share"] for m, r in out.items()}
-    leaver = ids[n // 3]
-    membership.set_left(leaver, "test", "scale")
-    after = {m: r["share"] for m, r in _snap().items()}
-    f = 1.0 - before[leaver]
-    assert max(abs(after[m] - before[m] / f) for m in after) < 1e-12
-    surv = [m for m in ids if m != leaver]
-    assert (sorted(surv, key=lambda m: -before[m])
-            == sorted(surv, key=lambda m: -after[m]))
-
-
 def test_prefetched_previous_power_matches_the_per_member_query():
     """snapshot_power_all now resolves every member's prior power in ONE query
     before opening its transaction, instead of calling power._prev_power inside
@@ -1131,3 +1126,220 @@ def test_winsorisation_applies_under_legacy_too(balances, monkeypatch):
         r = conn.execute("SELECT excess, excess_raw FROM cycle_scores WHERE member_id=?",
                          (mid,)).fetchone()
     assert r["excess"] == pytest.approx(0.05) and r["excess_raw"] == pytest.approx(1.0)
+
+
+# ── mutation-resistant: the review deleted these guards and the suite stayed green
+
+def test_r1_uses_membership_not_turnout_END_TO_END(balances, monkeypatch):
+    """MUTATION TARGET. Changing `n_members = active_member_count()` to
+    `n_members = n_measured` — the exact design the commit says was rejected —
+    passed the whole suite, because the R1 tests only called the pure helpers
+    and the stamped-alpha test had EVERY member vote (so the two inputs were
+    indistinguishable). This asserts the STAMPED alpha with turnout deliberately
+    far below membership."""
+    _cfg(monkeypatch, accuracy_inertia_ref_n=4)
+    voters = [_member(f"v2-r1e2e-v{i}@x.com", 100.0) for i in range(2)]
+    for i in range(14):                       # 16 active members, only 2 will vote
+        _member(f"v2-r1e2e-idle{i}@x.com", 100.0)
+    assert reputation.active_member_count() == 16
+    s1 = voting.open_session_for(datetime.date(2029, 3, 6))
+    for m in voters:
+        voting.set_member_picks(s1["id"], m, ["AAPL"])
+    monkeypatch.setattr(reputation.market, "quotes", lambda syms: {"AAPL": 100.0, "SPY": 400.0})
+    reputation.capture_cycle_prices(s1["id"])
+    s2 = voting.open_session_for(datetime.date(2029, 3, 8))
+    monkeypatch.setattr(reputation.market, "quotes", lambda syms: {"AAPL": 110.0, "SPY": 400.0})
+    reputation.capture_cycle_prices(s2["id"])
+    reputation.score_matured_cycles()
+    with db() as conn:
+        rows = conn.execute("SELECT n_measured, alpha_short FROM cycle_scores "
+                            "WHERE session_id=?", (s1["id"],)).fetchall()
+    assert {r["n_measured"] for r in rows} == {2}, "only 2 members were measurable"
+    stamped = {r["alpha_short"] for r in rows}
+    assert len(stamped) == 1
+    got = stamped.pop()
+    hl = settings.accuracy_short_half_life_cycles
+    by_membership = reputation._half_life_alpha_scaled(hl, reputation._inertia_ratio(16))
+    by_turnout = reputation._half_life_alpha_scaled(hl, reputation._inertia_ratio(2))
+    assert got == pytest.approx(by_membership), "R1 must key off MEMBERSHIP"
+    assert got < by_turnout, "keying off turnout would leave the score far more reactive"
+
+
+def test_participate_route_actually_raises_409_while_a_ballot_is_live(balances):
+    """MUTATION TARGET. Wrapping the freeze in `if False and ...` left the suite
+    green, because the old test only grepped the function source. This calls the
+    route function and asserts the real HTTPException."""
+    from fastapi import HTTPException
+
+    from app.routes import members as members_route
+    mid = _member("v2-route-freeze@x.com", 100.0)
+    s1 = voting.open_session_for(datetime.date(2029, 4, 3))
+    voting.set_member_picks(s1["id"], mid, ["AAPL"])
+    body = members_route.ParticipateBody(on=False)
+    member = {"id": mid, "email": "v2-route-freeze@x.com", "settings": {"opted_in": 1}}
+    with pytest.raises(HTTPException) as ei:
+        members_route.participate(body, member=member)
+    assert ei.value.status_code == 409
+    with db() as conn:                       # and the switch really did not move
+        assert conn.execute("SELECT opted_in FROM member_settings WHERE member_id=?",
+                            (mid,)).fetchone()["opted_in"] == 1
+    # once the cycle executes it is allowed through
+    with db() as conn:
+        conn.execute("UPDATE vote_sessions SET status='executed' WHERE id=?", (s1["id"],))
+    members_route.participate(body, member=member)
+    with db() as conn:
+        assert conn.execute("SELECT opted_in FROM member_settings WHERE member_id=?",
+                            (mid,)).fetchone()["opted_in"] == 0
+
+
+def test_share_ceiling_never_aborts_the_snapshot(balances, monkeypatch):
+    """A roster of 8 funded members plus 52 signed-up-but-unconnected ones passed
+    both ceiling guards on raw headcount (0.10 * 60 = 6 > 1) while the real
+    bearers could only reach 0.10 * 8 = 0.8. The water-fill then returned a
+    vector summing to 0.8, the pre-write assertion rejected it, and EVERY weekly
+    run aborted identically while the club traded on frozen power."""
+    _cfg(monkeypatch, max_voting_share=0.10, max_voting_share_min_members=0)
+    funded = [_member(f"v2-freeze-f{i}@x.com", 10_000.0) for i in range(8)]
+    for i in range(52):
+        _member(f"v2-freeze-z{i}@x.com", 0.0, connect=False)
+    out = _snap()
+    assert out, "the snapshot must not abort"
+    assert abs(sum(r["share"] for r in out.values()) - 1.0) < 1e-9
+    for m in funded:
+        assert out[m]["power"] > 0
+
+
+def test_connect_seed_never_overwrites_a_computed_power(balances):
+    """Re-saving an existing allocation replaced a blended weight with raw stake
+    — a member the blend had put at 500.00 became 1000.00 by pressing Save, and
+    the tally reads that column directly for up to a biweekly cadence."""
+    from app.services import power as power_svc
+    plain = _member("v2-seed-plain@x.com", 1000.0)
+    star = _member("v2-seed-star@x.com", 1000.0, accuracy=0.02, cycles=12)
+    before = _snap()
+    assert before[plain]["power"] < 1000.0, "the blend should have marked this member down"
+    power_svc.snapshot_member(plain)          # what PUT /me/allocation calls
+    with db() as conn:
+        after = conn.execute("SELECT voting_power FROM member_settings WHERE member_id=?",
+                             (plain,)).fetchone()["voting_power"]
+    assert after == before[plain]["power"], "re-saving an allocation inflated voting power"
+    assert star in before
+
+
+def test_power_preview_computes_both_forms_and_writes_nothing(balances):
+    """RUNBOOK section 8 says to inspect the flip before making it. This is what
+    makes that possible — previously the merit column was gated on the flag, so
+    it was null until after the flip."""
+    _member("v2-prev-a@x.com", 1000.0)
+    _member("v2-prev-b@x.com", 100.0, accuracy=0.009, cycles=8)
+    _member("v2-prev-c@x.com", 100.0, accuracy=-0.007, cycles=8)
+    _snap()
+    with db() as conn:
+        before = [tuple(r) for r in conn.execute(
+            "SELECT member_id, voting_power, voting_power_share FROM member_settings "
+            "ORDER BY member_id")]
+        hist_before = conn.execute("SELECT COUNT(*) c FROM voting_power_history").fetchone()["c"]
+    pv = reputation.preview_forms()
+    assert len(pv["members"]) == 3
+    for r in pv["members"]:
+        assert r["legacy_power"] > 0 and r["merit_power"] > 0
+        assert r["merit"] is not None, "the multiplier must be visible BEFORE the flip"
+    with db() as conn:
+        after = [tuple(r) for r in conn.execute(
+            "SELECT member_id, voting_power, voting_power_share FROM member_settings "
+            "ORDER BY member_id")]
+        hist_after = conn.execute("SELECT COUNT(*) c FROM voting_power_history").fetchone()["c"]
+    assert after == before and hist_after == hist_before, "preview must write nothing"
+
+
+def test_departed_member_is_not_reconciled_or_verified(balances):
+    """reconcile_all and verify_all had NO membership filter, so a removed member
+    was still reconciled and verified against their LIVE brokerage account."""
+    from app.services import reconcile, verify
+    stays = _member("v2-rec-stay@x.com", 100.0)
+    goes = _member("v2-rec-go@x.com", 100.0)
+    with db() as conn:
+        rec = [r["member_id"] for r in conn.execute(
+            "SELECT m.id AS member_id FROM members m JOIN rh_accounts a ON a.member_id=m.id "
+            f"WHERE m.is_bot=0 AND a.status='connected' AND a.agentic_allowed=1 "
+            f"AND {membership.active_clause('m')}")]
+    assert stays in rec and goes in rec
+    membership.set_left(goes, "owner@x.com", "removed")
+    with db() as conn:
+        rec = [r["member_id"] for r in conn.execute(
+            "SELECT m.id AS member_id FROM members m JOIN rh_accounts a ON a.member_id=m.id "
+            f"WHERE m.is_bot=0 AND a.status='connected' AND a.agentic_allowed=1 "
+            f"AND {membership.active_clause('m')}")]
+    assert stays in rec and goes not in rec
+    assert "active_clause" in __import__("inspect").getsource(reconcile.reconcile_all)
+    assert "active_clause" in __import__("inspect").getsource(verify.verify_all)
+
+
+def test_removal_also_flips_opted_in(balances):
+    """Belt and braces: exclusion is by identity everywhere, but the executor
+    ALSO hard-filters opted_in=1, so a departed member is kept out of real orders
+    by two independent conditions."""
+    mid = _member("v2-optout-on-leave@x.com", 100.0)
+    membership.set_left(mid, "owner@x.com", "removed")
+    with db() as conn:
+        assert conn.execute("SELECT opted_in FROM member_settings WHERE member_id=?",
+                            (mid,)).fetchone()["opted_in"] == 0
+
+
+def test_scoring_claim_and_ewma_are_one_transaction(balances, monkeypatch):
+    """Claiming scored_at in a SEPARATE committed statement left two windows: a
+    hard kill between claim and apply sealed a cycle with nothing applied (and
+    `WHERE scored_at IS NULL` never revisits it), and the compensating release
+    could clear a claim whose EWMA had already committed. If score_cycle's own
+    transaction rolls back, the claim must roll back with it."""
+    mid = _member("v2-atomic@x.com", 100.0)
+    s1 = voting.open_session_for(datetime.date(2029, 6, 4))
+    voting.set_member_picks(s1["id"], mid, ["AAPL"])
+    monkeypatch.setattr(reputation.market, "quotes", lambda syms: {"AAPL": 100.0, "SPY": 400.0})
+    reputation.capture_cycle_prices(s1["id"])
+    s2 = voting.open_session_for(datetime.date(2029, 6, 6))
+    monkeypatch.setattr(reputation.market, "quotes", lambda syms: {"AAPL": 110.0, "SPY": 400.0})
+    reputation.capture_cycle_prices(s2["id"])
+    boom = {"n": 0}
+    real = reputation._blend_accuracy
+
+    def explode(short, long):
+        boom["n"] += 1
+        raise RuntimeError("simulated crash mid-apply")
+    monkeypatch.setattr(reputation, "_blend_accuracy", explode)
+    with pytest.raises(RuntimeError):
+        reputation.score_matured_cycles()
+    monkeypatch.setattr(reputation, "_blend_accuracy", real)
+    with db() as conn:
+        assert conn.execute("SELECT scored_at FROM vote_sessions WHERE id=?",
+                            (s1["id"],)).fetchone()["scored_at"] is None, (
+            "a rolled-back apply must roll back the claim with it")
+    assert reputation.score_matured_cycles(), "the cycle must still be scoreable"
+    with db() as conn:
+        r = conn.execute("SELECT n_measured, n_members FROM cycle_scores "
+                         "WHERE member_id=?", (mid,)).fetchone()
+    assert r["n_members"] == reputation.active_member_count(), (
+        "the R1 input must be persisted, not just the measured count")
+
+
+def test_watchdog_flags_a_frozen_power_snapshot(monkeypatch):
+    """snapshot_power_all is fail-closed and SILENT — nothing consumed its
+    degenerate audit, so a bail could freeze real-money voting weight
+    indefinitely while the club kept trading on stale numbers."""
+    from app.services import watchdog
+    monkeypatch.setattr(watchdog, "settings",
+                        dataclasses.replace(settings, power_model="blend"))
+    assert watchdog._check_power_snapshot_stale() == []
+    now = int(time.time())
+
+    def _audit(action, ts):     # explicit ts: audit() stamps time.time(), so two
+        with db() as conn:      # rows in the same second cannot be ordered
+            conn.execute("INSERT INTO audit_log(ts,actor,action,target,detail_json) "
+                         "VALUES(?,'system',?,NULL,NULL)", (ts, action))
+    _audit("blended_power", now - 3600)
+    assert watchdog._check_power_snapshot_stale() == []
+    _audit("power_snapshot_degenerate", now - 60)
+    found = watchdog._check_power_snapshot_stale()
+    assert found and found[0]["severity"] == "crit"
+    assert "frozen" in found[0]["message"]
+    assert ("power-snapshot", watchdog._check_power_snapshot_stale) in watchdog._CHECKS

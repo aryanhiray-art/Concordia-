@@ -85,6 +85,15 @@ def set_left(member_id: int, actor: str | None, reason: str = "left") -> bool:
             "UPDATE members SET left_at=?, session_version=session_version+1 "
             "WHERE id=? AND left_at IS NULL", (now, member_id))
         changed = cur.rowcount == 1
+        if changed:
+            # Belt and braces. Exclusion is by identity everywhere, but the
+            # executor ALSO hard-filters opted_in=1, so flipping it here means a
+            # departed member is kept out of real orders by two independent
+            # conditions rather than by one WHERE clause in the module that
+            # spends money. Reinstatement leaves it off — coming back is an
+            # explicit act, and so is opting in again.
+            conn.execute("UPDATE member_settings SET opted_in=0, updated_at=? "
+                         "WHERE member_id=?", (now, member_id))
     if changed:
         audit(actor, "member_left", str(member_id), {"reason": reason, "left_at": now})
     return changed

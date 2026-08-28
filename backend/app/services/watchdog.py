@@ -34,6 +34,7 @@ from ..calendar_us import at_et, cycle_phase, next_trading_day, now_et
 from ..config import settings
 from ..db import audit, db, is_armed, kv_get, kv_set
 from . import voting
+from . import membership
 
 _KV_PREFIX = "wd:"
 
@@ -61,7 +62,7 @@ def _check_member_token_dead() -> list[dict]:
             "JOIN member_settings s ON s.member_id=m.id AND s.opted_in=1 "
             "JOIN rh_accounts a ON a.member_id=m.id "
             "WHERE COALESCE(m.is_bot,0)=0 AND a.status='error' "
-            "AND m.email NOT LIKE 'deleted-%@deleted.invalid'"
+            f"AND {membership.active_clause('m')}"
         ).fetchall()
     out: list[dict] = []
     for r in rows:
@@ -385,7 +386,7 @@ def _check_underfunded_stake() -> list[dict]:
             "JOIN member_settings s ON s.member_id=m.id AND s.opted_in=1 "
             "JOIN account_snapshots snap ON snap.member_id=m.id "
             "WHERE COALESCE(m.is_bot,0)=0 "
-            "AND m.email NOT LIKE 'deleted-%@deleted.invalid'").fetchall()
+            f"AND {membership.active_clause('m')}").fetchall()
     out: list[dict] = []
     for r in rows:
         try:
@@ -422,6 +423,46 @@ def _check_underfunded_stake() -> list[dict]:
 # (name, check). The name PREFIXES every key the check emits, which is what
 # lets a crashed check keep its previously-announced alerts (never cleared on
 # a crash — only on an observed recovery).
+def _check_power_snapshot_stale() -> list[dict]:
+    """W13 — voting power silently stopped updating.
+
+    snapshot_power_all is deliberately fail-closed: on a degenerate roster it
+    writes nothing and carries every member's prior power, which is right (it
+    must never zero anyone's vote) but SILENT. Nothing consumed the
+    `power_snapshot_degenerate` audit action, so a bail could freeze real-money
+    voting weight indefinitely while the club kept trading on stale numbers —
+    and it would not self-heal, because the next run hits the same condition.
+
+    Fires on either signal: a degenerate bail more recent than the last
+    successful snapshot, or no successful snapshot within the window. The window
+    is generous (POWER_CADENCE can be biweekly) so this catches a stuck
+    subsystem, not a quiet week.
+    """
+    if settings.power_model != "blend":
+        return []
+    now = int(time.time())
+    window = 21 * 86400
+    with db() as conn:
+        ok = conn.execute(
+            "SELECT MAX(ts) AS ts FROM audit_log WHERE action='blended_power'").fetchone()
+        bad = conn.execute(
+            "SELECT MAX(ts) AS ts FROM audit_log "
+            "WHERE action='power_snapshot_degenerate'").fetchone()
+    last_ok = int(ok["ts"] or 0) if ok else 0
+    last_bad = int(bad["ts"] or 0) if bad else 0
+    if last_bad and last_bad > last_ok:
+        return [{"key": "power-snapshot-degenerate", "severity": "crit",
+                 "message": ("voting power snapshot BAILED and has not succeeded since — "
+                             "the club is trading on frozen voting weights"),
+                 "since": last_bad}]
+    if last_ok and now - last_ok > window:
+        days = (now - last_ok) // 86400
+        return [{"key": "power-snapshot-stale", "severity": "warn",
+                 "message": f"no successful voting-power snapshot in {days} days",
+                 "since": last_ok}]
+    return []
+
+
 _CHECKS: list[tuple] = [
     ("member-token-dead", _check_member_token_dead),                    # W1
     ("no-session-on-eve", _check_no_session_on_eve),                    # W2
@@ -435,6 +476,7 @@ _CHECKS: list[tuple] = [
     ("disk", _check_disk),                                              # W10
     ("backup-stale", _check_backup_stale),                              # W11
     ("underfunded-stake", _check_underfunded_stake),                    # W12
+    ("power-snapshot", _check_power_snapshot_stale),                    # W13
 ]
 
 

@@ -19,7 +19,7 @@ import time
 
 from ..db import db
 from ..robinhood import vault
-from . import positions, voting
+from . import membership, positions, voting
 
 # A live position below this dollar value is broker dust (sub-min-sellable), not a
 # real un-sold holding — flagging it as "not sold" would be noise.
@@ -207,8 +207,8 @@ def verify_all(*, expect_flat: bool = False) -> dict:
         mids = [r["id"] for r in conn.execute(
             "SELECT m.id FROM members m JOIN member_settings s ON s.member_id=m.id "
             "JOIN rh_accounts a ON a.member_id=m.id "
-            "WHERE s.opted_in=1 AND a.status='connected' AND a.agentic_allowed=1 "
-            "ORDER BY m.id").fetchall()]
+            f"WHERE s.opted_in=1 AND a.status='connected' AND a.agentic_allowed=1 "
+            f"AND {membership.active_clause('m')} ORDER BY m.id").fetchall()]
     members = []
     for mid in mids:
         try:

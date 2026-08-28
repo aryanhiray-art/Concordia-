@@ -153,9 +153,13 @@ def member_rows() -> list[dict]:
             # M is the effect (1.00 = neutral, 2.00 = the cap). Suppressed with
             # accuracy for an unscored member so a neutral 1.00 doesn't read as a
             # rating they earned. Only meaningful under POWER_FORM=merit.
+            # NOT gated on power_form. The runbook tells an operator to look at
+            # this column BEFORE flipping POWER_FORM=merit; gating it on the
+            # flag made it null until after the flip, i.e. exactly never when
+            # it was needed. It is a pure function of the member's own accuracy,
+            # so it is a truthful preview under either form.
             "merit": (round(reputation.merit_multiplier(float(r["accuracy"] or 0)), 4)
-                      if int(r["cycles_participated"] or 0) > 0
-                      and settings.power_form == "merit" else None),
+                      if int(r["cycles_participated"] or 0) > 0 else None),
             "cycles": int(r["cycles_participated"] or 0),
             # club-slice unrealized P&L ($ + %), straight from the cached account
             # snapshot the 10-min refresher maintains — the panel stays DB-only.

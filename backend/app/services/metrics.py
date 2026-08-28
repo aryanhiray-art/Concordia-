@@ -37,10 +37,11 @@ import time
 
 from ..calendar_us import ET, today_et
 from ..db import db
+from . import membership
 
 # Matches adminview.member_rows: self-service deletion anonymizes rows in place.
 _HUMAN = ("COALESCE(m.is_bot,0)=0 "
-          "AND m.email NOT LIKE 'deleted-%@deleted.invalid'")
+          f"AND {membership.active_clause('m')}")
 
 # Safety valve for backfill: never reconstruct more than ~2 years even if a
 # stray ancient timestamp sneaks into an event table.

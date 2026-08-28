@@ -33,6 +33,7 @@ from urllib.parse import parse_qs, urlparse
 
 from ..db import db
 from ..robinhood import vault
+from . import membership
 from ..robinhood.client import RHError
 
 # Broker order states that mean a real, trustworthy fill quantity is available.
@@ -270,7 +271,8 @@ def reconcile_all(dry_run: bool = False) -> dict:
         members = [dict(r) for r in conn.execute(
             "SELECT m.id AS member_id, a.account_number FROM members m "
             "JOIN rh_accounts a ON a.member_id=m.id "
-            "WHERE m.is_bot=0 AND a.status='connected' AND a.agentic_allowed=1 ORDER BY m.id"
+            f"WHERE m.is_bot=0 AND a.status='connected' AND a.agentic_allowed=1 "
+            f"AND {membership.active_clause('m')} ORDER BY m.id"
         ).fetchall()]
     results = []
     for m in members:

@@ -46,6 +46,12 @@ def _owner_mid() -> int:
     return mid
 
 
+def _require_interactive(actor: dict) -> None:
+    """Reject a non-interactive credential (service token / member API key)."""
+    if (actor.get("_auth") or "session") != "session":
+        raise HTTPException(403, "this action requires an interactive owner session")
+
+
 def _num(v):
     try:
         return float(v)
@@ -361,7 +367,12 @@ def overview(admin: dict = Depends(require_admin)):
             "(SELECT delta FROM voting_power_history h WHERE h.member_id=m.id "
             "  ORDER BY h.week_start DESC LIMIT 1) AS power_delta "
             "FROM members m LEFT JOIN member_settings s ON s.member_id=m.id "
-            "LEFT JOIN rh_accounts a ON a.member_id=m.id ORDER BY s.voting_power DESC, m.id"
+            "LEFT JOIN rh_accounts a ON a.member_id=m.id "
+            # Departure resets nothing, so without this total_voting_power and
+            # the human count stay permanently overstated by everyone who has
+            # ever left — and this surface disagreed with adminview.member_rows,
+            # which WAS filtered.
+            f"WHERE {membership.active_clause('m')} ORDER BY s.voting_power DESC, m.id"
         ).fetchall()
     session = svc.active_session()
     sess_view = svc.session_public(session, admin["id"]) if session else None
@@ -566,6 +577,18 @@ class LeaveBody(BaseModel):
     reason: str = "removed by admin"
 
 
+@router.get("/power-preview")
+def power_preview(admin: dict = Depends(require_admin)):
+    """What flipping POWER_FORM would do, computed live and written nowhere.
+
+    RUNBOOK section 8 requires looking at this BEFORE the flip. Reads live
+    balances (unlike /panel, which is strictly DB-only), so it is deliberately
+    an explicit on-demand call and not part of the console payload.
+    """
+    from ..services import reputation
+    return reputation.preview_forms()
+
+
 @router.post("/member/{member_id}/leave")
 def member_leave(member_id: int, body: LeaveBody, admin: dict = Depends(require_owner)):
     """Mark a member as DEPARTED — they stop counting, nothing is erased.
@@ -580,6 +603,11 @@ def member_leave(member_id: int, body: LeaveBody, admin: dict = Depends(require_
     Owner-only (not require_admin): removing a member changes who governs real
     money. The typed confirmation matches the self-service delete contract.
     """
+    # require_owner accepts a static service token and a member API key; these
+    # two routes remove a person from a real-money club, so they additionally
+    # demand an interactive session — the same bar require_admin sets for the
+    # console, and for the same reason (a leaked ck_live_ key must not reach it).
+    _require_interactive(admin)
     if (body.confirm or "").strip().upper() != "REMOVE":
         raise HTTPException(400, "type REMOVE to confirm")
     m = load_member(member_id)
@@ -599,6 +627,7 @@ def member_reinstate(member_id: int, admin: dict = Depends(require_owner)):
     """Undo a removal. The member returns with their record and rank intact —
     nothing was reset, so there is nothing to rebuild. Anonymized (self-deleted)
     accounts cannot be reinstated: their identity is genuinely gone."""
+    _require_interactive(admin)
     if not load_member(member_id):
         raise HTTPException(404, "no such member")
     try:
