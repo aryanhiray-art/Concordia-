@@ -493,11 +493,11 @@ def participate(body: ParticipateBody, member: dict = Depends(require_member)):
     so the defector would still be credited for picks their money never bought.
     """
     from ..services import voting as _voting
-    if _voting.member_in_closed_unexecuted_session(member["id"]):
+    if _voting.member_has_live_ballot(member["id"]):
         raise HTTPException(
             status_code=409,
-            detail="participation is locked while this cycle's basket is executing — "
-                   "try again once it completes",
+            detail="participation is locked while a ballot you voted in is still "
+                   "running — it unlocks once that cycle executes",
         )
     with db() as conn:
         conn.execute(

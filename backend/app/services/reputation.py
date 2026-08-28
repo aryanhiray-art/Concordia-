@@ -216,20 +216,18 @@ def score_cycle(scored_session_id: int, exit_prices: dict[str, float]) -> dict:
         # DEPARTED members are excluded by identity: their ballot stays on record
         # but stops earning a reputation that no longer belongs to anyone.
         #
-        # OPTED-OUT members are excluded too. Participation off means off: the
-        # ballot they already cast still stands (opting out is not a vote
-        # retraction lever), but they stop ACCRUING a record while they are out,
-        # and resume when they switch back on. This also closes a free option —
-        # accuracy is measured from `votes` and never from `executions`, while
-        # the executor hard-filters opted_in=1, so without this a member could
-        # vote, opt out before the orders landed, fund none of the basket, and
-        # still be credited for how the picks performed.
+        # Deliberately NOT filtered on opted_in. Scoring happens a full cycle
+        # AFTER the outcome is public, so reading the CURRENT switch would let a
+        # member watch a cycle go against them and then opt out to delete it
+        # from their record — under merit, accuracy is the entire merit input,
+        # so that ratchets a score upward on a history containing only wins.
+        # The vote-but-do-not-fund case it was meant to cover is closed at the
+        # other end instead: voting.member_has_live_ballot blocks the opt-out
+        # while the ballot the member voted in is still live (see routes/members).
         rows = conn.execute(
             "SELECT v.member_id, v.symbol, v.weight FROM votes v "
             "JOIN members m ON m.id = v.member_id "
-            "JOIN member_settings ms ON ms.member_id = v.member_id "
-            f"WHERE v.session_id=? AND {membership.active_clause('m')} "
-            "AND COALESCE(ms.opted_in,0) = 1",
+            f"WHERE v.session_id=? AND {membership.active_clause('m')}",
             (scored_session_id,)).fetchall()
     by_member: dict[int, list[tuple[str, float]]] = {}
     for r in rows:

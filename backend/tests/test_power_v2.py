@@ -715,16 +715,6 @@ def test_init_db_refuses_a_bad_knob(monkeypatch):
         dbmod.init_db()
 
 
-def test_participation_is_frozen_while_a_basket_executes():
-    """Opting out mid-execution was a free option: vote at full weight, watch the
-    tally, opt out before the orders land, fund none of it — and still get scored,
-    because accuracy reads `votes`, never `executions`."""
-    import inspect
-
-    from app.routes import members as members_route
-    src = inspect.getsource(members_route.participate)
-    assert "member_in_closed_unexecuted_session" in src
-    assert "409" in src or "status_code=409" in src
 
 
 def test_one_brokerage_account_cannot_back_two_members():
@@ -742,30 +732,6 @@ def test_one_brokerage_account_cannot_back_two_members():
     vault.save_connection(a, {"access_token": "t2"}, "RH-SHARED-1", True)
 
 
-def test_opted_out_member_stops_accruing_a_record(balances, monkeypatch):
-    """Participation off means off: the ballot already cast still stands, but no
-    accuracy is earned while out. Closes the free option — accuracy is measured
-    from `votes`, the executor funds only opted_in=1, so a member could vote, opt
-    out before the orders landed, fund nothing, and still be credited."""
-    stays = _member("v2-opt-in@x.com", 100.0)
-    leaves = _member("v2-opt-out@x.com", 100.0)
-    s1 = voting.open_session_for(datetime.date(2028, 4, 4))
-    for m in (stays, leaves):
-        voting.set_member_picks(s1["id"], m, ["AAPL"])
-    monkeypatch.setattr(reputation.market, "quotes", lambda syms: {"AAPL": 100.0, "SPY": 400.0})
-    reputation.capture_cycle_prices(s1["id"])
-    s2 = voting.open_session_for(datetime.date(2028, 4, 6))
-    monkeypatch.setattr(reputation.market, "quotes", lambda syms: {"AAPL": 110.0, "SPY": 400.0})
-    reputation.capture_cycle_prices(s2["id"])
-    with db() as conn:
-        conn.execute("UPDATE member_settings SET opted_in=0 WHERE member_id=?", (leaves,))
-    reputation.score_matured_cycles()
-    with db() as conn:
-        scored = {r["member_id"] for r in conn.execute("SELECT member_id FROM cycle_scores")}
-        acc = {r["member_id"]: r["accuracy"] for r in conn.execute(
-            "SELECT member_id, accuracy FROM member_settings")}
-    assert stays in scored and leaves not in scored
-    assert acc[leaves] == 0.0, "opted-out member accrued a record"
 
 
 def test_opting_out_does_not_reduce_voting_power(balances):
@@ -1047,3 +1013,121 @@ def test_disconnecting_drops_your_voting_weight_immediately(balances):
     voting.set_member_picks(s["id"], mid, ["AAPL"])
     assert voting.tally(s["id"])[0]["weight"] == 1.0, (
         "a disconnected member should fall to the tally floor, not keep $1000")
+
+
+def test_opting_out_is_blocked_while_a_ballot_you_voted_in_is_live(balances):
+    """The freeze has to start when the ballot OPENS. While a session is open a
+    member's pick already carries full weight in the tally, but the executor
+    funds only opted_in=1 — so opting out mid-ballot chose the basket and left
+    whoever stayed in to pay for it. Covers open AND closed-unexecuted."""
+    voter = _member("v2-live-vote@x.com", 100.0)
+    idle = _member("v2-live-idle@x.com", 100.0)
+    s1 = voting.open_session_for(datetime.date(2028, 5, 2))
+    voting.set_member_picks(s1["id"], voter, ["AAPL"])
+    assert voting.member_has_live_ballot(voter) is True, "an OPEN ballot must freeze it"
+    assert voting.member_has_live_ballot(idle) is False, "never voted -> unaffected"
+    with db() as conn:
+        conn.execute("UPDATE vote_sessions SET status='closed' WHERE id=?", (s1["id"],))
+    assert voting.member_has_live_ballot(voter) is True, "closed-unexecuted must freeze it"
+    with db() as conn:
+        conn.execute("UPDATE vote_sessions SET status='executed' WHERE id=?", (s1["id"],))
+    assert voting.member_has_live_ballot(voter) is False, "unlocks once the cycle executes"
+
+
+def test_opting_out_cannot_retroactively_delete_a_losing_cycle(balances, monkeypatch):
+    """Scoring runs a full cycle AFTER the outcome is public. Reading the live
+    opted_in switch there let a member watch a cycle go against them and opt out
+    to erase it — and under merit accuracy is the ENTIRE merit input, so a record
+    could be ratcheted upward until it contained only wins."""
+    honest = _member("v2-honest@x.com", 100.0)
+    dodger = _member("v2-dodger@x.com", 100.0)
+    s1 = voting.open_session_for(datetime.date(2028, 5, 9))
+    for m in (honest, dodger):
+        voting.set_member_picks(s1["id"], m, ["AAPL"])
+    monkeypatch.setattr(reputation.market, "quotes", lambda syms: {"AAPL": 100.0, "SPY": 400.0})
+    reputation.capture_cycle_prices(s1["id"])
+    s2 = voting.open_session_for(datetime.date(2028, 5, 11))
+    monkeypatch.setattr(reputation.market, "quotes", lambda syms: {"AAPL": 80.0, "SPY": 400.0})
+    reputation.capture_cycle_prices(s2["id"])          # the pick lost 20% vs a flat benchmark
+    with db() as conn:                                  # dodger bails after seeing it
+        conn.execute("UPDATE vote_sessions SET status='executed' WHERE id=?", (s1["id"],))
+        conn.execute("UPDATE member_settings SET opted_in=0 WHERE member_id=?", (dodger,))
+    reputation.score_matured_cycles()
+    with db() as conn:
+        acc = {r["member_id"]: r["accuracy"] for r in conn.execute(
+            "SELECT member_id, accuracy FROM member_settings")}
+    assert acc[honest] < 0, "the losing cycle must be recorded at all"
+    assert acc[dodger] == acc[honest], "opting out erased a cycle the member voted in"
+
+
+def test_reinstating_is_refused_when_the_account_was_taken_over(balances):
+    """While a member is away their brokerage account is claimable by someone
+    else. Reinstating without re-checking put two ACTIVE members on one balance,
+    each resolving the same dollars as committed capital — $2,000 of voting
+    capital from $1,000 of real money, permanently."""
+    from app.robinhood import vault
+    a = _member("v2-reinst-a@x.com", 1000.0, connect=False)
+    b = _member("v2-reinst-b@x.com", 1000.0, connect=False)
+    bundle = {"access_token": "t"}
+    vault.save_connection(a, bundle, "RH-REINST", True)
+    membership.set_left(a, "owner@x.com", "left")
+    vault.save_connection(b, bundle, "RH-REINST", True)     # fine: A is departed
+    assert membership.account_clash(a) == b
+    with pytest.raises(membership.AccountTakenOver):
+        membership.clear_left(a, "owner@x.com")
+    with db() as conn:                                       # still departed
+        assert conn.execute("SELECT left_at FROM members WHERE id=?",
+                            (a,)).fetchone()["left_at"] is not None
+    # once B releases it, A can come back
+    with db() as conn:
+        conn.execute("DELETE FROM rh_accounts WHERE member_id=?", (b,))
+    assert membership.clear_left(a, "owner@x.com") is True
+
+
+def test_deploy_is_not_inert_for_legacy_accuracy(balances, monkeypatch):
+    """PINS the thing the 'ships inert' claim got wrong, so the next refactor
+    cannot move it silently. capture_cycle_prices now prices the PREVIOUS
+    cycle's symbols, so a member whose picks rotated out is measured where the
+    old code recorded a non-measurement — and accuracy is 50% of the LEGACY
+    score. This runs under POWER_FORM=legacy too."""
+    _cfg(monkeypatch, power_form="legacy")
+    stayer = _member("v2-inert-stay@x.com", 1000.0)
+    rotator = _member("v2-inert-rot@x.com", 1000.0)
+    s1 = voting.open_session_for(datetime.date(2029, 1, 8))
+    voting.set_member_picks(s1["id"], stayer, ["AAPL"])
+    voting.set_member_picks(s1["id"], rotator, ["MSFT"])
+    monkeypatch.setattr(reputation.market, "quotes", lambda syms: {s: 100.0 for s in syms})
+    reputation.capture_cycle_prices(s1["id"])
+    s2 = voting.open_session_for(datetime.date(2029, 1, 10))
+    voting.set_member_picks(s2["id"], stayer, ["AAPL"])      # MSFT is NOT voted again
+    monkeypatch.setattr(reputation.market, "quotes",
+                        lambda syms: {"AAPL": 100.0, "MSFT": 120.0, "SPY": 100.0})
+    reputation.capture_cycle_prices(s2["id"])
+    with db() as conn:
+        priced = {r["symbol"] for r in conn.execute(
+            "SELECT symbol FROM cycle_prices WHERE session_id=?", (s2["id"],))}
+    assert "MSFT" in priced, "the rotated-out pick must still get an exit price"
+    reputation.score_matured_cycles()
+    with db() as conn:
+        rows = {r["member_id"]: r for r in conn.execute(
+            "SELECT member_id, accuracy, cycles_participated FROM member_settings")}
+    assert rows[rotator]["cycles_participated"] == 1, "old code left this at 0"
+    assert rows[rotator]["accuracy"] > 0, "old code left this at 0.0"
+
+
+def test_winsorisation_applies_under_legacy_too(balances, monkeypatch):
+    """The cap is not gated on POWER_FORM either."""
+    _cfg(monkeypatch, power_form="legacy", accuracy_excess_cap=0.05)
+    mid = _member("v2-legwins@x.com", 100.0)
+    s1 = voting.open_session_for(datetime.date(2029, 2, 5))
+    voting.set_member_picks(s1["id"], mid, ["AAPL"])
+    monkeypatch.setattr(reputation.market, "quotes", lambda syms: {"AAPL": 100.0, "SPY": 400.0})
+    reputation.capture_cycle_prices(s1["id"])
+    s2 = voting.open_session_for(datetime.date(2029, 2, 7))
+    monkeypatch.setattr(reputation.market, "quotes", lambda syms: {"AAPL": 200.0, "SPY": 400.0})
+    reputation.capture_cycle_prices(s2["id"])
+    reputation.score_matured_cycles()
+    with db() as conn:
+        r = conn.execute("SELECT excess, excess_raw FROM cycle_scores WHERE member_id=?",
+                         (mid,)).fetchone()
+    assert r["excess"] == pytest.approx(0.05) and r["excess_raw"] == pytest.approx(1.0)

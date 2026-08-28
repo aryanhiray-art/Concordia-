@@ -32,6 +32,10 @@ from ..db import audit, db
 _ANON_EMAIL = "deleted-%@deleted.invalid"
 
 
+class AccountTakenOver(Exception):
+    """Reinstatement would put two active members on one brokerage account."""
+
+
 def active_clause(alias: str = "m") -> str:
     """SQL predicate for 'this member counts', for use in a WHERE/JOIN.
 
@@ -86,10 +90,34 @@ def set_left(member_id: int, actor: str | None, reason: str = "left") -> bool:
     return changed
 
 
+def account_clash(member_id: int) -> int | None:
+    """The id of an ACTIVE member already holding this member's brokerage
+    account, if any. Used to gate reinstatement: while a member is away their
+    account is claimable by someone else, so coming back can put two active
+    members on one balance — each resolving the same dollars as committed
+    capital, permanently doubling one person's weight."""
+    with db() as conn:
+        row = conn.execute(
+            "SELECT b.member_id FROM rh_accounts a JOIN rh_accounts b "
+            "  ON b.account_number = a.account_number AND b.member_id != a.member_id "
+            "JOIN members m ON m.id = b.member_id "
+            f"WHERE a.member_id = ? AND a.account_number IS NOT NULL AND {active_clause('m')}",
+            (member_id,)).fetchone()
+    return row["member_id"] if row else None
+
+
 def clear_left(member_id: int, actor: str | None) -> bool:
     """Reinstate a departed member with their record intact. Returns True on the
     transition. Anonymized (self-deleted) rows are NOT reinstatable — their
     identity is gone, so there is nobody to reinstate."""
+    clash = account_clash(member_id)
+    if clash is not None:
+        audit(actor, "member_reinstate_blocked", str(member_id),
+              {"reason": "brokerage account now held by another member",
+               "held_by": clash})
+        raise AccountTakenOver(
+            f"another member (id {clash}) now holds this member's brokerage account — "
+            "resolve that before reinstating")
     with db() as conn:
         cur = conn.execute(
             "UPDATE members SET left_at=NULL WHERE id=? AND left_at IS NOT NULL "

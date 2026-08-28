@@ -215,6 +215,25 @@ nothing get re-ranked (measured on the live roster: up to 24.7% ratio drift).
 **`merit` requires `POWER_MODEL=blend`.** The app refuses to boot otherwise —
 without that guard `POWER_FORM=merit` would silently keep running `legacy`.
 
+### Deploying is NOT a no-op, even at POWER_FORM=legacy
+
+`POWER_FORM` is branched **only inside `snapshot_power_all`**. The accuracy
+pipeline — `capture_cycle_prices`, `score_cycle` — has no form branch, so its
+changes run under *both* forms, and accuracy is 50% of the legacy score via
+`accShare`. Three of them move live legacy weights on deploy day:
+
+- exit prices now cover the **previous** cycle's symbols, so a member whose
+  picks all rotated out is now MEASURED where the old code recorded a
+  non-measurement (verified: accuracy 0 → +0.0032, cycles 0 → 1 on one cycle)
+- a single cycle's excess is winsorised at `ACCURACY_EXCESS_CAP`
+- departed members are no longer scored
+
+All three move accuracy toward *more* correct, which is why they are not gated.
+But do not deploy expecting nothing to move. **Rehearse it:** copy prod's
+`concord.db`, run `resolve_and_snapshot()` against the copy on the new code, and
+diff `member_settings.accuracy`, `cycles_participated` and `voting_power`
+against prod before deploying for real.
+
 ### Turning it on
 
 Cold start is exact: with no accuracy anywhere, `M == 1.0` and every member's

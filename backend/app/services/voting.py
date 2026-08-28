@@ -385,6 +385,25 @@ def human_voter_count(session_id: int) -> int:
     return row["n"] if row else 0
 
 
+def member_has_live_ballot(member_id: int) -> bool:
+    """Has this member voted in a session that has not executed yet?
+
+    Broader than member_in_closed_unexecuted_session, which only covers the
+    CLOSED-awaiting-execution window. Participation must be frozen for the whole
+    life of a ballot the member has voted in: while a session is still OPEN their
+    pick already carries full weight in the tally (voting._tally_rows keys off
+    voting_power, not opted_in), but executor._opted_members funds only
+    opted_in=1 members. Opting out mid-ballot therefore let a member choose the
+    basket and pay for none of it — the cost landing on whoever stayed in.
+    """
+    with db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM votes v JOIN vote_sessions s ON s.id = v.session_id "
+            "WHERE v.member_id=? AND s.status != 'executed' LIMIT 1",
+            (member_id,)).fetchone()
+    return row is not None
+
+
 def member_in_closed_unexecuted_session(member_id: int) -> bool:
     """True if this member voted in a session that is CLOSED but not yet EXECUTED.
 

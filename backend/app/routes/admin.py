@@ -601,7 +601,11 @@ def member_reinstate(member_id: int, admin: dict = Depends(require_owner)):
     accounts cannot be reinstated: their identity is genuinely gone."""
     if not load_member(member_id):
         raise HTTPException(404, "no such member")
-    if not membership.clear_left(member_id, admin["email"]):
+    try:
+        ok = membership.clear_left(member_id, admin["email"])
+    except membership.AccountTakenOver as e:
+        raise HTTPException(409, str(e))
+    if not ok:
         raise HTTPException(400, "not reinstatable (never departed, or self-deleted)")
     return {"ok": True, "member_id": member_id}
 
