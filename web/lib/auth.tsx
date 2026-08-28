@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { api, ApiError, getToken, markActivity, readActivity, setToken } from "@/lib/api";
+import { devAutoLogin, devWantsSignIn } from "@/lib/devAutoLogin";
 import type { Account, Holding, Member, PowerView, SessionView } from "@/lib/types";
 
 type Ctx = {
@@ -213,6 +214,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     (async () => {
+      // Local sandbox only — a no-op in any production build (the whole module
+      // body is compiled out; see lib/devAutoLogin.ts). Append ?signin to skip.
+      if (devWantsSignIn()) setToken(null);
+      if (!getToken()) await devAutoLogin();
       if (getToken()) await refreshMember();
       setReady(true);
     })();
