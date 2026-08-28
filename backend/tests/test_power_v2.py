@@ -905,3 +905,37 @@ def test_invariants_hold_at_scale(balances, n):
     surv = [m for m in ids if m != leaver]
     assert (sorted(surv, key=lambda m: -before[m])
             == sorted(surv, key=lambda m: -after[m]))
+
+
+def test_prefetched_previous_power_matches_the_per_member_query():
+    """snapshot_power_all now resolves every member's prior power in ONE query
+    before opening its transaction, instead of calling power._prev_power inside
+    the loop (which opened a fresh connection per member while holding a write
+    lock). The two must agree exactly, including for members with no history and
+    members whose history has gaps."""
+    from app.services import power as power_svc
+    ids = [_member(f"v2-prev{i}@x.com", 100.0) for i in range(4)]
+    rows = [
+        (ids[0], "2027-01-03", 10.0), (ids[0], "2027-01-10", 20.0),
+        (ids[0], "2027-01-17", 30.0),                      # newest before the cutoff
+        (ids[1], "2027-01-03", 55.0),                      # single row
+        (ids[2], "2026-12-27", 77.0), (ids[2], "2027-01-24", 99.0),  # one AFTER the cutoff
+        # ids[3] deliberately has no history at all
+    ]
+    with db() as conn:
+        for mid, wk, pw in rows:
+            conn.execute(
+                "INSERT INTO voting_power_history(member_id,week_start,power,equity,"
+                "prev_power,delta,created_at) VALUES(?,?,?,?,NULL,NULL,?)",
+                (mid, wk, pw, pw, int(time.time())))
+    week = "2027-01-20"
+    with db() as conn:
+        prefetched = {r["member_id"]: float(r["power"]) for r in conn.execute(
+            "SELECT member_id, power FROM voting_power_history WHERE (member_id, week_start) IN "
+            "(SELECT member_id, MAX(week_start) FROM voting_power_history "
+            " WHERE week_start < ? GROUP BY member_id)", (week,)).fetchall()}
+    for mid in ids:
+        assert prefetched.get(mid) == power_svc._prev_power(mid, week), f"member {mid}"
+    assert prefetched[ids[0]] == 30.0          # newest strictly before the cutoff
+    assert prefetched[ids[2]] == 77.0          # the 2027-01-24 row is correctly ignored
+    assert ids[3] not in prefetched            # no history -> absent, and .get() -> None

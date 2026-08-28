@@ -614,6 +614,20 @@ def snapshot_power_all() -> list[dict]:
               {"reason": "pool_conservation", "sum_vp": sum(vps.values()), "pool_usd": total_cap})
         return []
 
+    # Previous powers in ONE query, BEFORE the transaction opens. power_svc.
+    # _prev_power opens its own connection per call (db() connects per call and
+    # re-runs three PRAGMAs), and calling it inside the loop meant N fresh
+    # connections while this one holds a write lock — safe under WAL, but
+    # needless, and it made the transaction's boundary depend on another
+    # module's connection handling.
+    prev_power: dict[int, float] = {}
+    with db() as conn:
+        for r in conn.execute(
+            "SELECT member_id, power FROM voting_power_history WHERE (member_id, week_start) IN "
+            "(SELECT member_id, MAX(week_start) FROM voting_power_history "
+            " WHERE week_start < ? GROUP BY member_id)", (week,)).fetchall():
+            prev_power[r["member_id"]] = float(r["power"])
+
     out = []
     # ONE transaction for the whole club. The connection is autocommit
     # (isolation_level=None), so this needs an EXPLICIT BEGIN IMMEDIATE — without
@@ -626,7 +640,7 @@ def snapshot_power_all() -> list[dict]:
             for m in writable:
                 mid = m["member_id"]
                 vp = vps[mid]
-                prev = power_svc._prev_power(mid, week)
+                prev = prev_power.get(mid)
                 delta = (vp - prev) if prev is not None else None
                 conn.execute(
                     "INSERT INTO voting_power_history(member_id,week_start,power,equity,prev_power,"
