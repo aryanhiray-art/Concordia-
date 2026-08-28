@@ -377,7 +377,9 @@ def human_voter_count(session_id: int) -> int:
         row = conn.execute(
             "SELECT COUNT(DISTINCT v.member_id) AS n FROM votes v "
             "JOIN members m ON m.id=v.member_id "
-            "WHERE v.session_id=? AND COALESCE(m.is_bot,0)=0",
+            # The tally already drops departed ballots; the quorum gate must
+            # agree, or a basket with no live human behind it still executes.
+            f"WHERE v.session_id=? AND COALESCE(m.is_bot,0)=0 AND {membership.active_clause('m')}",
             (session_id,),
         ).fetchone()
     return row["n"] if row else 0

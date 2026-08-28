@@ -28,7 +28,7 @@ from ..config import settings
 from ..db import audit, db, is_armed, kv_get
 from ..robinhood import vault
 from ..robinhood.client import RHAuthError
-from . import alloc, positions, reconcile, runreports, voting
+from . import alloc, membership, positions, reconcile, runreports, voting
 
 # How old a 'closed' session may be and still count as "the basket sold
 # yesterday". A cycle's sell and buy legs are consecutive TRADING days, so the
@@ -131,7 +131,11 @@ def _opted_members() -> list[dict]:
             "FROM members m "
             "JOIN member_settings s ON s.member_id=m.id "
             "LEFT JOIN rh_accounts a ON a.member_id=m.id "
-            "WHERE s.opted_in=1"
+            # A DEPARTED member must never be traded. The owner-side removal
+            # deliberately leaves their brokerage connection alone (it is their
+            # account), so opted_in alone does not exclude them — without this
+            # they would lose their vote and keep getting real orders placed.
+            f"WHERE s.opted_in=1 AND {membership.active_clause('m')}"
         ).fetchall()
     return [dict(r) for r in rows]
 

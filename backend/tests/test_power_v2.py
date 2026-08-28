@@ -939,3 +939,111 @@ def test_prefetched_previous_power_matches_the_per_member_query():
     assert prefetched[ids[0]] == 30.0          # newest strictly before the cutoff
     assert prefetched[ids[2]] == 77.0          # the 2027-01-24 row is correctly ignored
     assert ids[3] not in prefetched            # no history -> absent, and .get() -> None
+
+
+# ── review findings: every place a departed member was still counted ─────────
+# Found by an adversarial audit of the v2 commit. Each of these FAILED before
+# the corresponding query gained membership.active_clause().
+
+def test_departed_member_is_never_funded_by_the_executor(balances):
+    """THE serious one. Owner-side removal deliberately leaves the brokerage
+    connection alone (it is the member's own account), so the executor's
+    `WHERE opted_in=1` did not exclude them — a removed member lost their vote
+    and kept having REAL ORDERS placed in their account."""
+    from app.services import executor
+    stays = _member("v2-fund-stay@x.com", 100.0)
+    goes = _member("v2-fund-go@x.com", 500.0)
+    membership.set_left(goes, "owner@x.com", "removed by admin")
+    ids = [m["member_id"] for m in executor._opted_members()]
+    assert stays in ids
+    assert goes not in ids, "a departed member would still be traded"
+
+
+def test_departed_human_does_not_satisfy_the_execution_quorum(balances):
+    """The tally already drops a departed ballot. The MIN_HUMAN_VOTERS gate has
+    to agree, or a basket with no live human behind it still buys."""
+    human = _member("v2-quorum-h@x.com", 500.0)
+    bot = _member("v2-quorum-b@x.com", 100.0, is_bot=1, connect=False)
+    s = voting.open_session_for(datetime.date(2027, 11, 2))
+    voting.set_member_picks(s["id"], human, ["AAPL"])
+    voting.set_member_picks(s["id"], bot, ["MSFT"])
+    assert voting.human_voter_count(s["id"]) == 1
+    membership.set_left(human, "owner@x.com", "removed")
+    assert {t["symbol"] for t in voting.tally(s["id"])} == {"MSFT"}
+    assert voting.human_voter_count(s["id"]) == 0
+
+
+def test_departed_member_stops_getting_ballot_reminders(balances):
+    from app.services import notify
+    stays = _member("v2-mail-stay@x.com", 100.0)
+    goes = _member("v2-mail-go@x.com", 100.0)
+    with db() as conn:
+        conn.execute("UPDATE members SET email_verified_at=? WHERE id IN (?,?)",
+                     (int(time.time()), stays, goes))
+    s = voting.open_session_for(datetime.date(2027, 11, 9))
+    membership.set_left(goes, "owner@x.com", "removed")
+    got = [r["id"] for r in notify._reminder_recipients(s["id"], only_nonvoters=True)]
+    assert stays in got and goes not in got
+
+
+def test_departed_member_broker_account_is_no_longer_polled(balances):
+    """Their account is theirs again — stop making live Robinhood calls against it."""
+    from app.services import accountsnap
+    stays = _member("v2-poll-stay@x.com", 100.0)
+    goes = _member("v2-poll-go@x.com", 100.0)
+    membership.set_left(goes, "owner@x.com", "removed")
+    ids = accountsnap.connected_member_ids()
+    assert stays in ids and goes not in ids
+
+
+def test_removal_revokes_every_live_session(balances):
+    """deps.py validates a token's `ver` against members.session_version. Without
+    a bump, a removed member keeps a working session."""
+    mid = _member("v2-session@x.com", 100.0)
+    with db() as conn:
+        before = conn.execute("SELECT session_version v FROM members WHERE id=?",
+                              (mid,)).fetchone()["v"]
+    membership.set_left(mid, "owner@x.com", "removed")
+    with db() as conn:
+        after = conn.execute("SELECT session_version v FROM members WHERE id=?",
+                             (mid,)).fetchone()["v"]
+    assert after == before + 1
+
+
+def test_duplicate_account_guard_survives_a_disconnect(balances):
+    """Gating the guard on status='connected' let a second member claim the
+    account during a disconnect window. With both rows carrying a stale
+    voting_power, one $1,000 account produced $2,000 of ballot weight."""
+    from app.robinhood import vault
+    a = _member("v2-dup-a@x.com", 1000.0, connect=False)
+    b = _member("v2-dup-b@x.com", 1000.0, connect=False)
+    bundle = {"access_token": "t", "refresh_token": "r", "expires_at": 9e9}
+    vault.save_connection(a, bundle, "RH-DUP-1", True)
+    with db() as conn:      # A presses Disconnect
+        conn.execute("UPDATE rh_accounts SET status='revoked', enc_tokens=NULL "
+                     "WHERE member_id=?", (a,))
+    with pytest.raises(vault.DuplicateAccount):
+        vault.save_connection(b, bundle, "RH-DUP-1", True)
+    # but a DEPARTED member releases the claim
+    membership.set_left(a, "owner@x.com", "left")
+    vault.save_connection(b, bundle, "RH-DUP-1", True)
+
+
+def test_disconnecting_drops_your_voting_weight_immediately(balances):
+    """voting_power is read by the tally BETWEEN snapshots, and the power
+    cadence is biweekly — leaving it stale kept a disconnected member voting
+    dollars they no longer had committed."""
+    from app.routes import rh_oauth  # noqa: F401  (import proves the route loads)
+    mid = _member("v2-disc@x.com", 1000.0)
+    _snap()
+    with db() as conn:
+        assert conn.execute("SELECT voting_power p FROM member_settings WHERE member_id=?",
+                            (mid,)).fetchone()["p"] == 1000.0
+        # what POST /api/oauth/robinhood/disconnect now does
+        conn.execute("UPDATE member_settings SET voting_power=0, voting_power_share=0, "
+                     "last_capital_usd=0 WHERE member_id=?", (mid,))
+        conn.execute("UPDATE rh_accounts SET status='revoked' WHERE member_id=?", (mid,))
+    s = voting.open_session_for(datetime.date(2027, 11, 16))
+    voting.set_member_picks(s["id"], mid, ["AAPL"])
+    assert voting.tally(s["id"])[0]["weight"] == 1.0, (
+        "a disconnected member should fall to the tally floor, not keep $1000")

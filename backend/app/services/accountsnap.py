@@ -34,7 +34,7 @@ import threading
 import time
 
 from ..db import db
-from . import alloc, equity_history, positions, power
+from . import alloc, equity_history, membership, positions, power
 
 # How long a snapshot is served without even trying to refresh it. Matches the
 # 10-minute interval refresher, so a warm member is normally served by the timer.
@@ -254,7 +254,8 @@ def connected_member_ids(opted_in_only: bool = True) -> list[int]:
            "JOIN rh_accounts a ON a.member_id=m.id "
            "JOIN member_settings s ON s.member_id=m.id "
            "WHERE COALESCE(m.is_bot,0)=0 AND a.status='connected' "
-           "AND a.account_number IS NOT NULL")
+           # a departed member's brokerage account is theirs again — stop polling it
+           f"AND a.account_number IS NOT NULL AND {membership.active_clause('m')}")
     if opted_in_only:
         sql += " AND s.opted_in=1"
     with db() as conn:

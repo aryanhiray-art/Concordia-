@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from ..config import settings
 from ..db import db
+from . import membership
 
 
 def send_run_emails(summary: dict) -> dict:
@@ -185,7 +186,7 @@ def _reminder_recipients(sid: int, only_nonvoters: bool) -> list[dict]:
         "JOIN member_settings s ON s.member_id = m.id "
         "WHERE COALESCE(m.is_bot,0)=0 AND m.email_verified_at IS NOT NULL "
         "AND s.opted_in=1 AND COALESCE(s.email_reminders,1)=1 "
-        "AND m.email NOT LIKE 'deleted-%'"
+        f"AND {membership.active_clause('m')}"
     )
     if only_nonvoters:
         q += " AND NOT EXISTS (SELECT 1 FROM votes v WHERE v.session_id=? AND v.member_id=m.id)"

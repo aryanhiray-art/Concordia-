@@ -180,6 +180,12 @@ def callback(request: Request):
 @router.post("/api/oauth/robinhood/disconnect")
 def disconnect(member: dict = Depends(require_member)):
     with db() as conn:
+        # Disconnecting removes the committed capital, and the tally reads
+        # member_settings.voting_power directly between snapshots — so the
+        # weight has to go now, not at the next scheduled snapshot.
+        conn.execute("UPDATE member_settings SET voting_power=0, voting_power_share=0, "
+                     "last_capital_usd=0, updated_at=strftime('%s','now') WHERE member_id=?",
+                     (member["id"],))
         conn.execute("UPDATE rh_accounts SET status='revoked', enc_tokens=NULL WHERE member_id=?",
                      (member["id"],))
     # Stop serving the disconnected account's cached balances/holdings.

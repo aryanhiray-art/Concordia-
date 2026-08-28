@@ -66,8 +66,15 @@ def save_connection(member_id: int, bundle: dict, account_number: str | None,
     if account_number:
         with db() as conn:
             clash = conn.execute(
+                # Deliberately NOT filtered on a.status. A member who pressed
+                # Disconnect still holds the claim on their own brokerage
+                # account — gating on status='connected' let a second member
+                # take it over in that window, and with both rows carrying a
+                # stale voting_power one $1,000 account produced $2,000 of
+                # ballot weight. The claim is released only by account deletion
+                # (which drops the row) or by departure (excluded below).
                 "SELECT a.member_id FROM rh_accounts a JOIN members m ON m.id = a.member_id "
-                "WHERE a.account_number = ? AND a.member_id != ? AND a.status = 'connected' "
+                "WHERE a.account_number = ? AND a.member_id != ? "
                 "AND m.left_at IS NULL AND m.email NOT LIKE 'deleted-%@deleted.invalid'",
                 (account_number, member_id)).fetchone()
         if clash:
