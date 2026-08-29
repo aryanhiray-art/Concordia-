@@ -344,6 +344,43 @@ def invites_revoke(invite_id: int, admin: dict = Depends(require_admin)):
     return {"ok": True}
 
 
+@router.get("/reference")
+def reference_status(admin: dict = Depends(require_admin)):
+    """The Alpaca reference account: gates, connectivity, and its record.
+
+    Kept out of /panel for the same reason as /bots — this makes a network call
+    to Alpaca and the panel is a DB-only fast path shared with the digest timer.
+    """
+    from ..services import reference
+    return reference.status()
+
+
+@router.post("/reference/run")
+def reference_run(dry: bool = True, admin: dict = Depends(require_admin)):
+    """Mirror the latest decided basket into the reference account.
+
+    Defaults to a DRY run. A live run still has to clear every settings gate
+    (settings.reference_will_place) — this endpoint cannot arm anything, it can
+    only decline to force a dry run on an already-armed deploy.
+    """
+    from ..services import reference, voting
+    sess = voting.latest_session("executed") or voting.latest_session("closed")
+    if not sess:
+        raise HTTPException(status_code=409, detail="no decided session yet")
+    symbols = [p["symbol"] for p in voting.session_picks(sess)]
+    out = reference.run(sess["trade_date"], symbols, force_dry_run=bool(dry))
+    audit(f"member:{admin.get('id')}", "reference_run_manual", sess["trade_date"],
+          {"dry": bool(dry), "orders": len(out.get("orders") or [])})
+    return out
+
+
+@router.post("/reference/snapshot")
+def reference_snapshot(admin: dict = Depends(require_admin)):
+    """Pull the account's equity curve + cash flows into reference_nav."""
+    from ..services import reference
+    return reference.snapshot()
+
+
 @router.get("/bots")
 def bots_status(admin: dict = Depends(require_admin)):
     """The bot roster (power/accuracy/last picks) + whether their LLM is up.

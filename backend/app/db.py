@@ -77,6 +77,23 @@ CREATE TABLE IF NOT EXISTS login_events (
 -- KEPT club record: one row per ET day of the REAL-money club index (see
 -- services/clubnav). This is a ledger, not a cache — the club's track record
 -- must not be re-derived from whatever prices happen to be fetchable later.
+-- The REFERENCE account's daily record (one operator-owned Alpaca account that
+-- mirrors the club's decided basket). Stores RAW OBSERVATIONS, never a computed
+-- index: clubnav stored the index itself, so when the method changed the whole
+-- published history silently moved (+2.05% -> +9.76% on 2026-08-25 because one
+-- member's allocation row was edited). Keeping equity and the real cash flow
+-- means the series can be recomputed at read time and a method fix never
+-- rewrites what was actually observed.
+CREATE TABLE IF NOT EXISTS reference_nav (
+    d          TEXT PRIMARY KEY,              -- ET date, YYYY-MM-DD
+    equity     REAL NOT NULL,                 -- account equity at that day's close
+    net_flow   REAL NOT NULL DEFAULT 0,       -- deposits(+)/withdrawals(-) that day, from
+                                              -- the activities feed — a REAL number, not
+                                              -- clubnav's >25%-jump heuristic
+    spy_close  REAL,                          -- benchmark close (NULL = unfetched)
+    created_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS club_nav (
     d          TEXT PRIMARY KEY,              -- ET date, YYYY-MM-DD
     club       REAL NOT NULL,                 -- index, 100 = first recorded day

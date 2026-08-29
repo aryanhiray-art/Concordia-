@@ -275,6 +275,18 @@ export type AdminRunMember = {
   note?: string | null; orders?: AdminRunOrder[];
   [k: string]: unknown;
 };
+export type AdminReference = {
+  configured?: boolean; paper?: boolean; enabled?: boolean; armed?: boolean;
+  budget_usd?: number; will_place?: boolean;
+  days_recorded?: number; start_date?: string | null;
+  club_pct?: number | null; spy_pct?: number | null;
+  probe?: {
+    reachable?: boolean; configured?: boolean; detail?: string; paper?: boolean;
+    account_number?: string; status?: string; equity?: string; cash?: string;
+    buying_power?: string;
+  };
+};
+
 export type AdminRunSummary = {
   mode?: string; phase?: string; trade_date?: string; picks?: string[];
   will_place?: boolean; note?: string | null;
@@ -579,6 +591,12 @@ export const api = {
   adminLogins: () => req<{ logins: AdminLoginRow[] }>("/api/admin/logins?limit=30"),
   // the tracking layer — daily aggregates written by the nightly job, plus a
   // live "now" snapshot and weekly voting-retention cohorts. DB-only, fast.
+  adminReference: () => req<AdminReference>("/api/admin/reference"),
+  adminReferenceRun: (dry = true) =>
+    req<Record<string, unknown>>(`/api/admin/reference/run?dry=${dry ? "true" : "false"}`,
+      { method: "POST" }),
+  adminReferenceSnapshot: () =>
+    req<Record<string, unknown>>("/api/admin/reference/snapshot", { method: "POST" }),
   adminMetrics: (days = 90) => req<AdminMetrics>(`/api/admin/metrics?days=${days}`),
   // admin-mediated password recovery — the temp password is returned ONCE
   adminResetPassword: (id: number) =>

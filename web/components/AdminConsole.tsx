@@ -36,6 +36,7 @@ import { SessionPanel } from "./admin/SessionPanel";
 import { BotsPanel } from "./admin/BotsPanel";
 import { RunsPage } from "./admin/RunsPage";
 import { MetricsPanel } from "./admin/MetricsPanel";
+import { ReferencePanel } from "./admin/ReferencePanel";
 import { AuditPage } from "./admin/AuditTail";
 import { AccessCard } from "./admin/AccessCard";
 
@@ -224,6 +225,7 @@ export function AdminConsole() {
             )}
 
             {page === "metrics" && <MetricsPanel />}
+            {page === "reference" && <ReferencePanel />}
 
             {page === "audit" && <AuditPage panelAudit={panel.audit} />}
           </div>

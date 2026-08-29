@@ -17,7 +17,7 @@
 import { Button, Logo } from "@/components/ui";
 import { AdminLink, OpsTag } from "./util";
 
-export type AdminPageKey = "overview" | "controls" | "basket" | "members" | "cycle" | "cycles" | "runs" | "bots" | "metrics" | "audit";
+export type AdminPageKey = "overview" | "controls" | "basket" | "members" | "cycle" | "cycles" | "runs" | "bots" | "metrics" | "reference" | "audit";
 
 /** Route → page. Unknown paths render Overview (per the host contract). */
 export function pageKeyFor(pathname: string | null | undefined): AdminPageKey {
@@ -30,6 +30,7 @@ export function pageKeyFor(pathname: string | null | undefined): AdminPageKey {
     case "/runs": return "runs";
     case "/bots": return "bots";
     case "/metrics": return "metrics";
+    case "/reference": return "reference";
     case "/audit": return "audit";
     default: return "overview";
   }
@@ -48,6 +49,8 @@ const TABS: { key: AdminPageKey; href: string; label: string }[] = [
   { key: "bots", href: "/bots", label: "Bots" },
   // Metrics = the tracking layer (daily_metrics aggregates + retention).
   { key: "metrics", href: "/metrics", label: "Metrics" },
+  // Reference = the operator-owned Alpaca account the record is measured in.
+  { key: "reference", href: "/reference", label: "Reference" },
   { key: "audit", href: "/audit", label: "Audit" },
 ];
 
