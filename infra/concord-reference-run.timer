@@ -1,0 +1,19 @@
+[Unit]
+Description=Concord — reference-account mirror, Mondays after the club executes
+
+[Timer]
+# 30 minutes after concord-execute.timer (10:15 ET) so the basket it mirrors is
+# the one members actually received, and comfortably inside market hours — a
+# notional order outside 09:30-16:00 is rejected, not queued.
+#
+# Monday only: the club's cadence is weekly (ballot closes Mon 09:15, trades
+# 10:15). If the cadence changes, this and concord-execute.timer move together.
+OnCalendar=Mon *-*-* 10:45 America/New_York
+
+# Persistent=false deliberately. A missed run must NOT fire on boot: it would
+# place a stale basket at whatever time the box came back, possibly outside
+# market hours. A skipped week is a gap in the series; a late one is bad data.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

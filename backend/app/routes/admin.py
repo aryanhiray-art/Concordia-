@@ -367,6 +367,9 @@ def reference_run(dry: bool = True, admin: dict = Depends(require_admin)):
     sess = voting.latest_session("executed") or voting.latest_session("closed")
     if not sess:
         raise HTTPException(status_code=409, detail="no decided session yet")
+    # Symbols only, deliberately: the reference account mirrors how members are
+    # SIZED, and the executor sizes them equally (executor.py:614). See the note
+    # in reference.plan().
     symbols = [p["symbol"] for p in voting.session_picks(sess)]
     out = reference.run(sess["trade_date"], symbols, force_dry_run=bool(dry))
     audit(f"member:{admin.get('id')}", "reference_run_manual", sess["trade_date"],

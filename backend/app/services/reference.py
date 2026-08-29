@@ -61,6 +61,20 @@ def plan(symbols: list[str], budget_usd: float, held: dict[str, float] | None = 
          ) -> list[dict]:
     """Equal-weight target for `symbols` over `budget_usd` → the orders to send.
 
+    EQUAL WEIGHT IS NOT A SIMPLIFICATION — it is what this account is for.
+    services/executor.py sizes every member equally (`per_pick = budget / n_eff`,
+    executor.py:614): the club's consensus weights decide WHICH names make the
+    basket, and then each surviving name gets the same dollars in a member's
+    account. This account measures what members actually hold, so it must size
+    the same way.
+
+    It is tempting to "fix" this by feeding in the club's vote weights, and the
+    difference is not small: over 2026-06-17..08-28 the same 24 baskets return
+    +8.94% equal-weighted and +3.07% vote-weighted, against SPY's +4.07%. Weighting
+    by votes here would produce a number no member could have earned, which is
+    the one thing this account exists to avoid. If the executor ever honours the
+    weights, change it there first and this follows.
+
     `held` = {symbol: current market value}. Names that left the basket are sold
     in full; names in it are topped up toward the equal-weight target. A delta
     under $1 is skipped — below Alpaca's notional minimum, and churning cents

@@ -81,6 +81,18 @@ def test_plan_equal_weights_a_fresh_basket():
     assert all(o["side"] == "buy" and o["notional"] == 1000.0 for o in orders)
 
 
+def test_plan_mirrors_the_executors_equal_sizing_not_the_club_vote_weights():
+    """The reference account measures what MEMBERS hold, and executor.py:614
+    gives every basket name the same dollars regardless of its vote weight. A
+    future change that weights this by votes would silently publish a number no
+    member could have earned — over 2026-06-17..08-28 the same baskets return
+    +8.94% equal-weighted and +3.07% vote-weighted. This test is the guard."""
+    orders = reference.plan(["AAPL", "MSFT", "NVDA"], 3000.0, held={})
+    got = {o["symbol"]: o["notional"] for o in orders}
+    assert got == {"AAPL": 1000.0, "MSFT": 1000.0, "NVDA": 1000.0}
+    assert all(o["note"] == "to equal-weight target" for o in orders)
+
+
 def test_plan_sells_names_that_left_the_basket_in_full():
     orders = reference.plan(["AAPL"], 1000.0, held={"AAPL": 1000.0, "TSLA": 250.0})
     exits = [o for o in orders if o["symbol"] == "TSLA"]
