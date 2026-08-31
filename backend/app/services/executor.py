@@ -38,10 +38,23 @@ STALE_BASKET_DAYS = 5
 
 # Both-day buying-power poll: how long the buy leg will wait for Robinhood to
 # credit the morning's sale proceeds (fill + ledger lag measured >8s on 08/19),
-# and how often it looks. Early exit when ~80% of the placed sells' value shows
-# up, so the common case waits seconds, not the cap.
+# and how often it looks.
+#
+# The early-exit target was 80% of the placed sells' value, which SYSTEMATICALLY
+# stranded the tail of every rotation: proceeds are spendable immediately on a
+# limited-margin account, so leaving a fifth of them uncredited meant the last
+# name (or two) of the basket deferred with "settles next cycle" on a cycle that
+# has no settlement wait at all. Observed 2026-08-31: every member deferred their
+# final pick(s) while all four accounts were limited_margin. 0.98 leaves only
+# rounding/partial-fill slack, and the plateau check below still exits early when
+# credit genuinely stops arriving.
 BP_POLL_EVERY_S = 6
 BP_POLL_MAX_S = 120
+BP_POLL_TARGET_FRAC = 0.98
+# How many consecutive non-rising polls mean "credit has stopped arriving". One
+# was too few: fills land progressively at 09:31, so buying power plateaus
+# BETWEEN fills and a single flat read exited the poll before the rest landed.
+BP_POLL_FLAT_POLLS = 3
 
 # A position more than this fraction below its target, whose top-up would be
 # under the broker's $1 minimum order, is exited and re-bought at the right
@@ -788,8 +801,9 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
             acct_type = (kv_get(f"acct_type:{mid}") or "").strip().lower()
             deadline_s = 0 if acct_type == "cash" else BP_POLL_MAX_S
             bp_start = buying_power
-            target = bp_start + 0.8 * placed_sell_usd
+            target = bp_start + BP_POLL_TARGET_FRAC * placed_sell_usd
             waited = 0
+            flat = 0
             while True:
                 try:
                     port2 = client.get_portfolio(m["account_number"])
@@ -801,10 +815,13 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                 rose = bp_new is not None and bp_new > buying_power
                 if rose:
                     buying_power = bp_new
+                    flat = 0
+                else:
+                    flat += 1
                 if placed_sell_usd > 0 and buying_power >= target:
                     break                    # proceeds essentially all credited
-                if buying_power > bp_start and not rose:
-                    break                    # credit landed and stopped growing
+                if buying_power > bp_start and flat >= BP_POLL_FLAT_POLLS:
+                    break                    # credit landed and has stopped growing
                 if waited >= deadline_s:
                     break
                 time.sleep(BP_POLL_EVERY_S)

@@ -761,6 +761,41 @@ def kill(admin: dict = Depends(require_admin)):
     return {"armed": False, "halt": True}
 
 
+class RescueBody(BaseModel):
+    member_id: int
+    symbol: str
+    confirm: str = ""
+    dry_run: bool = True
+
+
+@router.get("/stranded")
+def stranded_positions(admin: dict = Depends(require_admin)):
+    """Names the club holds that are NOT in the current basket — i.e. positions
+    the cycle should have exited and did not. Live broker reads, so this is an
+    explicit call, not part of /panel."""
+    from ..services import rescue
+    return {"stranded": rescue.stranded()}
+
+
+@router.post("/rescue-sell")
+def rescue_sell(body: RescueBody, admin: dict = Depends(require_owner)):
+    """EMERGENCY: exit ONE stranded position for ONE member, outside the cycle.
+
+    dry_run=true (the default) returns the plan and places nothing. A real sell
+    needs confirm='SELL' and an interactive owner session, and still respects
+    live/armed/halt — an emergency lever that ignores the kill switch is a
+    second way to lose control of the account, not a safety feature.
+    """
+    from ..services import rescue
+    _require_interactive(admin)
+    if not body.dry_run and (body.confirm or "").strip().upper() != "SELL":
+        raise HTTPException(400, "type SELL to confirm a real order")
+    if not load_member(body.member_id):
+        raise HTTPException(404, "no such member")
+    return rescue.rescue_sell(body.member_id, body.symbol, admin["email"],
+                              dry_run=body.dry_run)
+
+
 @router.post("/run/{phase}")
 def run_phase(phase: str, dry_run: bool = True, admin: dict = Depends(require_admin)):
     """Manually trigger a phase. `execute` honours dry_run unless live+armed."""

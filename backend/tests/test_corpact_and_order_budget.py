@@ -186,3 +186,107 @@ def test_a_full_rotation_fits_in_the_budget():
     assert shared_leftover_for_buys < top_n, "one shared budget cannot fit a rotation"
     assert min(top_n, max_orders) == top_n, "per-leg, every sell fits"
     assert min(top_n, max_orders) == top_n, "per-leg, every buy fits"
+
+
+# ── 3. the buy leg gave up on the proceeds too early ─────────────────────────
+
+def test_bp_poll_waits_for_the_full_proceeds_not_80_percent():
+    """Every member deferred their LAST pick(s) as 'settles next cycle' on a
+    cycle where all four accounts were limited_margin — i.e. no settlement wait
+    exists at all. The poll exited once ~80% of the sold value had credited, so
+    a fifth of every rotation's proceeds was unspendable and the tail of the
+    basket was stranded."""
+    from app.services import executor
+    assert executor.BP_POLL_TARGET_FRAC >= 0.95, (
+        "exiting well below the full proceeds strands the tail of the rotation")
+    assert executor.BP_POLL_FLAT_POLLS >= 2, (
+        "one flat read is a plateau BETWEEN fills, not the end of the credit")
+
+
+def test_bp_poll_plateau_needs_consecutive_flat_reads():
+    """Fills land progressively at 09:31, so buying power stalls between them.
+    A single non-rising read used to end the wait."""
+    import inspect
+
+    src = inspect.getsource(executor_run_impl := __import__(
+        "app.services.executor", fromlist=["_run_impl"])._run_impl)
+    assert "flat >= BP_POLL_FLAT_POLLS" in src, "the plateau must be confirmed, not assumed"
+    assert "flat = 0" in src and "flat += 1" in src
+    assert "0.8 * placed_sell_usd" not in src, "the old 80% early exit must be gone"
+
+
+# ── 4. the emergency lever ───────────────────────────────────────────────────
+
+def test_rescue_refuses_a_name_in_the_current_basket(monkeypatch):
+    from app.services import rescue, voting
+    mid = _member("rescue-basket@x.com")
+    monkeypatch.setattr(voting, "latest_session",
+                        lambda st: {"id": _SID[0], "picks_json": '[{"symbol": "AAPL"}]'})
+    p = rescue.plan(mid, "AAPL")
+    assert p["ok"] is False and "current basket" in p["reason"]
+
+
+def test_rescue_refuses_a_position_the_club_does_not_own(monkeypatch):
+    """The personal-shares guard: if the club ledger has no claim, the lever
+    must refuse even though the account holds the name."""
+    from app.services import positions, rescue, voting
+    mid = _member("rescue-personal@x.com")
+    monkeypatch.setattr(voting, "latest_session", lambda st: {"id": _SID[0], "picks_json": "[]"})
+    monkeypatch.setattr(rescue.vault, "ensure_client", lambda m: object())
+    monkeypatch.setattr(positions, "club_shares", lambda m: {})
+    monkeypatch.setattr(positions, "club_shares_derived",
+                        lambda m, client=None, account_number=None: {})
+    monkeypatch.setattr(positions, "holdings_with_value",
+                        lambda m: [{"symbol": "TSLA", "quantity": 3.0, "value": 900.0}])
+    p = rescue.plan(mid, "TSLA")
+    assert p["ok"] is False and "club holds no TSLA" in p["reason"]
+
+
+def test_rescue_plans_a_full_exit_of_a_stranded_club_name(monkeypatch):
+    """The VMRK case: held by the club, not in the basket, sellable."""
+    from app.services import positions, rescue, voting
+    mid = _member("rescue-vmrk@x.com")
+    monkeypatch.setattr(voting, "latest_session", lambda st: {"id": _SID[0], "picks_json": "[]"})
+    monkeypatch.setattr(rescue.vault, "ensure_client", lambda m: object())
+    monkeypatch.setattr(positions, "club_shares_derived",
+                        lambda m, client=None, account_number=None: {"VMRK": 0.0752})
+    monkeypatch.setattr(positions, "club_shares", lambda m: {"VMRK": 0.0752})
+    monkeypatch.setattr(positions, "holdings_with_value",
+                        lambda m: [{"symbol": "VMRK", "quantity": 0.0752, "value": 4.88}])
+    p = rescue.plan(mid, "VMRK")
+    assert p["ok"] is True
+    assert p["sell_qty"] == pytest.approx(0.0752)
+
+
+def test_rescue_never_sells_more_than_the_account_holds(monkeypatch):
+    from app.services import positions, rescue, voting
+    mid = _member("rescue-clamp@x.com")
+    monkeypatch.setattr(voting, "latest_session", lambda st: {"id": _SID[0], "picks_json": "[]"})
+    monkeypatch.setattr(rescue.vault, "ensure_client", lambda m: object())
+    monkeypatch.setattr(positions, "club_shares_derived",
+                        lambda m, client=None, account_number=None: {"XYZ": 99.0})
+    monkeypatch.setattr(positions, "club_shares", lambda m: {"XYZ": 99.0})
+    monkeypatch.setattr(positions, "holdings_with_value",
+                        lambda m: [{"symbol": "XYZ", "quantity": 2.0, "value": 10.0}])
+    p = rescue.plan(mid, "XYZ")
+    assert p["sell_qty"] == pytest.approx(2.0), "must clamp to what the account actually holds"
+
+
+def test_rescue_dry_run_places_nothing_and_respects_the_kill_switch(monkeypatch):
+    from app.services import positions, rescue, voting
+    mid = _member("rescue-dry@x.com")
+    monkeypatch.setattr(voting, "latest_session", lambda st: {"id": _SID[0], "picks_json": "[]"})
+    monkeypatch.setattr(rescue.vault, "ensure_client", lambda m: object())
+    monkeypatch.setattr(positions, "club_shares_derived",
+                        lambda m, client=None, account_number=None: {"VMRK": 0.05})
+    monkeypatch.setattr(positions, "club_shares", lambda m: {"VMRK": 0.05})
+    monkeypatch.setattr(positions, "holdings_with_value",
+                        lambda m: [{"symbol": "VMRK", "quantity": 0.05, "value": 3.0}])
+    out = rescue.rescue_sell(mid, "VMRK", "owner@x.com", dry_run=True)
+    assert out["ok"] is True and "placed" not in out
+    with db() as conn:
+        assert conn.execute("SELECT COUNT(*) c FROM executions WHERE member_id=? AND side='sell'",
+                            (mid,)).fetchone()["c"] == 0
+    # a real attempt while disarmed must also place nothing
+    out = rescue.rescue_sell(mid, "VMRK", "owner@x.com", dry_run=False)
+    assert out["placed"] is False and "kill switch" in out["reason"]
