@@ -197,6 +197,51 @@ def _club_traded_symbols(member_id: int) -> set[str]:
     return {r["symbol"] for r in rows}
 
 
+def symbol_renames() -> dict[str, str]:
+    """OLD -> NEW for every corporate action the club has migrated.
+
+    The broker's order feed is IMMUTABLE history: after AvalonBay became
+    Vivmark it still reports the original fills as AVB. services/renames.migrate
+    renames the LEDGER rows to VMRK, so the derived position — which intersects
+    feed symbols with ledger symbols — dropped the name from BOTH sides and the
+    club could never sell it again. Folding the feed forward through this map is
+    what keeps a renamed holding reachable.
+    """
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT target FROM audit_log WHERE action='symbol_migrated' "
+            "AND target LIKE '%->%'").fetchall()
+    out: dict[str, str] = {}
+    for r in rows:
+        old, _, new = (r["target"] or "").partition("->")
+        if old and new:
+            out[old.strip().upper()] = new.strip().upper()
+    return out
+
+
+def corporate_action_shares(member_id: int) -> dict[str, float]:
+    """Share deltas the club holds ONLY because of a corporate action.
+
+    A conversion creates shares with no order behind them, so the feed cannot
+    see them (AVB 0.026932 in the feed vs VMRK 0.0752 actually held). renames
+    .migrate records the difference as a $0 execution tagged `corporate_action`;
+    this reads those back so the derived position reconstructs the true holding.
+    """
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT symbol, side, place_json FROM executions "
+            "WHERE member_id=? AND status='placed' AND place_json LIKE '%corporate_action%'",
+            (member_id,)).fetchall()
+    out: dict[str, float] = {}
+    for r in rows:
+        q = _filled_qty(r["place_json"])
+        if not q:
+            continue
+        sign = -1.0 if r["side"] == "sell" else 1.0
+        out[r["symbol"]] = out.get(r["symbol"], 0.0) + sign * q
+    return out
+
+
 def club_shares_derived(member_id: int, *, client=None,
                         account_number: str | None = None) -> dict[str, float]:
     """Feed-derived club position (>1e-9 only), keys ∩ club-ever-traded symbols.
@@ -211,6 +256,18 @@ def club_shares_derived(member_id: int, *, client=None,
         client = vault.ensure_client(member_id)
     orders = _fetch_full_order_feed(client, account_number)   # raises DerivationIncomplete
     net = club_position_from_orders(orders)
+    # Fold renamed tickers FORWARD before the ledger gate, then add the shares a
+    # corporate action created (which have no order and so cannot be in the
+    # feed). Without both, a renamed holding is invisible here, never sold, and
+    # fails verification as "dropped from basket but still held" every cycle.
+    renames = symbol_renames()
+    if renames:
+        folded: dict[str, float] = {}
+        for sym, q in net.items():
+            folded[renames.get(sym, sym)] = folded.get(renames.get(sym, sym), 0.0) + q
+        net = folded
+    for sym, q in corporate_action_shares(member_id).items():
+        net[sym] = net.get(sym, 0.0) + q
     club_syms = _club_traded_symbols(member_id)
     out: dict[str, float] = {}
     for s, q in net.items():

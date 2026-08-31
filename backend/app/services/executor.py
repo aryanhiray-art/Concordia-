@@ -639,6 +639,22 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         # member's own max_orders (finding #35 — the column was fetched but the
         # global was always used).
         member_max_orders = min(settings.max_orders, int(m.get("max_orders") or settings.max_orders))
+        # SELLS DO NOT SPEND THE BUY BUDGET.
+        #
+        # One shared counter meant a full rotation starved its own buy leg: a
+        # cycle can need up to 2 x TOP_N orders (exit every old name, enter every
+        # new one), so with TOP_N=20 and MAX_ORDERS=25 the sells consumed the
+        # budget and the last buys were dropped as "max_orders cap". Observed
+        # 2026-08-31: a member needing 35 orders placed 25 and ended the cycle
+        # holding 16 of 20 basket names, with the undeployed dollars silently
+        # left in cash — the club had committed more than it managed to hold.
+        #
+        # The cap exists to bound how many orders one member can generate in a
+        # cycle, and it still does: each LEG is capped independently. Sells are
+        # additionally self-limiting (you cannot sell more names than you hold),
+        # and starving them is worse than starving buys — an unsold exit leaves
+        # the member holding a name the club voted OUT of the basket.
+        sell_count = 0
 
         # ── SELL phase: exit dropped names + trim overweight basket names ──
         # Sells come ONLY from `held` (club-bought, reconstructed from executions),
@@ -684,6 +700,15 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
             if (mid, symbol, "sell") in already:
                 msum["orders"].append({"symbol": symbol, "side": "sell", "status": "placed",
                                        "note": "already sold"})
+                continue
+            if sell_count >= member_max_orders:
+                # The sell leg has its own budget (see member_max_orders above),
+                # so a rotation can never starve its own buys — but it is still
+                # bounded, so one member cannot generate unlimited orders.
+                _record(sid, mid, symbol, None, ref_id_for(sid, mid, f"SELL:{symbol}"),
+                        "skipped", error="max_orders cap reached (sell leg)", side="sell")
+                msum["orders"].append({"symbol": symbol, "side": "sell",
+                                       "status": "skipped", "note": "max_orders cap · sell leg"})
                 continue
             ref_id = ref_id_for(sid, mid, f"SELL:{symbol}")
             sell_qty = min(sell_qty, live.get(symbol, 0.0))   # cap to shares actually held
@@ -737,7 +762,7 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                     # and skip the name for the same sub-$1 reason.
                     live[symbol] = 0.0
                     held[symbol] = 0.0
-                order_count += 1
+                sell_count += 1
                 placed_sell_usd += (price or 0.0) * qfloor
             except Exception as e:  # noqa: BLE001
                 _record(sid, mid, symbol, None, ref_id, "error", review=review, error=f"sell: {e}", side="sell")
