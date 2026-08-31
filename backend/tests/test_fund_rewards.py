@@ -11,8 +11,11 @@ import pytest
 
 from app.services.fund_rewards import (
     MemberAccuracy,
+    MemberStake,
+    is_qualified,
     member_payout,
     national_reward_shares,
+    qualified_aum,
     reward_pool,
     royalty_amounts,
     royalty_pool,
@@ -50,17 +53,57 @@ def test_national_reward_shares_all_non_positive_pays_nobody():
 
 
 def test_member_payout_combines_principal_growth_and_bonus():
-    # $10,000 principal, fund up 8%, this member earned 10% of the reward
-    # pool, pool is $2M → payout = 10,800 + 200,000
-    assert member_payout(principal=10_000, r_fund=0.08, reward_share=0.10,
+    # $10,000 principal (sub-$1M, so no fee drag), fund up 8%, this member
+    # earned 10% of the reward pool, pool is $2M → payout = 10,800 + 200,000
+    assert member_payout(principal=10_000, r_fund_gross=0.08, reward_share=0.10,
                          pool=2_000_000) == pytest.approx(210_800.0)
 
 
 def test_member_payout_zero_share_still_gets_fund_return():
     """A member who didn't vote (or was wrong) is never worse off than the
     fund's own return — they just don't share the bonus pool."""
-    assert member_payout(principal=10_000, r_fund=0.05, reward_share=0.0,
+    assert member_payout(principal=10_000, r_fund_gross=0.05, reward_share=0.0,
                          pool=2_000_000) == pytest.approx(10_500.0)
+
+
+# ── $1M qualification floor: Concordia only profits off qualified accounts ───
+
+def test_is_qualified_threshold():
+    assert is_qualified(1_000_000.0) is True     # exactly at the line counts
+    assert is_qualified(999_999.99) is False
+    assert is_qualified(50_000_000.0) is True
+
+
+def test_qualified_aum_excludes_sub_million_accounts():
+    stakes = [MemberStake(1, 2_000_000), MemberStake(2, 500_000), MemberStake(3, 999_999)]
+    assert qualified_aum(stakes) == pytest.approx(2_000_000)   # only member 1 counts
+
+
+def test_member_payout_sub_million_pays_zero_fee_regardless_of_fee_rate():
+    """A $500K member's principal compounds at the FULL gross return no matter
+    how high fee_rate is — Concordia is never allowed to take a cut from them."""
+    payout = member_payout(principal=500_000, r_fund_gross=0.10, reward_share=0.0,
+                           pool=0, fee_rate=0.0045)   # even the fulcrum fee's cap
+    assert payout == pytest.approx(500_000 * 1.10)    # full 10%, no fee subtracted
+
+
+def test_member_payout_million_plus_pays_the_fee():
+    """A $2M member (qualified) has fee_rate netted straight off their return."""
+    payout = member_payout(principal=2_000_000, r_fund_gross=0.10, reward_share=0.0,
+                           pool=0, fee_rate=0.0045)
+    assert payout == pytest.approx(2_000_000 * (1 + 0.10 - 0.0045))
+
+
+def test_member_payout_reward_bonus_ignores_qualification():
+    """The merit-based bonus pays out the same way whether or not Concordia is
+    allowed to charge that member a fee — a small account with the best votes
+    still gets its full reward_share of the pool."""
+    small = member_payout(principal=10_000, r_fund_gross=0.0, reward_share=0.5,
+                          pool=1_000_000, fee_rate=0.0045)
+    large = member_payout(principal=2_000_000, r_fund_gross=0.0, reward_share=0.5,
+                          pool=1_000_000, fee_rate=0.0045)
+    assert small - 10_000 == pytest.approx(500_000)                       # bonus alone
+    assert large - 2_000_000 * (1 - 0.0045) == pytest.approx(500_000)     # same bonus, net of fee
 
 
 # ── equation 3: royalty on Concordia's own fee ────────────────────────────────
