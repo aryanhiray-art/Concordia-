@@ -318,3 +318,40 @@ accuracy then moves `max(1, sqrt(N/24))` times more slowly as the club grows
 (2.0× at 96 members, 4.6× at 500). N is read at scoring time and frozen into
 `cycle_scores` — evaluating it at snapshot time would make an exit change N and
 break the exit property above.
+
+
+## 9. Cadence: switching between weekly and daily
+
+`CYCLE_CADENCE` decides what `calendar_us.cycle_phase()` returns:
+
+| value | trading days | phase |
+|---|---|---|
+| `weekly` | Monday only (or the week's first trading day) | `both` |
+| `daily` | every trading day | `both` |
+
+The systemd timers already fire **Mon–Fri** (`concord-close-vote` 09:15,
+`concord-execute` 10:15, `concord-open-vote` daily 18:00) — it is `cycle_phase`
+returning `None` that makes the other days idle. So the cadence itself is one
+env value. **Two things do NOT follow automatically:**
+
+1. **Bot voting.** `concord-bot-vote.timer` was Wed/Sat/Mon, which belonged to
+   the weekly cadence where one ballot stayed open all week. Under daily that
+   would leave Tue/Thu/Fri deciding a real-money basket on human turnout alone.
+   It is now Mon–Fri 05:30 / 07:00 / 08:20 ET (same three-pass retry design,
+   all before the 09:15 close). Reinstall it when changing cadence.
+
+2. **`MIN_HUMAN_VOTERS=1` now bites every day.** The club will not place orders
+   in a cycle with no human ballot. Weekly, that meant voting once a week;
+   daily, it means **someone has to vote every trading day** or that day simply
+   does not trade (it logs "human quorum not met (0 < 1)" and stands down). That
+   is the intended safety behaviour, not a bug — but it is the difference
+   between a missed week and four missed days out of five.
+
+```bash
+ssh root@159.195.19.53 "sed -i 's/^CYCLE_CADENCE=.*/CYCLE_CADENCE=daily/' /opt/concord/.env && systemctl restart concord-api && grep '^CYCLE_CADENCE' /opt/concord/.env"
+```
+
+Daily also means up to `2 x TOP_N` orders per member per day (sell the exits,
+buy the entries). That is why each leg has its own `MAX_ORDERS` budget — see
+services/executor.py. Expect real churn: a 20-name basket rotating daily is a
+lot of round-trips, and every one crosses a spread.

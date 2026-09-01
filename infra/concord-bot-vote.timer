@@ -1,23 +1,26 @@
 [Unit]
-Description=Concord — bots vote in three retryable passes (Wed, Sat, Mon-before-close)
+Description=Concord — bots vote in three retryable passes, every trading day
 
 [Timer]
-# The Monday ballot is open all week, so the bots vote EARLY and REPEATEDLY
-# instead of once an hour before the close. Three passes, three attempts each:
-#   Wed — first basket
-#   Sat — recalculation on fresh prices
-#   Mon — final recalculation, all attempts finishing before the 09:15 ET close
+# DAILY cadence (CYCLE_CADENCE=daily): a new ballot opens each evening at 18:00
+# and closes the next morning at 09:15 ET, so the bots have to vote on EVERY
+# trading day. The old Wed/Sat/Mon schedule belonged to the weekly cadence,
+# where one ballot stayed open all week; leaving it in place under daily would
+# have meant bots voting on three days out of five and the other days deciding
+# a real-money basket on whatever thin human turnout existed.
+#
+# Same three-pass design as before, all finishing before the 09:15 close:
+#   05:30 — first basket off the overnight ballot
+#   07:00 — retry: only the bots the first pass never reached
+#   08:20 — final pass, ~55 minutes of headroom before the close
 # A pass that dies loses nothing: the previous pass's votes stand, and a retry
 # only re-runs the bots the killed attempt never reached (see jobs/bot_vote.py).
-OnCalendar=Wed *-*-* 09:00 America/New_York
-OnCalendar=Wed *-*-* 13:00 America/New_York
-OnCalendar=Wed *-*-* 17:00 America/New_York
-OnCalendar=Sat *-*-* 09:00 America/New_York
-OnCalendar=Sat *-*-* 13:00 America/New_York
-OnCalendar=Sat *-*-* 17:00 America/New_York
-OnCalendar=Mon *-*-* 05:30 America/New_York
-OnCalendar=Mon *-*-* 07:00 America/New_York
-OnCalendar=Mon *-*-* 08:20 America/New_York
+#
+# Mon-Fri only: the job is cheap but pointless on a weekend, and the ballot it
+# would vote in is not traded until the next trading day anyway.
+OnCalendar=Mon-Fri *-*-* 05:30 America/New_York
+OnCalendar=Mon-Fri *-*-* 07:00 America/New_York
+OnCalendar=Mon-Fri *-*-* 08:20 America/New_York
 Persistent=true
 
 [Install]
