@@ -290,3 +290,44 @@ def test_rescue_dry_run_places_nothing_and_respects_the_kill_switch(monkeypatch)
     # a real attempt while disarmed must also place nothing
     out = rescue.rescue_sell(mid, "VMRK", "owner@x.com", dry_run=False)
     assert out["placed"] is False and "kill switch" in out["reason"]
+
+
+# ── 5. total failure must leave the previous basket alone ────────────────────
+
+def test_an_empty_ballot_places_nothing_so_the_previous_basket_holds():
+    """OWNER'S RULE: if everyone fails to vote, the previous basket holds.
+
+    This matters far more since MIN_HUMAN_VOTERS was set to 0: without a guard,
+    a morning where every bot job AND the research voter failed would produce an
+    EMPTY basket, and the sell leg would read every held name as "dropped from
+    basket" and liquidate the entire portfolio — a total exit triggered by a cron
+    failure. The thin-basket floor is what prevents it: below MIN_BASKET_SIZE
+    picks the run downgrades to review-only and places NOTHING, so the existing
+    positions simply stand.
+    """
+    import inspect
+
+    from app.config import settings as cfg
+    from app.services import executor
+    src = inspect.getsource(executor._run_impl)
+    assert "len(picks) < settings.min_basket_size" in src
+    assert "will_place, thin_basket = False, True" in src, (
+        "an under-sized basket must clear will_place, not merely warn")
+    # and the floor must actually be above zero, or an empty ballot sails through
+    assert cfg.min_basket_size >= 1, "a floor of 0 would let an empty ballot liquidate"
+
+
+def test_thin_basket_floor_is_independent_of_the_human_quorum():
+    """The two guards are separate on purpose. MIN_HUMAN_VOTERS is off (the club
+    trades on a bot-only ballot by design); the thin-basket floor is what still
+    stands between a failed morning and a full liquidation, so it must not be
+    reachable only via the quorum path."""
+    import inspect
+
+    from app.services import executor
+    src = inspect.getsource(executor._run_impl)
+    q = src.index("min_human_voters")
+    t = src.index("min_basket_size")
+    between = src[min(q, t):max(q, t)]
+    assert "elif" not in between.split("\n")[0], "the floors must be independent checks"
+    assert src.count("will_place, thin_basket = False, True") == 1

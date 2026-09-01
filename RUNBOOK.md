@@ -355,3 +355,35 @@ Daily also means up to `2 x TOP_N` orders per member per day (sell the exits,
 buy the entries). That is why each leg has its own `MAX_ORDERS` budget — see
 services/executor.py. Expect real churn: a 20-name basket rotating daily is a
 lot of round-trips, and every one crosses a spread.
+
+
+## 10. What happens when a morning fails
+
+**Rule: if everyone fails to vote, the previous basket holds.** Nothing is sold,
+nothing is bought, the existing positions simply stand.
+
+This is enforced by the **thin-basket floor**, not by the quorum. With
+`MIN_HUMAN_VOTERS=0` (owner, 2026-09-01) the human-quorum gate no longer stands
+the club down, so the floor is now the ONLY thing between a failed morning and a
+full liquidation: an empty ballot produces an empty basket, and the sell leg
+reads every held name as "dropped from basket". Below `MIN_BASKET_SIZE` picks
+the run downgrades to review-only and places no orders at all.
+
+| ballot outcome | what trades |
+|---|---|
+| 0 picks (every job failed) | **nothing** — previous basket holds |
+| 1–4 picks | **nothing** — below the floor |
+| 5–20 picks | the basket trades, rotating out everything not in it |
+
+**The gap to be aware of:** the floor is 5 against a `TOP_N` of 20. A *partial*
+failure — say two bots vote and produce 6 names — clears the floor and rotates
+the whole 20-name portfolio into 6 positions. That is a real concentration event
+caused by a cron failure, not by a decision. Raising `MIN_BASKET_SIZE` toward
+`TOP_N` narrows it (at the cost of standing down more often); it is a judgement
+call about which failure you would rather have, and it is one env value:
+
+```bash
+ssh root@159.195.19.53 "sed -i 's/^MIN_BASKET_SIZE=.*/MIN_BASKET_SIZE=12/' /opt/concord/.env && systemctl restart concord-api"
+```
+
+(If the key is absent, append it — unset defaults to 5.)
