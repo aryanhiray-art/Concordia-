@@ -310,11 +310,11 @@ def test_an_empty_ballot_places_nothing_so_the_previous_basket_holds():
     from app.config import settings as cfg
     from app.services import executor
     src = inspect.getsource(executor._run_impl)
-    assert "len(picks) < settings.min_basket_size" in src
+    assert "len(picks) < settings.basket_floor" in src
     assert "will_place, thin_basket = False, True" in src, (
         "an under-sized basket must clear will_place, not merely warn")
     # and the floor must actually be above zero, or an empty ballot sails through
-    assert cfg.min_basket_size >= 1, "a floor of 0 would let an empty ballot liquidate"
+    assert cfg.basket_floor >= 1, "a floor of 0 would let an empty ballot liquidate"
 
 
 def test_thin_basket_floor_is_independent_of_the_human_quorum():
@@ -327,7 +327,75 @@ def test_thin_basket_floor_is_independent_of_the_human_quorum():
     from app.services import executor
     src = inspect.getsource(executor._run_impl)
     q = src.index("min_human_voters")
-    t = src.index("min_basket_size")
+    t = src.index("basket_floor")
     between = src[min(q, t):max(q, t)]
     assert "elif" not in between.split("\n")[0], "the floors must be independent checks"
     assert src.count("will_place, thin_basket = False, True") == 1
+
+
+def test_basket_floor_scales_with_top_n():
+    """An ABSOLUTE floor does not scale. At TOP_N=20 a floor of 5 stopped an
+    empty ballot but let a PARTIAL failure through: two bots voting six names
+    cleared it and rotated a 20-name portfolio into 6 positions. The floor is
+    now max(MIN_BASKET_SIZE, ceil(TOP_N * MIN_BASKET_FRACTION))."""
+    import dataclasses
+
+    from app.config import Settings
+    s = Settings()
+    assert s.basket_floor == max(s.min_basket_size,
+                                 __import__("math").ceil(s.top_n * s.min_basket_fraction))
+    # the case that used to slip through
+    live = dataclasses.replace(s, top_n=20, min_basket_size=5, min_basket_fraction=0.6)
+    assert live.basket_floor == 12
+    assert 6 < live.basket_floor, "a 6-name basket must no longer trade at TOP_N=20"
+    # it tracks TOP_N instead of silently loosening
+    assert dataclasses.replace(live, top_n=50).basket_floor == 30
+    assert dataclasses.replace(live, top_n=5).basket_floor == 5
+    # the absolute floor wins when larger — but never exceeds TOP_N, or the
+    # club would silently never trade (TOP_N=3 with the default floor of 5 was
+    # already in that state before the fractional half existed)
+    # additive only: where the fraction is unsatisfiable, the old absolute
+    # floor is left exactly as it was rather than silently changed
+    assert dataclasses.replace(live, top_n=4, min_basket_size=5).basket_floor == 5
+    assert dataclasses.replace(live, top_n=3, min_basket_size=5).basket_floor == 5
+    # 0 disables the fractional half
+    assert dataclasses.replace(live, min_basket_fraction=0.0).basket_floor == 5
+
+
+def test_the_fractional_floor_never_loosens_or_overtightens():
+    """It may only TIGHTEN, and only when satisfiable — so no configuration that
+    worked before can change behaviour."""
+    import dataclasses
+
+    from app.config import Settings
+    base = Settings()
+    for tn in (1, 2, 3, 5, 10, 20, 50, 100):
+        s = dataclasses.replace(base, top_n=tn)
+        off = dataclasses.replace(s, min_basket_fraction=0.0).basket_floor
+        on = s.basket_floor
+        assert on >= off, (tn, on, off)
+        assert on <= max(off, tn), (tn, on)
+
+
+def test_the_executor_and_the_console_use_the_same_floor():
+    """adminview.will_place_state answers 'why won't it trade?' before the run;
+    if it read a different floor than the executor, it would lie."""
+    import inspect
+
+    from app.services import adminview, executor
+    assert "settings.basket_floor" in inspect.getsource(executor._run_impl)
+    assert "settings.basket_floor" in inspect.getsource(adminview.will_place_state)
+
+
+def test_the_shipped_default_actually_blocks_a_partial_failure():
+    """Pins the DEFAULT, not a value the test supplies. An earlier version of
+    this suite only asserted on explicitly-constructed settings, so flipping the
+    shipped default to 0.0 left every test green while the gap reopened."""
+    import dataclasses
+
+    from app.config import Settings
+    field = next(f for f in dataclasses.fields(Settings) if f.name == "min_basket_fraction")
+    assert field.default >= 0.5, "the shipped fractional floor must be meaningful"
+    at20 = dataclasses.replace(Settings(), top_n=20, min_basket_size=5)
+    assert at20.basket_floor == 12
+    assert 6 < at20.basket_floor, "the 6-of-20 partial failure must not trade"

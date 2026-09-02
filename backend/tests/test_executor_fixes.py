@@ -682,6 +682,9 @@ def test_both_day_refreshes_buying_power_after_sells(monkeypatch):
     # single-name test basket: waive the thin-basket floor (G2) — this test is
     # about buying-power mechanics, not basket breadth (conftest restores)
     object.__setattr__(settings, "min_basket_size", 1)
+    # ...and disable the FRACTIONAL floor: these tests deliberately trade a
+    # 1-2 name basket at TOP_N=3, which ceil(3 * 0.6) = 2 would otherwise block.
+    object.__setattr__(settings, "min_basket_fraction", 0.0)
     set_armed(True)
     try:
         summary = executor.run(closed, force_dry_run=False, phase="both")
@@ -767,6 +770,9 @@ def test_both_day_polls_past_slow_proceeds_credit(monkeypatch):
     # single-name test basket: waive the thin-basket floor (G2) — this test is
     # about buying-power mechanics, not basket breadth (conftest restores)
     object.__setattr__(settings, "min_basket_size", 1)
+    # ...and disable the FRACTIONAL floor: these tests deliberately trade a
+    # 1-2 name basket at TOP_N=3, which ceil(3 * 0.6) = 2 would otherwise block.
+    object.__setattr__(settings, "min_basket_fraction", 0.0)
     set_armed(True)
     try:
         summary = executor.run(closed, force_dry_run=False, phase="both")
@@ -803,6 +809,9 @@ def test_both_day_cash_account_keeps_single_quick_look(monkeypatch):
     # single-name test basket: waive the thin-basket floor (G2) — this test is
     # about buying-power mechanics, not basket breadth (conftest restores)
     object.__setattr__(settings, "min_basket_size", 1)
+    # ...and disable the FRACTIONAL floor: these tests deliberately trade a
+    # 1-2 name basket at TOP_N=3, which ceil(3 * 0.6) = 2 would otherwise block.
+    object.__setattr__(settings, "min_basket_fraction", 0.0)
     set_armed(True)
     try:
         summary = executor.run(closed, force_dry_run=False, phase="both")
@@ -961,6 +970,9 @@ def test_sub_minimum_topup_resizes_by_selling_and_rebuying(monkeypatch):
     prev = settings.execution_mode
     object.__setattr__(settings, "execution_mode", "live")
     object.__setattr__(settings, "min_basket_size", 1)
+    # ...and disable the FRACTIONAL floor: these tests deliberately trade a
+    # 1-2 name basket at TOP_N=3, which ceil(3 * 0.6) = 2 would otherwise block.
+    object.__setattr__(settings, "min_basket_fraction", 0.0)
     set_armed(True)
     try:
         summary = executor.run(closed, force_dry_run=False, phase="both")

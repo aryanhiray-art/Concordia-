@@ -374,7 +374,7 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
     # whole portfolio into a concentration. Below MIN_BASKET_SIZE picks the run
     # downgrades to review-only; dry-runs still simulate.
     thin_basket = False
-    if will_place and len(picks) < settings.min_basket_size:
+    if will_place and len(picks) < settings.basket_floor:
         will_place, thin_basket = False, True
     # Calendar-coverage guard (finding #17): if the hand-maintained holiday table
     # has lapsed past its last covered year we can't know today is a trading day —
@@ -419,8 +419,8 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                            f"review only, no real orders placed")
     if thin_basket:
         summary["thin_basket"] = True
-        summary["note"] = (f"basket too thin ({len(picks)} < {settings.min_basket_size}) — "
-                           f"review only, no real orders placed")
+        summary["note"] = (f"basket too thin ({len(picks)} < {settings.basket_floor}) — "
+                           f"review only, no real orders placed; the previous basket holds")
     if calendar_stale:
         summary["calendar_stale"] = True
         summary["note"] = ("market-holiday calendar has lapsed — review only; extend "

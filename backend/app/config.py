@@ -150,6 +150,40 @@ class Settings:
     # 1-2 name concentration — below the floor the run downgrades to
     # review-only. Dry-runs still simulate.
     min_basket_size: int = _int("MIN_BASKET_SIZE", 5)
+    # ...and as a FRACTION of TOP_N, because an absolute floor does not scale.
+    # At TOP_N=20 a floor of 5 stopped an empty ballot but happily let a PARTIAL
+    # failure through: two bots voting six names cleared it, and the club rotated
+    # a 20-name portfolio into 6 positions — a concentration event caused by a
+    # cron job not running rather than by anyone deciding anything. The effective
+    # floor is max(MIN_BASKET_SIZE, ceil(TOP_N * MIN_BASKET_FRACTION)), so it
+    # tracks TOP_N automatically instead of silently loosening when TOP_N grows.
+    #
+    # 0.6 is chosen so a healthy ballot never trips it (20 bots plus the owner
+    # each picking up to TOP_N names produce a full basket) while any morning
+    # that loses most of its voters stands down and the previous basket holds.
+    # 0 disables the fractional half and restores the absolute floor alone.
+    min_basket_fraction: float = _float("MIN_BASKET_FRACTION", 0.6)
+
+    @property
+    def basket_floor(self) -> int:
+        """Fewest picks that may be traded with real money.
+
+        The fractional half only ever TIGHTENS, and only when satisfiable, so
+        this cannot change any configuration that worked before. (Note the
+        absolute floor can still exceed a very small TOP_N — pre-existing, and
+        left alone here rather than silently altering how tiny baskets behave.)
+        """
+        import math as _math
+        base = int(self.min_basket_size)
+        frac = 0.0 if self.min_basket_fraction <= 0 else self.min_basket_fraction
+        scaled = _math.ceil(self.top_n * frac)
+        # Purely ADDITIVE: the fractional floor applies only when it is both
+        # tighter than the absolute one AND actually satisfiable. It can never
+        # loosen the existing floor, and it can never raise it past TOP_N (which
+        # would stop the club trading with no error anywhere).
+        if base < scaled <= self.top_n:
+            return scaled
+        return base
     # Post-run member receipts (G5a): after a LIVE run, each traded member gets
     # one plain-English email of what happened in their account. Fully fenced —
     # can never fail or delay a run (services/notify.py).
@@ -438,6 +472,8 @@ def invalid_power_config() -> list[str]:
         p.append(f"MERIT_ACCURACY_SCALE={settings.merit_accuracy_scale} (expected > 0)")
     if not 0 < settings.accuracy_excess_cap <= 1.0:
         p.append(f"ACCURACY_EXCESS_CAP={settings.accuracy_excess_cap} (expected 0 < x <= 1.0)")
+    if not 0.0 <= settings.min_basket_fraction <= 1.0:
+        p.append(f"MIN_BASKET_FRACTION={settings.min_basket_fraction} (expected 0..1)")
     if not 0.0 <= settings.max_voting_share < 1.0:
         p.append(f"MAX_VOTING_SHARE={settings.max_voting_share} (expected 0 <= x < 1; 0 = off)")
     if settings.max_voting_share_min_members < 0:

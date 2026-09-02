@@ -66,8 +66,8 @@ def will_place_state() -> dict:
         # ballot has no decided basket yet, so it is never judged here.
         if sess.get("picks_json"):
             n_picks = len(voting.session_picks(sess))
-            if n_picks < settings.min_basket_size:
-                reasons.append(f"basket too thin ({n_picks} < {settings.min_basket_size})")
+            if n_picks < settings.basket_floor:
+                reasons.append(f"basket too thin ({n_picks} < {settings.basket_floor})")
     if not calendar_covers(today_et()):
         reasons.append("holiday calendar lapsed")
     return {

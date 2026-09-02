@@ -375,15 +375,23 @@ the run downgrades to review-only and places no orders at all.
 | 1–4 picks | **nothing** — below the floor |
 | 5–20 picks | the basket trades, rotating out everything not in it |
 
-**The gap to be aware of:** the floor is 5 against a `TOP_N` of 20. A *partial*
-failure — say two bots vote and produce 6 names — clears the floor and rotates
-the whole 20-name portfolio into 6 positions. That is a real concentration event
-caused by a cron failure, not by a decision. Raising `MIN_BASKET_SIZE` toward
-`TOP_N` narrows it (at the cost of standing down more often); it is a judgement
-call about which failure you would rather have, and it is one env value:
+**The partial-failure gap is closed.** An absolute floor does not scale: 5
+against a `TOP_N` of 20 stopped an empty ballot but let two bots voting six
+names through, rotating a 20-name portfolio into 6 positions — a concentration
+event caused by a cron failure rather than a decision. The floor is now
 
-```bash
-ssh root@159.195.19.53 "sed -i 's/^MIN_BASKET_SIZE=.*/MIN_BASKET_SIZE=12/' /opt/concord/.env && systemctl restart concord-api"
+```
+basket_floor = max(MIN_BASKET_SIZE, ceil(TOP_N * MIN_BASKET_FRACTION))
 ```
 
-(If the key is absent, append it — unset defaults to 5.)
+with `MIN_BASKET_FRACTION=0.6`, so at `TOP_N=20` it is **12** and tracks `TOP_N`
+automatically instead of loosening as the basket grows. It is purely additive:
+it only applies when it is both tighter than the absolute floor and actually
+satisfiable, so no configuration that worked before changes behaviour. Set
+`MIN_BASKET_FRACTION=0` to restore the absolute floor alone.
+
+| picks | at TOP_N=20 |
+|---|---|
+| 0 | nothing trades — previous basket holds |
+| 1–11 | nothing trades — below the floor |
+| 12–20 | the basket trades |
