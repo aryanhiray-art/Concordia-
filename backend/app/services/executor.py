@@ -797,9 +797,13 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         # to the next buy day exactly as before.
         sells_placed = any(o.get("side") == "sell" and o.get("status") == "placed"
                            for o in msum["orders"])
+        # Hoisted out of the poll below: the BUY loop also needs to know whether
+        # this account settles instantly, and it used to be assigned only when a
+        # sell had been placed.
+        acct_type = (kv_get(f"acct_type:{mid}") or "").strip().lower()
+        settles_instantly = acct_type != "cash"
         if phase == "both" and sells_placed:
-            acct_type = (kv_get(f"acct_type:{mid}") or "").strip().lower()
-            deadline_s = 0 if acct_type == "cash" else BP_POLL_MAX_S
+            deadline_s = 0 if settles_instantly is False else BP_POLL_MAX_S
             bp_start = buying_power
             target = bp_start + BP_POLL_TARGET_FRAC * placed_sell_usd
             waited = 0
@@ -899,6 +903,7 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
             held_val = held_now * price
             _tgt = targets.get(symbol, per_pick)
             need = round(_tgt - held_val, 2)
+            partial_of = None      # set only when this name is bought short
             if need < 1.00:
                 # Two different reasons, and they must not read the same: either
                 # the name really is at/over target, or the top-up is real but
@@ -910,13 +915,36 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                 msum["orders"].append({"symbol": symbol, "side": "buy", "status": "held",
                                        "note": note})
                 continue
-            if need > bp_left + 0.005:                 # not enough SETTLED cash yet → defer
-                unplaced_usd += need
-                _record(sid, mid, symbol, need, ref_id_for(sid, mid, symbol), "skipped",
-                        error="deferred — beyond settled buying power")
-                msum["orders"].append({"symbol": symbol, "side": "buy", "status": "skipped",
-                                       "note": "defer · settles next cycle"})
-                continue
+            if need > bp_left + 0.005:
+                # BUY WHAT IS AFFORDABLE rather than dropping the name.
+                #
+                # This branch used to skip the whole position, which starved
+                # whichever name the loop reached last — always the same one,
+                # since the basket order is stable. Observed 2026-09-03: ADM
+                # missed on two accounts, and one of them was short by $0.02 of
+                # $5.45. Holding a name 0.4% light is strictly better than not
+                # holding it, and the next cycle tops it up.
+                #
+                # Floor to cents so the order can never exceed what is actually
+                # there, and only if the remainder clears Robinhood's $1
+                # minimum — below that no order is placeable at all.
+                afford = math.floor(bp_left * 100) / 100.0
+                if settles_instantly and afford >= 1.00:
+                    msum.setdefault("partials", []).append(
+                        {"symbol": symbol, "wanted": round(need, 2), "bought": afford})
+                    partial_of = need          # what the full top-up would have been
+                    unplaced_usd += need - afford   # the remainder still owes; carries
+                    need = afford
+                else:
+                    unplaced_usd += need
+                    # "settles next cycle" was wrong on a limited-margin account:
+                    # it has no settlement wait, the proceeds simply had not been
+                    # credited yet. Say what actually happened.
+                    _record(sid, mid, symbol, need, ref_id_for(sid, mid, symbol), "skipped",
+                            error=f"short ${need - bp_left:.2f} — buying power not credited yet")
+                    msum["orders"].append({"symbol": symbol, "side": "buy", "status": "skipped",
+                                           "note": f"short ${need - bp_left:.2f} · tops up next cycle"})
+                    continue
             bp_left -= need
             if order_count >= member_max_orders:
                 unplaced_usd += need
@@ -940,14 +968,16 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                 continue
             if not will_place:
                 _record(sid, mid, symbol, need, ref_id, "reviewed", review=review)
-                msum["orders"].append({"symbol": symbol, "side": "buy", "status": "reviewed", "amount": amt})
+                msum["orders"].append({"symbol": symbol, "side": "buy", "status": "reviewed", "amount": amt,
+                                       **({"note": f"partial · ${partial_of:.2f} wanted"} if partial_of else {})})
                 continue
             try:
                 place = client.place_market_buy(m["account_number"], symbol, amt, ref_id=ref_id)
                 if isinstance(place, dict):
                     place["_concord_est_qty"] = round(need / price, 6)  # est shares (async fill)
                 _record(sid, mid, symbol, need, ref_id, "placed", review=review, place=place)
-                msum["orders"].append({"symbol": symbol, "side": "buy", "status": "placed", "amount": amt})
+                msum["orders"].append({"symbol": symbol, "side": "buy", "status": "placed", "amount": amt,
+                                       **({"note": f"partial · ${partial_of:.2f} wanted"} if partial_of else {})})
                 order_count += 1
             except Exception as e:  # noqa: BLE001
                 _record(sid, mid, symbol, need, ref_id, "error", review=review, error=f"place: {e}")

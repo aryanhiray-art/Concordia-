@@ -787,6 +787,46 @@ def test_both_day_polls_past_slow_proceeds_credit(monkeypatch):
     assert order["status"] == "placed"
 
 
+def test_limited_margin_buys_what_it_can_afford_instead_of_dropping_the_name(monkeypatch):
+    """Observed 2026-09-03: ADM was skipped outright on two limited-margin
+    accounts, one of them short by $0.02 of a $5.45 top-up — the whole position
+    dropped for two cents, and every cycle it was the same (last) name. On an
+    account that settles instantly the shortfall is buyable next cycle, so
+    buying what IS affordable and carrying the remainder beats holding nothing.
+    """
+    from app.config import settings
+    from app.db import kv_set, set_armed
+
+    mid = _member("bothlm@x.com", alloc_value=50.0)
+    kv_set(f"acct_type:{mid}", "limited_margin")
+    executor._record(90071, mid, "TSLA", 250.0, "bothlm-ref-1", "placed",
+                     place={"_concord_est_qty": 1.0})
+    closed = _closed_session(datetime.date(2026, 12, 17), mid, ["AAPL"])
+    # Credit never fully lands: buying power stops a hair under the target, the
+    # exact shape that dropped ADM.
+    client = LaggyProceedsClient(quotes={"AAPL": 100.0, "TSLA": 250.0},
+                                 positions=[("TSLA", "1.0")], buying_power=3.78,
+                                 bp_after_sell=48.0, credit_after_fetches=1)
+    _use_client(monkeypatch, client)
+
+    prev_mode = settings.execution_mode
+    object.__setattr__(settings, "execution_mode", "live")
+    object.__setattr__(settings, "min_basket_size", 1)
+    object.__setattr__(settings, "min_basket_fraction", 0.0)
+    set_armed(True)
+    try:
+        summary = executor.run(closed, force_dry_run=False, phase="both")
+    finally:
+        object.__setattr__(settings, "execution_mode", prev_mode)
+        set_armed(False)
+
+    order = next(o for o in _mrow(summary, mid)["orders"]
+                 if o["symbol"] == "AAPL" and o["side"] == "buy")
+    assert order["status"] == "placed", "an affordable remainder must still buy the name"
+    assert float(order["amount"]) <= 48.0, "never spends more than the credited buying power"
+    assert "partial" in (order.get("note") or ""), "a short buy must say it was short"
+
+
 def test_both_day_cash_account_keeps_single_quick_look(monkeypatch):
     """A cash member's buying power is settled-only and never moves same-day —
     the poll must not burn its full window on them (kv acct_type = cash keeps
