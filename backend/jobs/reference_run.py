@@ -14,7 +14,7 @@ Placing is still gated: reference.run() checks settings.reference_will_place,
 which needs a key pair, REFERENCE_ENABLED, REFERENCE_ARMED and a funded budget.
 Disarmed, this job plans and logs exactly what it would have sent.
 
-systemd: concord-reference-run.timer (Mon 10:45 ET).
+systemd: concord-reference-run.timer (Mon-Fri 10:45 ET, after concord-execute).
 """
 import sys
 from pathlib import Path

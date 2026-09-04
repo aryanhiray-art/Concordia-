@@ -33,6 +33,7 @@ import uuid
 from zoneinfo import ZoneInfo
 
 from ..alpaca.client import AlpacaClient, AlpacaError
+from . import alloc
 from ..config import settings
 from ..db import audit, db
 
@@ -59,26 +60,29 @@ def order_tag(trade_date: str, symbol: str, side: str) -> str:
 
 def plan(symbols: list[str], budget_usd: float, held: dict[str, float] | None = None
          ) -> list[dict]:
-    """Equal-weight target for `symbols` over `budget_usd` → the orders to send.
+    """The orders that move this account onto the basket, sized exactly the way
+    the executor sizes a member.
 
-    EQUAL WEIGHT IS NOT A SIMPLIFICATION — it is what this account is for.
-    services/executor.py sizes every member equally (`per_pick = budget / n_eff`,
-    executor.py:614): the club's consensus weights decide WHICH names make the
-    basket, and then each surviving name gets the same dollars in a member's
-    account. This account measures what members actually hold, so it must size
-    the same way.
+    Same targeting function, not a lookalike: alloc.basket_targets, the
+    executor's water-fill (executor.py buy leg). A name within $1 of its fair
+    share keeps its value and the rest absorb the difference — winners ride,
+    entries shrink, the total still sums to the budget. The first version here
+    re-implemented flat equal weight instead, which is identical on an empty
+    account but rebalances HARDER than members from the second cycle on: it
+    would trim the $1-band drift the executor deliberately leaves alone, and
+    the reference series would drift away from members' precisely as their
+    positions diverge.
 
-    It is tempting to "fix" this by feeding in the club's vote weights, and the
-    difference is not small: over 2026-06-17..08-28 the same 24 baskets return
-    +8.94% equal-weighted and +3.07% vote-weighted, against SPY's +4.07%. Weighting
-    by votes here would produce a number no member could have earned, which is
-    the one thing this account exists to avoid. If the executor ever honours the
-    weights, change it there first and this follows.
+    Equal dollars per name is still the shape — the club's vote weights decide
+    WHICH names make the basket, never how much of each a member holds
+    (executor.py:614, and the test named for the invariant). Over
+    2026-06-17..08-28 the same baskets return +8.94% sized this way and +3.07%
+    vote-weighted; publishing the latter would be a number no member could have
+    earned.
 
-    `held` = {symbol: current market value}. Names that left the basket are sold
-    in full; names in it are topped up toward the equal-weight target. A delta
-    under $1 is skipped — below Alpaca's notional minimum, and churning cents
-    would only add spread.
+    `held` = {symbol: current market value}. Names that left the basket are
+    sold in full; a delta under $1 is unplaceable at Alpaca's notional minimum
+    and is skipped.
     """
     held = dict(held or {})
     out: list[dict] = []
@@ -89,9 +93,9 @@ def plan(symbols: list[str], budget_usd: float, held: dict[str, float] | None = 
                         "note": "exited basket"})
     if not syms or budget_usd <= 0:
         return out
-    target = budget_usd / len(syms)
+    targets = alloc.basket_targets(budget_usd, {s: held.get(s, 0.0) for s in syms})
     for s in syms:
-        delta = target - held.get(s, 0.0)
+        delta = targets.get(s, 0.0) - held.get(s, 0.0)
         if abs(delta) < 1.00:
             continue
         out.append({"symbol": s,
