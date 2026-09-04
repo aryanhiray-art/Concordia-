@@ -422,6 +422,35 @@ def test_w12_underfunded_stake_alerts_and_clears_when_funded():
                    for f in watchdog._check_underfunded_stake())
 
 
+def test_w12_market_drift_within_tolerance_does_not_alert():
+    """The production false alarm, verbatim: a compounded stake of $111.74
+    against a balance of $111.68 — six cents of market drift — mailed the
+    member "add funds or lower your stake". Committed figures are snapshots of
+    the last deployment; balances move every minute. Only a real shortfall
+    (past max($5, 2%)) is worth a member's attention."""
+    mid = _member("wd-drift@wd.test", alloc_type="dollar", alloc_value=111.74)
+    _snapshot(mid, total_value=111.68)
+    assert not any(f["key"] == f"underfunded-stake:{mid}"
+                   for f in watchdog._check_underfunded_stake())
+    _snapshot(mid, total_value=100.00)   # $11.74 short of $111.74 > max($5, $2.23)
+    assert any(f["key"] == f"underfunded-stake:{mid}"
+               for f in watchdog._check_underfunded_stake())
+
+
+def test_w12_percent_intent_survives_the_compounding_conversion():
+    """A member who SET 100% reads alloc_type='dollar' after the first
+    compounded deployment (the executor's conversion) — but a percentage of
+    the account can never exceed the account, so no dollar gap may page them.
+    Intent is the record of what they chose; the check must key on it."""
+    mid = _member("wd-intent@wd.test", alloc_type="dollar", alloc_value=500.0)
+    with db() as conn:
+        conn.execute("UPDATE member_settings SET alloc_intent_type='percent', "
+                     "alloc_intent_value=100 WHERE member_id=?", (mid,))
+    _snapshot(mid, total_value=120.0)    # $380 "short" — would page a dollar stake
+    assert not any(f["key"] == f"underfunded-stake:{mid}"
+                   for f in watchdog._check_underfunded_stake())
+
+
 def test_w12_percent_stakes_cannot_be_underfunded():
     mid = _member("wd-fund-pct@wd.test", alloc_type="percent", alloc_value=50.0)
     _snapshot(mid, total_value=100.0)

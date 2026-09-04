@@ -238,8 +238,13 @@ def set_allocation(body: AllocationBody, member: dict = Depends(require_member))
         )
     with db() as conn:
         conn.execute(
-            "UPDATE member_settings SET alloc_type=?, alloc_value=?, updated_at=strftime('%s','now') "
-            "WHERE member_id=?", (body.type, body.value, member["id"]),
+            # intent = the same pair, but NEVER rewritten by the executor's
+            # compounding conversion — it is what the member meant, kept so a
+            # "100%" stake stays knowable after it becomes a dollar figure.
+            "UPDATE member_settings SET alloc_type=?, alloc_value=?, "
+            "alloc_intent_type=?, alloc_intent_value=?, updated_at=strftime('%s','now') "
+            "WHERE member_id=?",
+            (body.type, body.value, body.type, body.value, member["id"]),
         )
     # re-snapshot voting power from the new allocation (best-effort; needs RH)
     try:

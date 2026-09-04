@@ -500,6 +500,19 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE member_settings ADD COLUMN alloc_type TEXT NOT NULL DEFAULT 'percent'")
     if "alloc_value" not in s:
         conn.execute("ALTER TABLE member_settings ADD COLUMN alloc_value REAL NOT NULL DEFAULT 0")
+    # The stake as the member SET it. alloc_type/alloc_value are the executor's
+    # OPERATIONAL figures: with compounding on, every deployed cycle rewrites
+    # them to 'dollar' + the deployed amount so future edits apply as deltas —
+    # which also silently erased the fact that a member chose "100%". A frozen
+    # $111.74 then drifted $0.06 under the live balance and the watchdog told a
+    # full-stake member to "add funds" over six cents. Intent is written ONLY by
+    # the member's own save (routes/members.py PUT /me/allocation); the executor
+    # never touches it. NULL = the stake was last saved before these columns
+    # existed, i.e. intent unknown.
+    if "alloc_intent_type" not in s:
+        conn.execute("ALTER TABLE member_settings ADD COLUMN alloc_intent_type TEXT")
+    if "alloc_intent_value" not in s:
+        conn.execute("ALTER TABLE member_settings ADD COLUMN alloc_intent_value REAL")
     # Reputation (blended voting power): per-member EWMA accuracy + confidence ramp.
     if "accuracy" not in s:
         conn.execute("ALTER TABLE member_settings ADD COLUMN accuracy REAL NOT NULL DEFAULT 0")

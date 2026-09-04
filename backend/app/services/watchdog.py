@@ -382,7 +382,7 @@ def _check_underfunded_stake() -> list[dict]:
     with db() as conn:
         rows = conn.execute(
             "SELECT m.id, m.display_name, m.email, s.alloc_type, s.alloc_value, "
-            "snap.payload FROM members m "
+            "s.alloc_intent_type, snap.payload FROM members m "
             "JOIN member_settings s ON s.member_id=m.id AND s.opted_in=1 "
             "JOIN account_snapshots snap ON snap.member_id=m.id "
             "WHERE COALESCE(m.is_bot,0)=0 "
@@ -395,10 +395,21 @@ def _check_underfunded_stake() -> list[dict]:
             tv = float(bal["total_value"])
         except Exception:  # noqa: BLE001 — no readable balance → nothing to judge
             continue
+        # A member whose stake was SET as a percentage cannot be underfunded:
+        # a percent of the account is by definition at most the account. Their
+        # operational alloc_type reads 'dollar' after the first compounded
+        # deployment (executor conversion), which is exactly how a 100% member
+        # got told to "add funds" over a $0.06 market drift.
+        if (r["alloc_intent_type"] or "") == "percent":
+            continue
         stake = float(r["alloc_value"] or 0)
         if (r["alloc_type"] or "percent") != "dollar":
             stake = tv * stake / 100.0
-        if stake <= tv + 0.01:
+        # Tolerance, not equality: with compounding the committed figure is a
+        # snapshot of the last deployment and the balance moves with the market
+        # every minute. Alert on a real shortfall — one the member must act on —
+        # never on drift.
+        if stake <= tv + max(5.0, 0.02 * stake):
             continue
         body = (f"Hi {r['display_name']},\n\n"
                 f"Your committed Concordia stake is ${stake:.2f}, but your "
