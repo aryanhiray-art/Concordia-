@@ -787,6 +787,23 @@ def test_both_day_polls_past_slow_proceeds_credit(monkeypatch):
     assert order["status"] == "placed"
 
 
+def test_run_sweeps_dust_per_member_with_matching_dry_run(monkeypatch):
+    """dust_cleanup existed only behind a manual admin button, so 0.000001-share
+    crumbs (Neil's MSFT, Charlie's ALL) sat for days. run() now sweeps each
+    non-skipped member after the buy leg, with dry_run mirroring will_place —
+    a review-only run must preview the sweep, never place it."""
+    calls: list[tuple[int, bool]] = []
+    monkeypatch.setattr(executor, "dust_cleanup",
+                        lambda mid, dry_run=True: calls.append((mid, dry_run)) or
+                        {"ok": True, "orders": []})
+    mid = _member("dusthook@x.com", alloc_value=50.0)
+    closed = _closed_session(datetime.date(2026, 12, 18), mid, ["AAPL"])
+    client = FakeClient(quotes={"AAPL": 100.0}, buying_power=50.0)
+    _use_client(monkeypatch, client)
+    executor.run(closed, force_dry_run=True, phase="both")
+    assert (mid, True) in calls, "dry run → dust preview (dry_run=True), and it ran at all"
+
+
 def test_limited_margin_buys_what_it_can_afford_instead_of_dropping_the_name(monkeypatch):
     """Observed 2026-09-03: ADM was skipped outright on two limited-margin
     accounts, one of them short by $0.02 of a $5.45 top-up — the whole position

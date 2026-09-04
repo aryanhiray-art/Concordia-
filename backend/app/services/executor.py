@@ -1001,6 +1001,20 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                              "WHERE member_id=?",
                              (round(budget, 2), round(budget, 2),
                               round(unplaced_usd, 2), mid))
+        # Sweep this member's sub-$1 crumbs while we are here. dust_cleanup is
+        # the same review→place pipeline with its own DUST: ref_ids, so it is
+        # idempotent and honours every gate run() just honoured; dry runs
+        # preview it exactly like everything else. It existed only as a manual
+        # admin button, which is why Neil's 0.000001-share MSFT and Charlie's
+        # ALL sat in their accounts for days — nothing ever called it. Wrapped:
+        # cosmetic cleanup must never take down a trading run.
+        if phase in ("buy", "both") and not msum.get("skip_reason"):
+            try:
+                dust = dust_cleanup(mid, dry_run=not will_place)
+                if dust.get("orders"):
+                    msum["dust"] = dust["orders"]
+            except Exception as e:  # noqa: BLE001
+                msum["dust_error"] = f"{type(e).__name__}: {e}"
         summary["members"].append(msum)
         summary["orders"].extend(
             {"member_id": mid, **o} for o in msum["orders"]
