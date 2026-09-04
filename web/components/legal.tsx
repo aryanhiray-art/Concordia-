@@ -80,7 +80,7 @@ export function TermsDoc() {
       footer="Version club_agreement_v4 — September 2026. This is the club's member agreement; it is not legal advice."
     >
       <P>
-        Concordia is a private, invite-only trading club. Members vote each week on what the club
+        Concordia is a private, invite-only trading club. Members vote each cycle on what the club
         should hold, and the consensus is executed automatically in each member&apos;s own brokerage
         account. This agreement says, in plain English, what joining means and what you&apos;re
         accepting. Read it — especially the <A href="#risks">risks</A> — before you participate.
