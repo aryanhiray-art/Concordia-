@@ -29,11 +29,12 @@ from __future__ import annotations
 
 import datetime
 import json
+import time
 from urllib.parse import parse_qs, urlparse
 
-from ..db import db
+from ..db import audit, db
 from ..robinhood import vault
-from . import membership
+from . import membership, positions
 from ..robinhood.client import RHError
 
 # Broker order states that mean a real, trustworthy fill quantity is available.
@@ -265,6 +266,79 @@ def reconcile_fills(member_id: int, client=None, account_number: str | None = No
     return out
 
 
+
+
+def ledger_trueup(member_id: int, *, client=None, account_number: str | None = None,
+                  dry_run: bool = True) -> dict:
+    """Zero PHANTOM club-ledger rows — names the derived ledger says the member
+    holds while the live account holds none of the symbol at all.
+
+    Why they exist: the ledger is net-of-order-feed, and old sells recorded with
+    estimated quantities can never be trued up once the broker's feed pages past
+    them — so residuals from July sit there forever. They place no trades (the
+    sell leg caps at the live quantity), but every cycle's verification flags
+    them ("ledger lists N names the account no longer holds") and the WARN noise
+    buries real findings. Member 2 carried 19 of these.
+
+    Mechanism copied from renames.migrate, the proven corporate-action true-up:
+    an APPEND-ONLY $0 execution row per symbol carrying the corrective quantity
+    in _concord_est_qty — history is never edited, and the derived net folds to
+    zero. Guards: live position must be exactly absent (never "small"), and any
+    symbol with an execution row in the last 48h is skipped so an in-flight exit
+    whose fill has not reached the feed yet is left alone. ref_id carries the
+    date, so a rerun today is idempotent while a future re-drift can be trued
+    again.
+    """
+    if account_number is None:
+        account_number = vault.account_number_for(member_id)
+    if not account_number:
+        return {"ok": False, "member_id": member_id, "error": "no account"}
+    if client is None:
+        client = vault.ensure_client(member_id)
+
+    derived = positions.club_shares_derived(member_id, client=client,
+                                            account_number=account_number)
+    # STRICT on purpose: the lenient live_positions returns [] on a failed read,
+    # which would make every derived row look phantom and zero the whole ledger.
+    # A raise here is caught per-member by reconcile_all and skips the sweep.
+    live = {p["symbol"].upper(): float(p.get("quantity") or 0.0)
+            for p in positions.live_positions_strict(member_id)}
+
+    now = int(time.time())
+    day = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+    cutoff = now - 48 * 3600
+    zeroed: list[dict] = []
+    with db() as conn:
+        sid = conn.execute("SELECT COALESCE(MAX(id),0) FROM vote_sessions").fetchone()[0]
+        for sym, qty in sorted(derived.items()):
+            if qty <= 1e-9:
+                continue
+            if live.get(sym, 0.0) > 0:
+                continue                       # genuinely held → not a phantom
+            recent = conn.execute(
+                "SELECT 1 FROM executions WHERE member_id=? AND symbol=? AND created_at>=? LIMIT 1",
+                (member_id, sym, cutoff)).fetchone()
+            if recent:
+                continue                       # in-flight exit — leave for the feed
+            ref = f"TRUEUP:{member_id}:{sym}:{day}"
+            if conn.execute("SELECT 1 FROM executions WHERE ref_id=?", (ref,)).fetchone():
+                continue
+            zeroed.append({"symbol": sym, "qty": round(qty, 8)})
+            if dry_run:
+                continue
+            conn.execute(
+                "INSERT INTO executions(session_id,member_id,symbol,side,type,dollar_amount,"
+                "ref_id,status,place_json,error,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (sid, member_id, sym, "sell", "market", 0.0, ref, "placed",
+                 json.dumps({"_concord_est_qty": qty,
+                             "ledger_trueup": "phantom — account holds none"}),
+                 None, now))
+    if zeroed and not dry_run:
+        audit("system:reconcile", "ledger_trueup", str(member_id),
+              {"zeroed": zeroed[:30], "count": len(zeroed)})
+    return {"ok": True, "member_id": member_id, "dry_run": dry_run, "zeroed": zeroed}
+
+
 def reconcile_all(dry_run: bool = False) -> dict:
     """Reconcile every connected agentic member (used by the standalone job)."""
     with db() as conn:
@@ -276,5 +350,14 @@ def reconcile_all(dry_run: bool = False) -> dict:
         ).fetchall()]
     results = []
     for m in members:
-        results.append(reconcile_fills(m["member_id"], account_number=m["account_number"], dry_run=dry_run))
+        res = reconcile_fills(m["member_id"], account_number=m["account_number"], dry_run=dry_run)
+        # After fills are trued up, zero any phantom rows the feed can no longer
+        # explain — one member's crash must not stop the sweep for the rest.
+        try:
+            res["trueup"] = ledger_trueup(m["member_id"],
+                                          account_number=m["account_number"],
+                                          dry_run=dry_run)
+        except Exception as e:  # noqa: BLE001
+            res["trueup"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        results.append(res)
     return {"ok": True, "dry_run": dry_run, "members": results}
