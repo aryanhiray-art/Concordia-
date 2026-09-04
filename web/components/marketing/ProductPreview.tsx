@@ -107,7 +107,7 @@ export function ProductPreview() {
 
         <Reveal delay={160}>
           <div ref={ref} className="mt-12 grid gap-4 sm:mt-16 lg:grid-cols-2">
-            <Panel title="Your ballot" meta="closes mon 09:15 et">
+            <Panel title="Your ballot" meta="closes 09:15 et">
               <ul className="space-y-3.5">
                 {ROWS.map((r, i) => (
                   <li key={r.symbol} className="flex items-center gap-3">

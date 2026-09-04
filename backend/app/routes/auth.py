@@ -126,7 +126,11 @@ def _clean_display_name(raw: str) -> str:
 # Members who accepted v2 stay recorded against v2 — which is still true of them.
 # `consents` is written at signup only and nothing re-asks, so re-acceptance is a
 # conversation the operator has directly, not something this constant triggers.
-CONSENT_KIND = "club_agreement_v3"   # v2 2026-07-24: self-service deletion + explicit RH access scope
+# v4 2026-09-04: cadence-durable §3 (mechanism + "see the app's schedule",
+# currently daily) after the club's third cadence change outran v3's weekly text
+# within a week. Members who accepted earlier versions stay recorded against
+# them, per the v3 precedent: the owner tells them; nothing re-prompts.
+CONSENT_KIND = "club_agreement_v4"
 PRIVACY_KIND = "privacy_v2"          # the signup checkbox covers the privacy note too
 
 

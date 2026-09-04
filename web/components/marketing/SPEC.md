@@ -60,9 +60,11 @@ Voting power is not one-member-one-vote and not pure plutocracy: it blends
 **capital committed** with **historical accuracy**, so a member who is right
 repeatedly gains say over time.
 
-Cadence (current, weekly): the ballot opens Thursday evening, closes Monday
-09:15 ET, and the basket executes Monday 10:15 ET with a Tuesday top-up.
-Voting power is recomputed every other Sunday.
+Cadence (current: every trading day): the ballot closes 09:15 ET on each trade
+day, the basket executes 10:15 ET, and deferred buys top up the next trading
+day. Voting power is recomputed on its own schedule. Copy must never hardcode
+weekday names — the cadence has changed twice; state times + "every trading
+day" and defer to the app's schedule.
 
 ### The positioning (why this is new)
 

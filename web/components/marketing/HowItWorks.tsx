@@ -49,12 +49,14 @@ const STEPS: Step[] = [
   },
 ];
 
-/* Cadence per SPEC §3 (current, weekly). Kept as a quiet strip rather than a
-   fourth step: it is a detail you check, not a thing you do. */
+/* Cadence per SPEC §3 (current: every trading day). Kept as a quiet strip
+   rather than a fourth step: it is a detail you check, not a thing you do.
+   Times only, no weekday names — the cadence has flipped twice in a month and
+   day-of-week copy goes stale the moment it does. */
 const CADENCE: { when: string; what: string }[] = [
-  { when: "Thu evening", what: "Ballot opens" },
-  { when: "Mon 09:15 ET", what: "Voting closes" },
-  { when: "Mon 10:15 ET", what: "Basket executes" },
+  { when: "Overnight", what: "Ballot opens" },
+  { when: "09:15 ET", what: "Voting closes" },
+  { when: "10:15 ET", what: "Basket executes" },
 ];
 
 export function HowItWorks() {
@@ -115,7 +117,7 @@ export function HowItWorks() {
 
       <Reveal delay={90} className="mt-14 sm:mt-20">
         <div className="mkt-card p-6 sm:p-8">
-          <div className="mkt-mono text-[var(--mkt-subtle)]">Cadence — weekly</div>
+          <div className="mkt-mono text-[var(--mkt-subtle)]">Cadence — every trading day</div>
           <ol className="mt-6 grid gap-y-5 sm:grid-cols-3 sm:gap-x-8">
             {CADENCE.map((c) => (
               <li
@@ -130,7 +132,7 @@ export function HowItWorks() {
             ))}
           </ol>
           <p className="mt-7 text-[13px] leading-relaxed text-[var(--mkt-subtle)]">
-            A top-up pass runs Tuesday. Voting power is recomputed every other Sunday.
+            Deferred buys top up the next trading day. Voting power is recomputed on its own schedule.
           </p>
         </div>
       </Reveal>

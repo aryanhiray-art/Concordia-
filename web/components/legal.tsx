@@ -59,11 +59,14 @@ function A({ href, children }: { href: string; children: React.ReactNode }) {
   return <a href={href} className="font-semibold text-teal hover:underline">{children}</a>;
 }
 
-// v3 (2026-08-28): the intro, §3 and §4 carry the live WEEKLY cadence (ballot
-// closes Mon 09:15 ET, trades 10:15, Tue top-up, power every other Sunday) in
-// place of the club's old daily one, §1 describes the operator as one
-// individual, and §15 no longer nominates a governing law. PrivacyDoc went to
-// v2 the same day (login-IP disclosure + the three processors).
+// v4 (2026-09-04): cadence-DURABLE. v2 said daily; v3 said weekly; the club
+// then went back to daily within a week of v3 — the third time the document
+// described a schedule the club no longer ran. §3 now states the mechanism
+// (one ballot per cycle, closes 09:15 ET on a trade day, trades 10:15, unspent
+// buys top up the next trading day) and points at the app's published schedule
+// for which days those are, so a cadence flip is an operational change, not an
+// amendment. v3's other changes stand: the operator described as one
+// individual (§1), no governing-law clause (§15), privacy_v2.
 //
 // These footers and auth.py's CONSENT_KIND/PRIVACY_KIND move together — a
 // version string that does not match the text it stamps makes every stored
@@ -74,7 +77,7 @@ export function TermsDoc() {
     <Doc
       eyebrow="Concordia · club agreement"
       title="Club Participation Agreement"
-      footer="Version club_agreement_v3 — August 2026. This is the club's member agreement; it is not legal advice."
+      footer="Version club_agreement_v4 — September 2026. This is the club's member agreement; it is not legal advice."
     >
       <P>
         Concordia is a private, invite-only trading club. Members vote each week on what the club
@@ -112,16 +115,18 @@ export function TermsDoc() {
 
       <H>3 · How the club trades</H>
       <P>
-        The club runs <b className="text-ink">one ballot per cycle</b>, and the cycle is currently{" "}
-        <b className="text-ink">weekly</b>. A ballot opens once the previous cycle&apos;s trade is
-        done and stays open through the week; it closes{" "}
-        <b className="text-ink">Monday at 09:15 ET</b>, and the club trades that same morning at{" "}
-        <b className="text-ink">10:15 ET</b>. Members allocate their voting power across the stocks
+        The club runs <b className="text-ink">one ballot per cycle</b>. A ballot opens once the
+        previous cycle&apos;s trade is done; on a trade day it closes at{" "}
+        <b className="text-ink">09:15 ET</b> and the club trades that same morning at{" "}
+        <b className="text-ink">10:15 ET</b>, with any buys that outran that morning&apos;s credited
+        funds topped up the next trading day. Which days are trade days is the club&apos;s published
+        schedule, shown in the app whenever a ballot is open —{" "}
+        <b className="text-ink">currently every trading day</b>. Members allocate their voting power across the stocks
         they want the club to hold. When the ballot closes, the votes are tallied into a consensus
         basket, and that basket is executed automatically, equal-weight, in each participating
         member&apos;s account — sized to the slice of your account you chose to commit (your
-        allocation setting). Your voting power itself is recalculated on its own schedule (currently
-        every other Sunday). Nobody hand-trades for the club; execution follows the votes. That also
+        allocation setting). Your voting power itself is recalculated on its own schedule, also
+        shown in the app. Nobody hand-trades for the club; execution follows the votes. That also
         means the basket can include names you voted against — that is the nature of a consensus
         club.
       </P>
@@ -198,7 +203,7 @@ export function TermsDoc() {
           is no team, no on-call rotation, and no service-level promise.
         </Li>
         <Li>
-          <b className="text-ink">Tax drag.</b> A weekly rebalance generates short-term gains and
+          <b className="text-ink">Tax drag.</b> Frequent rebalancing generates short-term gains and
           probably wash sales in your own account, and the bill can arrive in a year the club lost
           money. This one surprises people — see <A href="#tax">§11</A>.
         </Li>
@@ -252,7 +257,7 @@ export function TermsDoc() {
 
       <H id="tax">11 · Tax — the part people miss</H>
       <P>
-        Rebalancing weekly has tax consequences that surprise most people, so they are spelled out
+        Rebalancing as often as the club does has tax consequences that surprise most people, so they are spelled out
         rather than left to be discovered in February:
       </P>
       <ul className="mt-1 list-disc pl-5">
