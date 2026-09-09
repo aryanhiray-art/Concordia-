@@ -40,9 +40,12 @@ export function Explore() {
       <div className="mt-12 grid gap-4 sm:mt-16 md:grid-cols-3">
         {CARDS.map((c, i) => (
           <Reveal key={c.href} delay={i * 80}>
+            {/* .mkt-card, not hand-rolled border/bg classes: these were the
+                only cards off the shared token, so they missed the -3px hover
+                lift every other card has and would drift on a palette retune. */}
             <Link
               href={c.href}
-              className="group flex h-full flex-col rounded-[20px] border border-[color:var(--mkt-hair)] bg-[var(--mkt-panel)] p-6 transition-colors duration-300 hover:border-[color:var(--mkt-hair-warm)] hover:bg-[var(--mkt-panel-2)] sm:p-7"
+              className="mkt-card mkt-card-hover group flex h-full flex-col p-6 sm:p-7"
             >
               <span className="mkt-mono text-[var(--mkt-subtle)]">{c.label}</span>
               <span className="mkt-display mkt-h3 mt-4 text-[var(--mkt-ink)]">{c.hook}</span>
@@ -51,7 +54,10 @@ export function Explore() {
                 aria-hidden
                 className="mkt-mono mt-auto pt-6 text-[var(--mkt-green)] opacity-70 transition-opacity duration-300 group-hover:opacity-100"
               >
-                Read →
+                Read{" "}
+                <span className="inline-block transition-transform duration-300 group-hover:translate-x-1">
+                  →
+                </span>
               </span>
             </Link>
           </Reveal>

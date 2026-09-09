@@ -172,9 +172,10 @@ export default async function OpengraphImage() {
             }}
           >
             {TAGLINE_LINES.map((line, i) => (
-              // The last clause is the one nothing else in this market can
-              // say, so it is the only line that takes the accent.
-              <div key={line} style={{ color: i === TAGLINE_LINES.length - 1 ? GREEN : INK }}>
+              // Line one takes the accent: on the page it is the green
+              // rotating verb ("Vote together."), and the share card mirrors
+              // the page's one green element.
+              <div key={line} style={{ color: i === 0 ? GREEN : INK }}>
                 {line}
               </div>
             ))}

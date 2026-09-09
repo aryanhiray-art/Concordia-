@@ -63,10 +63,18 @@
    heading behind it. scroll-margin-top is the only correct fix (padding on the
    target would show up visually). Smooth scrolling is opt-in per surface so the
    member app's behaviour is untouched. */
-.mkt { scroll-behavior: smooth; }
+/* On the ROOT, gated by the marketing surface flag: .mkt is not the scroll
+   container (the document is), so the old `.mkt { scroll-behavior }` rule
+   never applied and every in-page jump snapped. */
+html:has(body[data-surface="mkt"]) { scroll-behavior: smooth; }
 .mkt :target,
 .mkt section[id] { scroll-margin-top: 96px; }
-@media (prefers-reduced-motion: reduce) { .mkt { scroll-behavior: auto; } }
+@media (prefers-reduced-motion: reduce) { html:has(body[data-surface="mkt"]) { scroll-behavior: auto; } }
+
+/* Themed text selection — on a near-black canvas the OS-default blue reads
+   as a glitch, and people select marketing text constantly (the disclosure
+   especially). */
+.mkt ::selection { background: color-mix(in srgb, var(--mkt-green) 25%, transparent); color: var(--mkt-ink); }
 
 /* Body tint so Safari has something to sample (see rule 2 above). Wins over
    the phone block in globals.css because it is more specific. */
@@ -233,7 +241,35 @@ body[data-surface="mkt"] { background-color: #050809; }
   .mkt-marquee { animation: none !important; }
   .mkt-caret { animation: none !important; }
   .mkt-btn, .mkt-card { transition: none !important; }
+  .mkt-dial, .mkt-arc { animation: none !important; }
+  .mkt-chart-draw { animation: none !important; stroke-dashoffset: 0 !important; }
+  .mkt-chart-area { animation: none !important; opacity: 1 !important; }
 }
+
+/* Ambient motion on the hero figure. The dial turns once per 80s — slow
+   enough to be felt rather than watched — and the green arc breathes. SVG
+   note: .mkt-dial's element must carry NO transform attribute (CSS owns it;
+   transform-origin 50% 50% resolves against the viewBox), while .mkt-arc
+   animates opacity only because its rotation lives in the attribute. */
+@keyframes mkt-dial-turn { to { transform: rotate(360deg); } }
+.mkt-dial { animation: mkt-dial-turn 80s linear infinite; transform-origin: 50% 50%; }
+@keyframes mkt-arc-breathe { from { opacity: 0.68; } to { opacity: 0.95; } }
+.mkt-arc { animation: mkt-arc-breathe 6.5s var(--mkt-ease) infinite alternate; }
+
+/* The /record chart draws itself in when its Reveal wrapper enters the
+   viewport — no extra JS: the existing .is-in class is the trigger. The path
+   carries pathLength={1}, so dasharray/dashoffset of 1 mean "the whole line"
+   regardless of geometry. The area wash follows once the line has landed.
+   Reduced-motion overrides above render both fully drawn immediately; the
+   .no-js rules keep the evidence visible if scripting ever fails. */
+.mkt-chart-draw { stroke-dasharray: 1; stroke-dashoffset: 1; }
+.mkt-reveal.is-in .mkt-chart-draw { animation: mkt-chart-drawin 1.3s var(--mkt-ease) 0.25s forwards; }
+.no-js .mkt-chart-draw { stroke-dashoffset: 0; }
+@keyframes mkt-chart-drawin { to { stroke-dashoffset: 0; } }
+.mkt-chart-area { opacity: 0; }
+.mkt-reveal.is-in .mkt-chart-area { animation: mkt-chart-fadein 0.7s var(--mkt-ease) 1.15s forwards; }
+.no-js .mkt-chart-area { opacity: 1; }
+@keyframes mkt-chart-fadein { to { opacity: 1; } }
 
 /* ── Misc ────────────────────────────────────────────────────────────────── */
 .mkt-caret { display: inline-block; width: 2px; animation: mkt-blink 1.05s steps(2, start) infinite; }
@@ -252,7 +288,9 @@ body[data-surface="mkt"] { background-color: #050809; }
 }
 
 .mkt a:focus-visible, .mkt button:focus-visible, .mkt input:focus-visible, .mkt summary:focus-visible {
+  /* No border-radius here: outline follows the element's own radius in every
+     modern engine, and forcing 8px snapped the 9999px pill CTAs square the
+     moment a keyboard user focused them. */
   outline: 2px solid var(--mkt-signal);
   outline-offset: 3px;
-  border-radius: 8px;
 }

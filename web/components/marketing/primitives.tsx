@@ -249,29 +249,80 @@ export function CountUp({
 }
 
 /* ── Rotating word ─────────────────────────────────────────────────────────
-   The hero's one moving headline element. Reserves the width of the LONGEST
-   word so the line above never reflows as it cycles. */
+   The hero's one moving headline element. v2 (2026-09-09): the container's
+   width MORPHS to each word — every word is measured in the real font via a
+   hidden absolute row, and the wrapper animates between those widths — so the
+   old equal-rendered-width constraint on the word list is gone: text after
+   the word slides smoothly instead of jumping. Re-measured on resize because
+   the hero's type size is clamp()-based. Before the first measurement (SSR
+   and first client paint) the wrapper is auto-width around word one, which
+   is also the layout the reduced-motion path keeps forever. */
 export function RotatingWord({ words, intervalMs = 2600 }: { words: string[]; intervalMs?: number }) {
   const [i, setI] = useState(0);
-  const [on, setOn] = useState(true);
+  // Carousel grammar, not a blink: the outgoing word exits UPWARD, the
+  // incoming one enters FROM BELOW — "prep" is the un-transitioned frame that
+  // parks the new word under the baseline before "in" animates it up. The
+  // double-rAF between prep and in guarantees the browser commits the parked
+  // position first, or the transition would start from the old word's spot.
+  const [phase, setPhase] = useState<"in" | "out" | "prep">("in");
+  const [widths, setWidths] = useState<number[] | null>(null);
+  const measureRef = useRef<HTMLSpanElement | null>(null);
+
   useEffect(() => {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const id = setInterval(() => {
-      setOn(false);
-      setTimeout(() => { setI((n) => (n + 1) % words.length); setOn(true); }, 280);
+      setPhase("out");
+      setTimeout(() => {
+        setI((n) => (n + 1) % words.length);
+        setPhase("prep");
+        requestAnimationFrame(() => requestAnimationFrame(() => setPhase("in")));
+      }, 230);
     }, intervalMs);
     return () => clearInterval(id);
   }, [words.length, intervalMs]);
 
+  useEffect(() => {
+    const el = measureRef.current;
+    if (!el) return;
+    const measure = () => {
+      const spans = Array.from(el.children) as HTMLSpanElement[];
+      const w = spans.map((s) => s.getBoundingClientRect().width);
+      // Only commit real measurements: display:none ancestors measure 0, and
+      // a 0-width wrapper would collapse the line.
+      if (w.length && w.every((x) => x > 0)) setWidths(w);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [words]);
+
   return (
-    <span className="relative inline-grid align-bottom">
-      {/* invisible sizer: the longest word, holding the column width open */}
-      <span aria-hidden className="invisible col-start-1 row-start-1 whitespace-nowrap">
-        {words.reduce((a, b) => (b.length > a.length ? b : a), "")}
+    <span
+      className="relative inline-block whitespace-nowrap align-bottom"
+      style={
+        widths
+          ? { width: widths[i], transition: "width 320ms var(--mkt-ease)" }
+          : undefined
+      }
+    >
+      {/* Hidden measurer: every word in the inherited font, absolutely
+          positioned so it costs no layout. Individual inline-blocks so each
+          child's rect IS that word's width. */}
+      <span aria-hidden ref={measureRef} className="invisible absolute left-0 top-0 whitespace-nowrap">
+        {words.map((w) => (
+          <span key={w} className="inline-block">{w}</span>
+        ))}
       </span>
       <span
-        className="col-start-1 row-start-1 whitespace-nowrap text-[var(--mkt-green)] transition-all duration-300"
-        style={{ opacity: on ? 1 : 0, transform: on ? "none" : "translateY(-0.18em)" }}
+        className="inline-block whitespace-nowrap text-[var(--mkt-green)]"
+        style={
+          phase === "out"
+            ? { opacity: 0, transform: "translateY(-0.22em)", transition: "opacity 220ms var(--mkt-ease), transform 220ms var(--mkt-ease)" }
+            : phase === "prep"
+              ? { opacity: 0, transform: "translateY(0.24em)", transition: "none" }
+              : { opacity: 1, transform: "none", transition: "opacity 300ms var(--mkt-ease), transform 300ms var(--mkt-ease)" }
+        }
       >
         {words[i]}
       </span>

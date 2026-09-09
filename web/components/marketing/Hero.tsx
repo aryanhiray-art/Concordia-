@@ -2,7 +2,7 @@
 // resolve into a spinner. Every claim below is SPEC.md §2/§3 verbatim or a
 // direct paraphrase; the only number on the screen is the live-since date.
 
-import { CTA, Glow, Section, Tag } from "./primitives";
+import { CTA, Glow, RotatingWord, Section } from "./primitives";
 
 /* ── The convergence figure ────────────────────────────────────────────────
    The club's own idea drawn as geometry: many fine lines running inward from
@@ -71,16 +71,24 @@ function ConvergenceFigure() {
       <circle cx={C} cy={C} r={205} fill="none" stroke="var(--mkt-hair)" strokeWidth={1} />
       <circle cx={C} cy={C} r={196} fill="none" stroke="var(--mkt-hair-warm)" strokeWidth={1} />
       {/* the aperture the lines resolve through — dashed so it reads as a dial
-          rather than a second solid ring competing with the rim */}
+          rather than a second solid ring competing with the rim. .mkt-dial
+          turns it once per ~80s: the one ambient motion that makes the figure
+          read as an instrument, not a poster (killed under reduced motion in
+          marketing.css). CSS owns its transform — do not add a transform
+          attribute here, the animation would clobber it. */}
       <circle
+        className="mkt-dial"
         cx={C} cy={C} r={100} fill="none"
         stroke="var(--mkt-hair-warm)" strokeWidth={1}
         strokeDasharray="1.5 9" strokeLinecap="round"
       />
 
       {/* the cycle, part-way round. pathLength=360 lets the dash array be read
-          as degrees — the same trick the Logo uses for its arcs. */}
+          as degrees — the same trick the Logo uses for its arcs. .mkt-arc is
+          an opacity breath ONLY: this element's rotation lives in the
+          transform ATTRIBUTE, which a CSS transform animation would override. */}
       <circle
+        className="mkt-arc"
         cx={C} cy={C} r={196} fill="none"
         stroke="var(--mkt-green)" strokeWidth={2} strokeLinecap="round"
         pathLength={360} strokeDasharray="104 256"
@@ -137,26 +145,32 @@ export function Hero() {
 
       {/* svh, not vh: on iOS vh is the TALL viewport, so a 88vh hero is taller
           than the screen the moment the URL bar is showing. */}
+      {/* No "Live since" pill above the headline (owner call, 2026-09-09):
+          the date already lives in the ticker and the proof strip's index
+          note, and the headline lands harder with nothing over it. */}
       <div className="flex min-h-[88svh] flex-col justify-center pt-10 pb-14 sm:pt-14 lg:pt-16 lg:pb-20">
-        <div>
-          <Tag dot>Live since June 2026</Tag>
-        </div>
-
-        {/* Three beats, one per line: the vote, the wisdom engine, the output.
-            The 2026-09-09 reframing — collective wisdom leads, custody is a
-            benefit chip in the trust row below. Static since then: the old
-            RotatingWord verb rotated custody synonyms, and rotating synonyms
-            of "right" would read as the claim drifting, so line two holds
-            still. Every line is mechanism, not outcome: the club VOTES, power
-            follows accuracy (SPEC §3), one basket comes out. The accent sits
-            on the engine phrase — the one claim nothing else in this market
-            makes. Kept in sync with seo.ts TAGLINE_LINES (the OG card renders
-            the same three lines). */}
-        <h1 className="mkt-display mkt-h1 mt-7 text-[var(--mkt-ink)] sm:mt-8">
-          <span className="block">The club votes.</span>
+        {/* Three beats, one per line: the invitation, the wisdom engine, the
+            output. Line one is the hero's single moving element — a green
+            rotating verb over the constant "together." Every word in the
+            rotation must be independently TRUE of the product as "{Word}
+            together." (they vote together, argue their way to a consensus,
+            earn say together, decide together — SPEC §3), and "Earn" leans on
+            line two directly beneath it, which pins what is being earned:
+            say, not returns. The tagline's static form uses word one
+            ("Vote"), so keep it first — seo.ts TAGLINE_LINES and the OG card
+            render that form, and the two must not drift. Line two gives up
+            its old green accent: one green element per hero. */}
+        <h1 className="mkt-display mkt-h1 text-[var(--mkt-ink)]">
+          {/* Rotation order is deliberate: "Vote" first (it is the canonical
+              tagline/OG state, the SSR paint, and what reduced-motion users
+              see forever); "Argue" separates the near-synonyms Vote/Decide;
+              "Earn" LAST and never first — standing alone it could read as an
+              earnings promise, and it is defensible only because line two
+              beneath pins what is earned to say. */}
           <span className="block">
-            Being right earns <span className="text-[var(--mkt-green)]">more say</span>.
+            <RotatingWord words={["Vote", "Argue", "Decide", "Earn"]} /> together.
           </span>
+          <span className="block">Being right earns more say.</span>
           <span className="block">One basket for the whole club.</span>
         </h1>
 

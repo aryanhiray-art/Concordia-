@@ -140,12 +140,15 @@ export function MktNav() {
         />
 
         <div className={`relative mx-auto flex w-full max-w-[1180px] items-center gap-2 px-5 sm:gap-3 sm:px-8 ${NAV_H}`}>
-          <a href="/" className="flex flex-none items-center gap-2.5" aria-label="Concordia — home">
+          {/* next/link like the page links beside it: the brand mark going
+              through a full reload while the nav links swap client-side read
+              as two different sites. */}
+          <Link href="/" className="flex flex-none items-center gap-2.5" aria-label="Concordia — home">
             <Logo size={26} />
             <span className="font-display text-[16px] font-bold tracking-tight text-[var(--mkt-ink)]">
               concordia
             </span>
-          </a>
+          </Link>
 
           {/* flex-1 rather than absolute centring: an absolutely centred group
               can overlap the CTAs at exactly 768px, where the bar is tightest. */}

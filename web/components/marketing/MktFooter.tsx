@@ -9,6 +9,7 @@
 // container widths below are copied from it verbatim so the footer's gutters
 // line up with every section above.
 
+import NextLink from "next/link";
 import { Logo } from "@/components/ui";
 import { Reveal } from "./primitives";
 
@@ -46,16 +47,27 @@ function Column({ title, links }: { title: string; links: Link[] }) {
     <nav aria-label={title}>
       <p className="mkt-mono text-[var(--mkt-subtle)]">{title}</p>
       <ul className="mt-4 space-y-2.5">
-        {links.map((l) => (
-          <li key={l.label}>
-            <a
-              href={l.href}
-              className="text-[14px] text-[var(--mkt-muted)] transition-colors duration-300 hover:text-[var(--mkt-ink)]"
-            >
-              {l.label}
-            </a>
-          </li>
-        ))}
+        {links.map((l) => {
+          const cls =
+            "text-[14px] text-[var(--mkt-muted)] transition-colors duration-300 hover:text-[var(--mkt-ink)]";
+          return (
+            <li key={l.label}>
+              {/* Internal routes go through next/link so the footer moves
+                  between pages as instantly as the top nav does — a footer
+                  that full-reloads while the nav doesn't reads as jank. The
+                  demo link is another origin and keeps the plain anchor. */}
+              {l.href.startsWith("/") ? (
+                <NextLink href={l.href} className={cls}>
+                  {l.label}
+                </NextLink>
+              ) : (
+                <a href={l.href} className={cls}>
+                  {l.label}
+                </a>
+              )}
+            </li>
+          );
+        })}
       </ul>
     </nav>
   );
@@ -80,8 +92,8 @@ export function MktFooter() {
                   exempt legal-disclosure block below, which already carries
                   it. This is the reframed thesis, in step with seo.ts. */}
               <p className="mt-5 text-[14px] leading-[1.65] text-[var(--mkt-muted)]">
-                A private investing club. The club votes, being right earns
-                more say, and one basket trades for the whole club.
+                A private investing club. Members vote together, being right
+                earns more say, and one basket trades for the whole club.
               </p>
             </div>
 

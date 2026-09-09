@@ -26,7 +26,9 @@ export const SITE_NAME = "Concordia";
  *  <meta> never drift. Width guard: the OG card sets its type size for these
  *  exact lines; check app/opengraph-image.tsx if a line grows past ~29 chars. */
 export const TAGLINE_LINES = [
-  "The club votes.",
+  // "Vote" is the hero rotation's word one — the static, canonical state of
+  // the rotating line. If the rotation's first word changes, change this.
+  "Vote together.",
   "Being right earns more say.",
   "One basket for the whole club.",
 ] as const;
@@ -59,12 +61,12 @@ export function pageMetadata(path: string, title: string, description: string): 
   };
 }
 
-const TITLE = "Concordia — the club votes, being right earns more say";
+const TITLE = "Concordia — vote together, being right earns more say";
 
 // ~150 chars: long enough to carry the three load-bearing facts (vote,
 // merit-weighted say, own account), short enough that Google shows all of it.
 const DESCRIPTION =
-  "An invite-only investing club. Members vote each cycle; being right earns " +
+  "An invite-only investing club. Vote together each cycle; being right earns " +
   "more say. One basket for the whole club, traded in your own Robinhood account.";
 
 export const siteMetadata: Metadata = {

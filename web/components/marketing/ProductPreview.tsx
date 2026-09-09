@@ -39,15 +39,17 @@ const CUT = 3;
 /** Bar that fills once, when the panel first reaches the viewport — the tally
  *  arriving, not decoration. Static under reduced motion. */
 function Bar({ pct, dim = false, delay = 0, run }: { pct: number; dim?: boolean; delay?: number; run: boolean }) {
+  // color-mix over hardcoded rgba: these are --mkt-ink's channels, and a
+  // palette retune must move the bars too (SPEC §6 bans raw values).
   return (
-    <span className="relative block h-[7px] flex-1 overflow-hidden rounded-full bg-[rgba(236,242,240,0.07)]">
+    <span className="relative block h-[7px] flex-1 overflow-hidden rounded-full bg-[color-mix(in_srgb,var(--mkt-ink)_7%,transparent)]">
       <span
         className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-[900ms] ease-out motion-reduce:transition-none"
         style={{
           width: run ? `${pct}%` : "0%",
           transitionDelay: `${delay}ms`,
           background: dim
-            ? "rgba(236,242,240,0.22)"
+            ? "color-mix(in srgb, var(--mkt-ink) 22%, transparent)"
             : "linear-gradient(90deg, var(--mkt-teal), var(--mkt-green))",
         }}
       />

@@ -260,13 +260,19 @@ export function TrackRecord() {
                       />
                     ))}
 
-                    {g.areaD && <path d={g.areaD} fill="url(#mkt-record-area)" />}
+                    {/* mkt-chart-area / mkt-chart-draw: the line draws itself
+                        in when the surrounding Reveal gains .is-in, then the
+                        area wash fades up (marketing.css). pathLength={1}
+                        makes the draw's dash math geometry-independent. The
+                        figures are untouched — this is arrival, not data. */}
+                    {g.areaD && <path className="mkt-chart-area" d={g.areaD} fill="url(#mkt-record-area)" />}
                     {g.spyD && (
                       <path d={g.spyD} fill="none" stroke="var(--mkt-subtle)" strokeWidth="1.8"
                         strokeDasharray="6 6" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
                     )}
                     {g.clubD && (
-                      <path d={g.clubD} fill="none" stroke="var(--mkt-green)" strokeWidth="2.6"
+                      <path className="mkt-chart-draw" d={g.clubD} pathLength={1} fill="none"
+                        stroke="var(--mkt-green)" strokeWidth="2.6"
                         strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
                     )}
                   </svg>
