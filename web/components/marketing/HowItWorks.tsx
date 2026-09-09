@@ -37,11 +37,16 @@ const STEPS: Step[] = [
       // say "one-member-one-vote / whoever-has-the-most-money" and "being
       // right earns more say" — the primary click path lands here next, so
       // this paragraph explains the same SPEC §3 mechanism in its own words.
+      // The thesis sentence is code-verified: votes carry an optional
+      // sanitized rationale (routes/voting.py) and the ballot shows the
+      // latest few HUMAN rationales per pick (services/voting.symbol_theses)
+      // — it is what backs the hero's "Argue/Win together" states.
       "Each cycle the club votes across the S&P 500. The names with the most " +
-      "weighted support — roughly twenty — become the basket. Your weight " +
-      "blends two things: the capital you've put behind the club, and the " +
-      "record of picks the closes proved right. Keep calling it well and your " +
-      "ballot carries further.",
+      "weighted support — roughly twenty — become the basket. Pin a short " +
+      "thesis to a pick and the club sees your case beside the tally. Your " +
+      "weight blends what you've put behind the club with the record of picks " +
+      "the closes proved right — keep calling it well and your ballot carries " +
+      "further.",
   },
   {
     n: "03",

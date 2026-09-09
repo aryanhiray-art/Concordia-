@@ -99,6 +99,13 @@ Three families of predecessors, and what each got wrong:
 Concordia is the first with all three at once: **a vote, your own account, and
 nobody holding the money.** Broker agent APIs only made that possible in 2026.
 
+One more publishable feature fact (verified 2026-09-09 against
+`backend/app/routes/voting.py` and `services/voting.symbol_theses`): a member
+may pin an optional short thesis to a pick, and the ballot shows the latest
+few human rationales beside the tally. This is what grounds "argue" and
+"win the vote" language — copy may state it, but never as a research tool or
+a chat (it is a one-line case per pick, nothing more).
+
 ## 4. Site structure (five pages since 2026-09-09)
 
 The one-page site split into five. THE MAIN POINT SITE-WIDE IS COLLECTIVE

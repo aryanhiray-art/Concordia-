@@ -171,11 +171,16 @@ export function Hero() {
         <h1 className="mkt-display mkt-h1 text-[var(--mkt-ink)]">
           {/* Rotation order is deliberate: "Vote" first (it is the canonical
               tagline/OG state, the SSR paint, and what reduced-motion users
-              see forever); "Argue" separates the near-synonyms Vote/Decide;
-              "Earn" LAST and never first — standing alone it could read as an
-              earnings promise; the lead's mechanism sentence is its anchor. */}
+              see forever). "Win" is an OWNER OVERRIDE of the word audit
+              (2026-09-09), which rated it an outcome-promise risk on an
+              investing hero; it ships directly AFTER "Argue" so the intended
+              reading is winning the argument/vote — the site's own vocabulary
+              (Why.tsx: copy-trading has "no vote to win") — and it must never
+              move to first or into the static tagline. "Learn" leans on the
+              lead's "the club keeps learning who to listen to". "Earn" stays
+              LAST and never first; line two's earn→say pair is its anchor. */}
           <span className="block">
-            <RotatingWord words={["Vote", "Argue", "Decide", "Earn"]} /> together.
+            <RotatingWord words={["Vote", "Argue", "Win", "Decide", "Learn", "Earn"]} /> together.
           </span>
           <span className="block">Be right. Earn more say.</span>
           <span className="block">One basket, your own account.</span>
