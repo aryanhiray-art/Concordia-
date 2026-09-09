@@ -29,8 +29,8 @@ export const TAGLINE_LINES = [
   // "Vote" is the hero rotation's word one — the static, canonical state of
   // the rotating line. If the rotation's first word changes, change this.
   "Vote together.",
-  "Being right earns more say.",
-  "One basket for the whole club.",
+  "Be right. Earn more say.",
+  "One basket, your own account.",
 ] as const;
 
 export const TAGLINE = TAGLINE_LINES.join(" ");
@@ -61,13 +61,13 @@ export function pageMetadata(path: string, title: string, description: string): 
   };
 }
 
-const TITLE = "Concordia — vote together, being right earns more say";
+const TITLE = "Concordia — vote together, be right, earn more say";
 
 // ~150 chars: long enough to carry the three load-bearing facts (vote,
 // merit-weighted say, own account), short enough that Google shows all of it.
 const DESCRIPTION =
-  "An invite-only investing club. Vote together each cycle; being right earns " +
-  "more say. One basket for the whole club, traded in your own Robinhood account.";
+  "An invite-only investing club. Vote together each cycle; members who keep " +
+  "being right get more say. One basket, traded in your own Robinhood account.";
 
 export const siteMetadata: Metadata = {
   // Absolute-URL base for canonical + og:url + og:image. Without it Next emits

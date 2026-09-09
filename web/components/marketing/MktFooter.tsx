@@ -92,8 +92,9 @@ export function MktFooter() {
                   exempt legal-disclosure block below, which already carries
                   it. This is the reframed thesis, in step with seo.ts. */}
               <p className="mt-5 text-[14px] leading-[1.65] text-[var(--mkt-muted)]">
-                A private investing club. Members vote together, being right
-                earns more say, and one basket trades for the whole club.
+                A private investing club. Members vote together, the right
+                calls get louder, and one basket trades in every member&rsquo;s
+                own account.
               </p>
             </div>
 

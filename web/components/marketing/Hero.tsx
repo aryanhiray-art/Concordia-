@@ -150,28 +150,35 @@ export function Hero() {
           note, and the headline lands harder with nothing over it. */}
       <div className="flex min-h-[88svh] flex-col justify-center pt-10 pb-14 sm:pt-14 lg:pt-16 lg:pb-20">
         {/* Three beats, one per line: the invitation, the wisdom engine, the
-            output. Line one is the hero's single moving element — a green
-            rotating verb over the constant "together." Every word in the
-            rotation must be independently TRUE of the product as "{Word}
-            together." (they vote together, argue their way to a consensus,
-            earn say together, decide together — SPEC §3), and "Earn" leans on
-            line two directly beneath it, which pins what is being earned:
-            say, not returns. The tagline's static form uses word one
-            ("Vote"), so keep it first — seo.ts TAGLINE_LINES and the OG card
-            render that form, and the two must not drift. Line two gives up
-            its old green accent: one green element per hero. */}
+            output — all in the same clipped imperative register (the earlier
+            "Being right earns more say. / One basket for the whole club."
+            pair read sing-song next to line one; owner call, 2026-09-09).
+            Line one is the hero's single moving element — a green rotating
+            verb over the constant "together." Every word in the rotation must
+            be independently TRUE of the product as "{Word} together." (they
+            vote together, argue their way to a consensus, earn say together,
+            decide together — SPEC §3). Line two is load-bearing for the
+            rotation: "Earn more say." is what pins the "Earn together."
+            state to SAY rather than returns — do not remove the earn→say
+            pair from this line while "Earn" rotates ("get louder" was tried
+            and rejected for exactly this: punchier, but it left "Earn"
+            unanchored, §0). Line three claims where the basket executes for
+            YOU — never "every account": participation is optional and the
+            FAQ says so, so the universal form is provably false. The
+            tagline's static form uses word one ("Vote"), so keep it first —
+            seo.ts TAGLINE_LINES and the OG card render that form, and the
+            two must not drift. Only line one carries green. */}
         <h1 className="mkt-display mkt-h1 text-[var(--mkt-ink)]">
           {/* Rotation order is deliberate: "Vote" first (it is the canonical
               tagline/OG state, the SSR paint, and what reduced-motion users
               see forever); "Argue" separates the near-synonyms Vote/Decide;
               "Earn" LAST and never first — standing alone it could read as an
-              earnings promise, and it is defensible only because line two
-              beneath pins what is earned to say. */}
+              earnings promise; the lead's mechanism sentence is its anchor. */}
           <span className="block">
             <RotatingWord words={["Vote", "Argue", "Decide", "Earn"]} /> together.
           </span>
-          <span className="block">Being right earns more say.</span>
-          <span className="block">One basket for the whole club.</span>
+          <span className="block">Be right. Earn more say.</span>
+          <span className="block">One basket, your own account.</span>
         </h1>
 
         {/* items-START, not centre or end: the figure is taller than the copy
