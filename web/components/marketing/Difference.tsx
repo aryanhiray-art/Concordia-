@@ -28,7 +28,7 @@ const ROWS: Row[] = [
   {
     label: "Who decides",
     club: "Members vote, usually at a meeting.",
-    copy: "One leader, whom you choose to follow.",
+    copy: "One leader you choose to follow.",
     concordia:
       "The club, by weighted vote — capital committed blended with historical accuracy.",
   },
@@ -78,7 +78,7 @@ export function Difference() {
       <SectionHead
         eyebrow="04 — The difference"
         title="Same market. Different structure."
-        lead="Three ways to invest alongside other people. All of them can hold the same stock on the same day; they differ in who decides it, and whose account it lands in."
+        lead="Three ways to invest alongside other people. All of them can hold the same stock on the same day. The difference is who decides — and whose account it lands in."
       />
 
       {/* ── Desktop: a real table ─────────────────────────────────────────── */}

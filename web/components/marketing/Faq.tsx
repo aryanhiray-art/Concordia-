@@ -34,13 +34,12 @@ const ITEMS: Item[] = [
     q: "Does Concordia ever hold my money?",
     a: (
       <>
-        No. There is no pooled fund, no partnership account and no Concordia
-        balance — the club is non-custodial by construction. Your cash and your
-        shares sit in your own Robinhood account, in your name, the whole time.
-        Concordia connects to that account through Robinhood&rsquo;s agentic
-        API, and that connection cannot withdraw, transfer or move money out of
-        it. Not &ldquo;is not allowed to&rdquo;: the integration has no such
-        capability to call.
+        No. There&rsquo;s no pooled fund, no partnership account, no Concordia
+        balance. Your cash and your shares sit in your own Robinhood account, in
+        your name, the whole time. Concordia connects through Robinhood&rsquo;s
+        agentic API, and that connection can&rsquo;t withdraw, transfer or move
+        money out. Not &ldquo;isn&rsquo;t allowed to&rdquo; — the integration
+        has no such capability to call.
       </>
     ),
   },
@@ -49,12 +48,11 @@ const ITEMS: Item[] = [
     a: (
       <>
         Two things. It reads your balances and positions, and it places market
-        buy and sell orders for the names in the basket the club voted for. It
-        does that only within the slice of buying power you allocate — you set
-        either a percentage or a fixed dollar amount, and there is a hard
-        per-member ceiling on top of it. Positions the club did not buy are
-        never sold: the rebalance works from the club&rsquo;s own execution
-        record, so anything you were already holding is left alone.
+        buy and sell orders for the names the club voted for. Only within the
+        slice you allocate — a percentage or a fixed dollar amount, with a hard
+        per-member ceiling on top. And anything you were already holding is left
+        alone: the rebalance works from the club&rsquo;s own execution record,
+        so positions the club didn&rsquo;t buy are never sold.
       </>
     ),
   },
@@ -74,19 +72,17 @@ const ITEMS: Item[] = [
     q: "What if I disagree with the basket the club picked?",
     a: (
       <>
-        You control whether you participate and how much you commit — you do not
-        control what wins a vote. That is the point of a club. If you don&rsquo;t
-        want the current direction there are two different exits, and they do
-        different things. Switch participation off and the club skips your
-        account entirely from the next cycle: it places no further orders, and
-        the shares it already bought for you simply stay where they are, yours
-        to sell whenever you like. Set your allocation to zero instead and the
-        next rebalance unwinds the positions the club bought for you — it sells
-        them back out rather than leaving them stranded. Either way, anything
-        you bought yourself is never touched. One honest caveat: both switches
-        lock during the short window between a ballot closing and the basket
-        executing, so that nobody can vote at full weight, watch the tally, and
-        then defund the result.
+        You control whether you participate and how much you commit — not what
+        wins the vote. That&rsquo;s the point of a club. If you don&rsquo;t like
+        the direction, there are two exits, and they do different things. Switch
+        participation off, and the club skips your account from the next cycle:
+        no further orders, and the shares it already bought stay where they are,
+        yours to sell whenever you like. Set your allocation to zero instead,
+        and the next rebalance sells the club&rsquo;s positions back out rather
+        than leaving them stranded. Either way, anything you bought yourself is
+        never touched. One honest caveat: both switches lock during the short
+        window between a ballot closing and the basket executing — so nobody
+        can vote at full weight, watch the tally, then defund the result.
       </>
     ),
   },
@@ -94,14 +90,14 @@ const ITEMS: Item[] = [
     q: "How is voting power calculated?",
     a: (
       <>
-        It blends two things: the capital you have committed, and how accurate
-        your past picks turned out to be. Both feed one score, and your voting
-        power is that score as a share of the club&rsquo;s total. So a large
-        balance alone does not buy the club, and a member who is repeatedly
-        right gains say over time.
-        Accuracy is scored from closing prices in the cycle after each vote, and
-        power is recomputed on a schedule rather than in reaction to any one
-        trade. We describe the mechanism; we don&rsquo;t publish the formula.
+        It blends two things: the capital you&rsquo;ve committed, and how
+        accurate your past picks turned out to be. Both feed one score, and your
+        voting power is that score as a share of the club&rsquo;s total. A large
+        balance alone doesn&rsquo;t buy the club, and a member who&rsquo;s
+        repeatedly right gains say over time. Accuracy is scored from closing
+        prices in the cycle after each vote, and power is recomputed on a
+        schedule — not in reaction to any one trade. We describe the mechanism;
+        we don&rsquo;t publish the formula.
       </>
     ),
   },
@@ -109,9 +105,8 @@ const ITEMS: Item[] = [
     q: "What does it cost?",
     a: (
       <>
-        Nothing. Concordia charges members no fee, no subscription and no share
-        of profits. Whatever your broker charges for its own execution is
-        between you and your broker.
+        Nothing. No fee, no subscription, no share of profits. Whatever your
+        broker charges for its own execution is between you and your broker.
       </>
     ),
   },
@@ -121,9 +116,9 @@ const ITEMS: Item[] = [
       <>
         Robinhood, today — specifically an account with agentic trading enabled.
         That API is what makes a club vote possible without pooling anyone&rsquo;s
-        money, and it is why Concordia could not have existed a year ago. You
-        authorise the connection on Robinhood&rsquo;s own consent screen;
-        Concordia never sees or stores your Robinhood password, and you can
+        money, and it&rsquo;s why Concordia couldn&rsquo;t have existed a year
+        ago. You authorise the connection on Robinhood&rsquo;s own consent
+        screen — Concordia never sees or stores your password — and you can
         disconnect from either side at any time.
       </>
     ),
@@ -167,7 +162,7 @@ export function Faq() {
           <SectionHead
             eyebrow="Questions"
             title={<>The things worth asking before you connect an account.</>}
-            lead="Short answers, and no soft ones. Where the honest answer is uncomfortable, it is still the answer."
+            lead="Straight answers, no soft ones. Where the honest answer is uncomfortable, it's still the answer."
           />
           {/* Label and links on separate lines. As one mono sentence it wrapped
               mid-phrase at 360px and orphaned the "·" onto its own line —

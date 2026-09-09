@@ -71,10 +71,10 @@ export function ClosingCTA() {
 
         <Reveal delay={80}>
           <p className="mkt-lead mx-auto mt-6 max-w-[46ch]">
-            Concordia is invite-only. With a code you connect your own Robinhood
-            account, set how much of it the club may use, and vote — the club
-            never takes custody of a cent. Without a code, leave an address and
-            wait for a round to open.
+            Concordia is invite-only. With a code: connect your own Robinhood
+            account, set how much of it the club may use, and vote. The club
+            never takes custody of a cent. No code? Leave an email — invites go
+            out in small rounds.
           </p>
         </Reveal>
 
@@ -135,7 +135,7 @@ export function ClosingCTA() {
               className="mt-3 min-h-[1.25rem] text-[13px] leading-relaxed text-[var(--mkt-muted)]"
             >
               {status === "done" &&
-                "You're on the list. Concordia opens in small rounds — there is nothing else to do for now."}
+                "You're on the list. Invites go out in small rounds — nothing else to do for now."}
               {status === "error" && "That didn't go through. Try again in a moment."}
             </p>
 

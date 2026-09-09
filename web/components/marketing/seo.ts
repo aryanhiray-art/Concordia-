@@ -35,8 +35,8 @@ const TITLE = "Concordia — the club votes, your account trades";
 // ~150 chars: long enough to carry the three load-bearing facts (vote, own
 // account, no custody), short enough that Google shows all of it.
 const DESCRIPTION =
-  "An invite-only investing club. The club votes on which S&P 500 names to hold; " +
-  "the basket trades in your own Robinhood account. Nobody holds your money.";
+  "An invite-only investing club. The club votes on which S&P 500 names to hold. " +
+  "The basket trades in your own Robinhood account. Nobody holds your money.";
 
 export const siteMetadata: Metadata = {
   // Absolute-URL base for canonical + og:url + og:image. Without it Next emits

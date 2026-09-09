@@ -328,8 +328,8 @@ export function TrackRecord() {
         <Reveal delay={80}>
           <div className="mt-10 flex flex-col items-start gap-4 sm:mt-12 sm:flex-row sm:items-center sm:justify-between">
             <p className="max-w-[46ch] text-[14px] leading-relaxed text-[var(--mkt-muted)]">
-              You do not need an invite to look. The demo runs this same code against
-              fake money, with the club&rsquo;s real record on the chart.
+              You don&rsquo;t need an invite to look. The demo runs this same code
+              against fake money, with the club&rsquo;s real record on the chart.
             </p>
             <CTA href="https://demo.voteconcordia.com" variant="ghost" external className="flex-none">
               Open the demo

@@ -93,8 +93,12 @@ const ITEMS: Array<{ icon: React.ReactNode; title: string; body: string }> = [
   },
   {
     icon: IconSweep,
-    title: "A sweep watches the quiet week",
-    body: "A health check runs through the day against the database and alerts on the failures a quiet week hides: a dead broker token, a ballot that never opened, a stuck session, a disarmed executor on a cycle morning.",
+    // "for silence", not "the quiet week": written under the old weekly
+    // cadence, and cadence-flavoured copy is banned (see SPEC §3's cadence
+    // note) — the failure mode being described is silence itself, at any
+    // cadence.
+    title: "A sweep watches for silence",
+    body: "A health check runs through the day against the database and alerts on the failures silence hides: a dead broker token, a ballot that never opened, a stuck session, a disarmed executor on a cycle morning.",
   },
   {
     icon: IconKey,
@@ -127,7 +131,7 @@ export function Inside() {
       <SectionHead
         eyebrow="Inside the club"
         title="What runs underneath."
-        lead="A vote only matters if the thing that acts on it is boring, checkable and slow to do anything irreversible. These are the parts that make a vote become an order — and the parts that stop one."
+        lead="A vote only matters if the thing acting on it is boring, checkable, and slow to do anything irreversible. These are the parts that turn a vote into an order — and the parts that stop one."
       />
 
       {/* Bento, not a uniform 3x3. Six equal tiles read as a spec sheet — the

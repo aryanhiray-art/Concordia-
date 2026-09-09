@@ -165,8 +165,8 @@ export function Hero() {
         <div className="mt-9 grid gap-12 lg:mt-12 lg:grid-cols-[minmax(0,1fr)_minmax(0,380px)] lg:items-start lg:gap-16">
           <div>
             <p className="mkt-lead max-w-[52ch]">
-              Members vote each cycle on which S&amp;P 500 names the club should hold.
-              The winning basket executes in your own Robinhood account — never
+              Each cycle, the club votes on which S&amp;P 500 names to hold. The
+              winning basket executes in your own Robinhood account — never
               pooled, never transferred, never held by us.
             </p>
 

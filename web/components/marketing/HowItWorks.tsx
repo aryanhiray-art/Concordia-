@@ -21,20 +21,20 @@ const STEPS: Step[] = [
     kicker: "Connect",
     title: "Connect your own brokerage account.",
     body:
-      "Concordia links to your Robinhood account through Robinhood's agentic API. " +
-      "You set the ceiling — how much of your buying power the club is allowed to " +
-      "use. Everything above that line stays yours to run as you always have: same " +
-      "account, same login, no money moved.",
+      "Link your Robinhood account through Robinhood's agentic API, and set the " +
+      "ceiling — how much of your buying power the club may use. Everything above " +
+      "that line stays yours to run as you always have. Same account, same login, " +
+      "no money moved.",
   },
   {
     n: "02",
     kicker: "Vote",
     title: "Vote on the basket.",
     body:
-      "Each cycle the club votes across the S&P 500, and the names with the most " +
-      "weighted support — roughly twenty — become the basket. Voting power is " +
-      "neither one-member-one-vote nor pure plutocracy: it blends the capital a " +
-      "member has committed with their historical accuracy, so being right " +
+      "Each cycle the club votes across the S&P 500. The names with the most " +
+      "weighted support — roughly twenty — become the basket. Power isn't " +
+      "one-member-one-vote, and it isn't whoever-has-the-most-money either: it " +
+      "blends what you've committed with how right you've been. Being right " +
       "repeatedly earns you more say.",
   },
   {
@@ -43,9 +43,9 @@ const STEPS: Step[] = [
     title: "The basket executes in your account.",
     body:
       "One decision for the whole club, sized to each member's own settings. The " +
-      "shares are bought in your account, in your name. Concordia never holds, " +
-      "pools, or transfers money — there is nothing to withdraw, because nothing " +
-      "ever left.",
+      "shares land in your account, in your name. Concordia never holds, pools, " +
+      "or transfers money — there's nothing to withdraw, because nothing ever " +
+      "left.",
   },
 ];
 
@@ -76,7 +76,7 @@ export function HowItWorks() {
       <SectionHead
         eyebrow="02 — How it works"
         title="Connect once. Vote each cycle. Trade in your own account."
-        lead="No pooled fund, no transfer, no new brokerage to open. The club decides; your account does the trading."
+        lead="No pooled fund, no transfer, no new brokerage to open. The club decides. Your account does the trading."
       />
 
       <ol className="mt-14 sm:mt-20">

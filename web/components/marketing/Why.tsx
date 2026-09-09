@@ -17,26 +17,26 @@ const BEATS: Beat[] = [
     kicker: "The club",
     title: "Clubs voted — then pooled the money.",
     body:
-      "The investment club got the hard part right: a group of people arguing " +
-      "their way to a single decision. Then it needed a partnership, one shared " +
-      "brokerage account, a treasurer, and a tax form for every member. The " +
-      "paperwork is what killed them, not the idea.",
+      "Investment clubs got the hard part right: a group arguing its way to one " +
+      "decision. Then came the partnership, the shared account, the treasurer, " +
+      "and a tax form for every member. The paperwork killed them. The idea was " +
+      "fine.",
   },
   {
     kicker: "The feed",
     title: "Copy-trading kept your account — and dropped the vote.",
     body:
-      "Following a leader fixed custody: the money never leaves your own " +
-      "account. But you are mirroring one person's conviction. There is nothing " +
-      "to argue for, nothing to be right about, and no vote to win.",
+      "Copy-trading fixed custody — your money stays in your own account. But " +
+      "you're mirroring one person's conviction. Nothing to argue for, nothing " +
+      "to be right about, no vote to win.",
   },
   {
     kicker: "What changed",
     title: "Then brokers opened the account itself.",
     body:
-      "Programmatic agent access to an individual brokerage account arrived in " +
-      "2026. Before that, a group could decide together or trade in its members' " +
-      "own accounts. It could not do both.",
+      "In 2026, brokers opened programmatic agent access to individual " +
+      "accounts. Before that, a group could decide together, or trade in its " +
+      "members' own accounts. Never both.",
   },
 ];
 
@@ -97,8 +97,8 @@ export function Why() {
             {/* SPEC §3: "the first with all three at once". Deliberately not
                 "any two of these existed" — that is a tidier sentence and a
                 claim nobody has checked. */}
-            Every predecessor had some of these. None had all three at once —
-            that needed a broker to open the account itself to an agent, which
+            Every predecessor had some of these. None had all three at once.
+            That took brokers opening the account itself to an agent — which
             happened in 2026.
           </p>
         </div>

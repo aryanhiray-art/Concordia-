@@ -18,13 +18,24 @@ stay **true**. This is a page about real money; an unverifiable claim is a bug.
 
 ## 1. Voice
 
-Plain, exact, unhurried. Short declaratives. The reference sites earn
-confidence with restraint, not adjectives — no "revolutionary", "seamless",
-"empowering", "unlock", "supercharge". Prefer the concrete noun to the abstract
-one ("your Robinhood account", not "your financial future").
+Short declaratives, second person, present tense. The register is the one
+Robinhood, Public, dub and Autopilot share (surveyed 2026-09-09): plain
+sentences that survive being read aloud, confidence carried by facts rather
+than adjectives, and the occasional dry aside. Periods over semicolons.
+Contractions are welcome; "whom" is not. Where a sentence grows a subordinate
+clause, split it.
+
+Still banned: "revolutionary", "seamless", "empowering", "unlock",
+"supercharge" — and equally banned in the other direction: slang, emoji, and
+anything that reads as a costume ("fr", "no cap", "level up"). Gen Z reads
+plain confidence as native and forced slang as marketing. Prefer the concrete
+noun to the abstract one ("your Robinhood account", not "your financial
+future").
 
 Good: *"The club votes. Your account trades. Nobody holds your money."*
+Good: *"Nothing. No fee, no subscription, no share of profits."*
 Bad: *"Concordia empowers investors to unlock collective intelligence."*
+Bad: *"your portfolio is about to level up fr"*
 
 ## 2. Facts (the ONLY publishable numbers)
 

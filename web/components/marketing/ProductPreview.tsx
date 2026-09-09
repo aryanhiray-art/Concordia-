@@ -98,9 +98,9 @@ export function ProductPreview() {
           </Reveal>
           <Reveal delay={120}>
             <p className="mkt-lead mt-5">
-              You spend your voting power across the names you want held. Everyone else does
-              the same, the weights are tallied, and the top of the list becomes the basket
-              that trades in every member&apos;s own account.
+              Spend your voting power across the names you want held. Everyone else does the
+              same. The tally decides the basket — and the basket trades in every
+              member&apos;s own account.
             </p>
           </Reveal>
         </div>
