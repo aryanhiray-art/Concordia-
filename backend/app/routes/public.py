@@ -1,6 +1,6 @@
 """The club's only unauthenticated surface: the public marketing site's API.
 
-Every other route in this app is behind a session or an API key. These two are
+Every other route in this app is behind a session or an API key. These are
 on the open internet, so they are written for the traffic that actually reaches
 an open internet endpoint — scrapers, bots, and the occasional flood:
 
@@ -11,6 +11,10 @@ an open internet endpoint — scrapers, bots, and the occasional flood:
     rate limit. This route reads the CACHE ONLY, and answers with the published
     constants (stale=true) when the cache is cold — the marketing page always
     gets honest numbers, and never a request that blocks on the broker.
+  * GET /tape serves market quotes for a FIXED editorial symbol list, cached,
+    with one upstream Alpaca market-data call per TTL window no matter the
+    traffic. The list is hardcoded and reads nothing from the club — see the
+    held-symbols rule below.
   * POST /waitlist writes into the same single-writer SQLite file the executor
     uses to move real money. A public write path into that file is bounded three
     ways: a per-IP window, a global window, and a hard row cap.
@@ -177,6 +181,92 @@ def public_stats(response: Response, request: Request):
     # underlying series only moves once a day.
     response.headers["Cache-Control"] = "public, max-age=60, s-maxage=300"
     return payload
+
+
+# ─── GET /tape ───────────────────────────────────────────────────────────────
+
+# The marketing marquee's quote tape. A fixed editorial list — the largest S&P
+# 500 components by market cap, written here by hand — NEVER a read of any club
+# table. Whether any of these names is or is not in the club's basket, this
+# list cannot say, because nothing about the club feeds it (the module
+# docstring's held-symbols ban is the rule being kept). Quotes ride the
+# reference account's Alpaca market-data key, which exists precisely so public
+# numbers never touch a member's borrowed Robinhood session.
+_TAPE_SYMBOLS = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META",
+                 "AVGO", "TSLA", "JPM", "V", "UNH", "COST"]
+_TAPE_TTL_S = 75             # at most one upstream call per window, any traffic
+_TAPE_FAIL_COOLDOWN_S = 300  # after a failure, don't re-try the upstream for this long
+_TAPE_MAX_STALE_S = 900      # past this age, an old quote is a lie — serve none
+_tape_cache: dict = {"at": 0.0, "items": None, "failed_at": 0.0}
+
+
+def _tape_items() -> list[dict]:
+    """Quotes for the fixed list, or [] when the feed cannot answer honestly.
+
+    [] is a real answer, not an error: the page renders its claims strip
+    instead of the tape. Every failure mode lands there — keys not configured,
+    upstream down, a symbol payload missing its bars — because the alternative
+    in each case is inventing or half-inventing a number.
+    """
+    from ..alpaca.client import AlpacaClient, AlpacaError
+
+    if not settings.alpaca_configured:
+        return []
+    try:
+        snaps = AlpacaClient().snapshots(_TAPE_SYMBOLS)
+    except AlpacaError:
+        return []
+    items: list[dict] = []
+    for sym in _TAPE_SYMBOLS:
+        s = snaps.get(sym) or {}
+        # Latest trade when there is one (live or after-hours print), else the
+        # day bar's close. The change is measured against the PREVIOUS day's
+        # close — the number every tape on every finance site shows.
+        price = (s.get("latestTrade") or {}).get("p")
+        if price is None:
+            price = (s.get("dailyBar") or {}).get("c")
+        base = (s.get("prevDailyBar") or {}).get("c")
+        try:
+            price_f, base_f = float(price), float(base)
+        except (TypeError, ValueError):
+            continue
+        if not (math.isfinite(price_f) and math.isfinite(base_f)) or price_f <= 0 or base_f <= 0:
+            continue
+        items.append({
+            "sym": sym,
+            "price": round(price_f, 2),
+            "chg_pct": round((price_f / base_f - 1.0) * 100.0, 2),
+        })
+    return items
+
+
+@router.get("/tape")
+def public_tape(response: Response, request: Request):
+    """Large-cap quotes for the marketing marquee. No auth, and the same
+    stance as /stats: anonymous traffic can never fan out — one upstream
+    market-data call per TTL window at most, a cooldown after a failure, and a
+    hard staleness ceiling past which the tape goes empty rather than dressing
+    old prices as fresh."""
+    ip = client_ip(request)
+    if ratelimit.too_many(f"pubtape:{ip}", 120, 60):
+        raise HTTPException(status_code=429, detail="too many requests")
+    ratelimit.record(f"pubtape:{ip}")
+    now = time.time()
+    fresh = _tape_cache["items"] is not None and _tape_cache["at"] > now - _TAPE_TTL_S
+    cooling = _tape_cache["failed_at"] > now - _TAPE_FAIL_COOLDOWN_S
+    if not fresh and not cooling:
+        got = _tape_items()
+        if got:
+            _tape_cache["at"], _tape_cache["items"] = time.time(), got
+            _tape_cache["failed_at"] = 0.0
+        else:
+            # Keep the last good quotes (the staleness ceiling below decides
+            # how long they stay servable) and stop hitting the upstream.
+            _tape_cache["failed_at"] = time.time()
+    age = time.time() - _tape_cache["at"]
+    items = _tape_cache["items"] if _tape_cache["items"] and age <= _TAPE_MAX_STALE_S else []
+    response.headers["Cache-Control"] = "public, max-age=45, s-maxage=60"
+    return {"items": items, "stale": bool(items) and age > _TAPE_TTL_S}
 
 
 # ─── POST /waitlist ──────────────────────────────────────────────────────────

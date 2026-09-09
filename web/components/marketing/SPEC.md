@@ -52,6 +52,14 @@ Bad: *"your portfolio is about to level up fr"*
 **Prefer live values from `/api/public/stats` over the table above.** The table
 is the fallback when the API is unreachable, and the sanity check on it.
 
+The top-bar tape is the one other place numbers appear: live market quotes
+(Alpaca market data via `/api/public/tape`, cached server-side) for a fixed
+editorial list of S&P 500 mega-caps hardcoded in `backend/app/routes/public.py`.
+That list is never read from any club table — it says nothing about what the
+club holds — and when the feed is down, empty, or stale past the backend's
+ceiling, the bar renders the claims strip instead of a price nobody just
+fetched.
+
 Required disclosure, verbatim, wherever the index appears and in the footer:
 
 > The decisions index is a paper, equal-weight model of the baskets the club

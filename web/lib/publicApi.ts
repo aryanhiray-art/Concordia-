@@ -257,3 +257,39 @@ export async function joinWaitlist(
   }
   return { ok: true };
 }
+
+/** One entry on the top-bar tape: a real quote, rounded by the backend. */
+export type TapeItem = { sym: string; price: number; chgPct: number };
+
+/**
+ * Live large-cap quotes for the top-bar marquee (GET /api/public/tape — a
+ * fixed editorial list of S&P 500 mega-caps, never the club's holdings).
+ *
+ * Unlike getPublicStats this RESOLVES [] on every failure instead of
+ * rejecting: the tape is decoration with a designed fallback (the claims
+ * strip), so no call site has anything useful to do with an error object.
+ * Fields are normalised one by one — an entry missing a finite number is
+ * dropped, not defaulted, because a defaulted price is an invented one.
+ */
+export async function fetchPublicTape(): Promise<TapeItem[]> {
+  let body: unknown;
+  try {
+    body = await request<unknown>("/api/public/tape");
+  } catch {
+    return [];
+  }
+  const raw = (body as { items?: unknown } | null)?.items;
+  if (!Array.isArray(raw)) return [];
+  const out: TapeItem[] = [];
+  for (const entry of raw) {
+    const o = entry as { sym?: unknown; price?: unknown; chg_pct?: unknown };
+    if (
+      typeof o.sym === "string" && /^[A-Z.]{1,6}$/.test(o.sym) &&
+      typeof o.price === "number" && Number.isFinite(o.price) &&
+      typeof o.chg_pct === "number" && Number.isFinite(o.chg_pct)
+    ) {
+      out.push({ sym: o.sym, price: o.price, chgPct: o.chg_pct });
+    }
+  }
+  return out;
+}

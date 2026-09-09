@@ -5,7 +5,7 @@
 // the thing that most often drifts when a landing page grows section by
 // section. Visual tokens live in app/marketing.css under `.mkt`.
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 // useLayoutEffect warns when React renders on the server. The marketing page is
 // client-rendered inside AppShell, but the module is still evaluated during SSR,
@@ -169,7 +169,7 @@ export function Tag({ children, dot = false }: { children: React.ReactNode; dot?
    second copy lands where the first began and the loop is seamless. */
 export function Marquee({
   items, durationS = 42, className = "", separator = "◆",
-}: { items: string[]; durationS?: number; className?: string; separator?: string }) {
+}: { items: ReactNode[]; durationS?: number; className?: string; separator?: string }) {
   const track = (key: string) => (
     <div className="mkt-marquee-track" key={key} aria-hidden={key === "b"}>
       {items.map((t, i) => (

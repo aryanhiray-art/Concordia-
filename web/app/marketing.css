@@ -35,6 +35,9 @@
   --mkt-teal: #2dd4bf;
   --mkt-green: #34e3a8;
   --mkt-signal: #5ff3c4;       /* the one hot accent; used sparingly */
+  --mkt-red: #ff6b6b;          /* down-moves on the quote tape only — matches
+                                  the app's --red so a loss is the same colour
+                                  on both sides of the sign-in wall */
 
   /* Tinted glass, not white glass — borrowed from the reference sites, where
      panels take a wash of the ACCENT hue rather than plain white at 4%. It

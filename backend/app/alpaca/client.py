@@ -153,6 +153,37 @@ class AlpacaClient:
                 break
         return out
 
+    def snapshots(self, symbols: list[str]) -> dict[str, dict]:
+        """{SYMBOL: snapshot} from Alpaca market data — latest trade plus the
+        current and previous daily bars, one request for the whole list.
+
+        Same reasoning as daily_closes for living on this client rather than a
+        member's Robinhood one: public market data must never ride on a
+        member's borrowed broker session.
+        """
+        syms = ",".join(s.upper() for s in symbols)
+        try:
+            r = requests.get(f"{_DATA}/v2/stocks/snapshots", headers=self._headers(),
+                             params={"symbols": syms}, timeout=_TIMEOUT)
+        except requests.RequestException as e:
+            raise AlpacaTransientError(f"{type(e).__name__}: {str(e)[:160]}") from e
+        if r.status_code in (401, 403):
+            raise AlpacaAuthError(f"HTTP {r.status_code} from the data API")
+        if r.status_code == 429 or r.status_code >= 500:
+            raise AlpacaTransientError(f"HTTP {r.status_code}: {r.text[:200]}")
+        if r.status_code >= 400:
+            raise AlpacaError(f"HTTP {r.status_code}: {r.text[:300]}")
+        try:
+            body = r.json() or {}
+        except ValueError as e:
+            raise AlpacaError(f"non-JSON response: {r.text[:200]}") from e
+        # The multi-symbol endpoint keys the payload by symbol at the top
+        # level; tolerate the {"snapshots": {...}} wrapper some API revisions
+        # use so an upstream version bump degrades to "no quotes", not a crash.
+        if isinstance(body.get("snapshots"), dict):
+            body = body["snapshots"]
+        return {k.upper(): v for k, v in body.items() if isinstance(v, dict)}
+
     def clock(self) -> dict:
         return self._get("/v2/clock") or {}
 

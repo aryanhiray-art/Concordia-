@@ -96,11 +96,19 @@ def _clear_cache():
 
 @pytest.fixture(autouse=True)
 def _fresh_stats_memo():
-    """routes/public memoises the built payload for 60s; a test that seeds the
-    kv cache must not be answered from the previous test's memo."""
+    """routes/public memoises the built stats payload for 60s and the quote
+    tape for its own TTL; a test that seeds either cache must not be answered
+    from the previous test's memo."""
     public._cache["at"], public._cache["payload"] = 0.0, None
+    public._tape_cache.update(at=0.0, items=None, failed_at=0.0)
+    # settings is a frozen dataclass (see conftest) — snapshot the alpaca keys
+    # so a tape test that plants test credentials can't leak them onward.
+    key0, sec0 = settings.alpaca_key_id, settings.alpaca_secret
     yield
     public._cache["at"], public._cache["payload"] = 0.0, None
+    public._tape_cache.update(at=0.0, items=None, failed_at=0.0)
+    object.__setattr__(settings, "alpaca_key_id", key0)
+    object.__setattr__(settings, "alpaca_secret", sec0)
 
 
 # ─── GET /stats ──────────────────────────────────────────────────────────────
@@ -285,3 +293,113 @@ def test_waitlist_is_rate_limited_per_ip():
     # a different visitor is unaffected by the flooder's window
     assert _join("innocent@example.com").status_code == 200
     ratelimit.clear(f"waitlist:{ip}")
+
+
+# ─── GET /tape ───────────────────────────────────────────────────────────────
+# The quote tape's contract mirrors /stats: no auth, no fan-out (one upstream
+# call per TTL no matter the traffic), and honesty over availability — every
+# failure mode answers [] (the page falls back to its claims strip) rather
+# than a defaulted or stale-dressed-as-fresh price.
+
+from app.alpaca.client import AlpacaTransientError  # noqa: E402
+
+
+def _configure_alpaca(_monkeypatch=None):
+    # frozen dataclass — the established override is object.__setattr__; the
+    # autouse fixture restores the real values after every test.
+    object.__setattr__(settings, "alpaca_key_id", "test-key")
+    object.__setattr__(settings, "alpaca_secret", "test-secret")
+
+
+def _snap(price: float, prev_close: float) -> dict:
+    return {"latestTrade": {"p": price},
+            "dailyBar": {"c": price},
+            "prevDailyBar": {"c": prev_close}}
+
+
+def test_tape_serves_quotes_for_exactly_the_fixed_editorial_list(monkeypatch):
+    _configure_alpaca(monkeypatch)
+    fake = {sym: _snap(102.0, 100.0) for sym in public._TAPE_SYMBOLS}
+    # Upstream also answering for a symbol we did not ask about must not widen
+    # the tape — the response is driven by OUR list, never the feed's.
+    fake["GME"] = _snap(999.0, 1.0)
+    monkeypatch.setattr("app.alpaca.client.AlpacaClient.snapshots",
+                        lambda self, syms: fake)
+    r = client.get("/api/public/tape", headers=_hdrs())
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body) == {"items", "stale"}
+    assert body["stale"] is False
+    assert [i["sym"] for i in body["items"]] == public._TAPE_SYMBOLS
+    one = body["items"][0]
+    assert set(one) == {"sym", "price", "chg_pct"}
+    assert one["price"] == 102.0 and one["chg_pct"] == 2.0
+
+
+def test_tape_answers_empty_on_feed_failure_and_stops_retrying(monkeypatch):
+    _configure_alpaca(monkeypatch)
+    calls = [0]
+
+    def boom(self, syms):
+        calls[0] += 1
+        raise AlpacaTransientError("data API down")
+
+    monkeypatch.setattr("app.alpaca.client.AlpacaClient.snapshots", boom)
+    r1 = client.get("/api/public/tape", headers=_hdrs())
+    r2 = client.get("/api/public/tape", headers=_hdrs())
+    assert r1.status_code == r2.status_code == 200
+    assert r1.json()["items"] == [] and r2.json()["items"] == []
+    # The cooldown is the anti-fan-out guarantee: anonymous traffic hammering
+    # the route while Alpaca is down must not become a hammer ON Alpaca.
+    assert calls[0] == 1
+
+
+def test_tape_without_alpaca_keys_is_empty_and_never_builds_a_client(monkeypatch):
+    object.__setattr__(settings, "alpaca_key_id", "")
+    object.__setattr__(settings, "alpaca_secret", "")
+
+    def must_not_run(self, syms):  # pragma: no cover - the assert IS the test
+        raise AssertionError("snapshots called with no keys configured")
+
+    monkeypatch.setattr("app.alpaca.client.AlpacaClient.snapshots", must_not_run)
+    r = client.get("/api/public/tape", headers=_hdrs())
+    assert r.status_code == 200 and r.json()["items"] == []
+
+
+def test_tape_drops_a_symbol_it_cannot_price_instead_of_defaulting(monkeypatch):
+    _configure_alpaca(monkeypatch)
+    fake = {sym: _snap(102.0, 100.0) for sym in public._TAPE_SYMBOLS}
+    fake["NVDA"] = {"latestTrade": {"p": None}, "dailyBar": {}, "prevDailyBar": {}}
+    monkeypatch.setattr("app.alpaca.client.AlpacaClient.snapshots",
+                        lambda self, syms: fake)
+    body = client.get("/api/public/tape", headers=_hdrs()).json()
+    syms = [i["sym"] for i in body["items"]]
+    assert "NVDA" not in syms
+    assert len(syms) == len(public._TAPE_SYMBOLS) - 1
+
+
+def test_tape_serves_a_briefly_stale_answer_but_labels_it(monkeypatch):
+    public._tape_cache["items"] = [{"sym": "AAPL", "price": 1.0, "chg_pct": 0.0}]
+    public._tape_cache["at"] = time.time() - (public._TAPE_TTL_S + 30)
+    public._tape_cache["failed_at"] = time.time()      # cooling → no refresh
+    body = client.get("/api/public/tape", headers=_hdrs()).json()
+    assert body["items"] and body["stale"] is True
+
+
+def test_tape_refuses_to_dress_old_quotes_as_fresh(monkeypatch):
+    public._tape_cache["items"] = [{"sym": "AAPL", "price": 1.0, "chg_pct": 0.0}]
+    public._tape_cache["at"] = time.time() - (public._TAPE_MAX_STALE_S + 5)
+    public._tape_cache["failed_at"] = time.time()      # cooling → no refresh
+    body = client.get("/api/public/tape", headers=_hdrs()).json()
+    assert body["items"] == []
+
+
+def test_tape_is_rate_limited_per_ip(monkeypatch):
+    _configure_alpaca(monkeypatch)
+    monkeypatch.setattr("app.alpaca.client.AlpacaClient.snapshots",
+                        lambda self, syms: {s: _snap(10.0, 10.0)
+                                            for s in public._TAPE_SYMBOLS})
+    ip = _ip()
+    codes = [client.get("/api/public/tape", headers=_hdrs(ip)).status_code
+             for _ in range(121)]
+    assert codes[0] == 200 and codes[-1] == 429
