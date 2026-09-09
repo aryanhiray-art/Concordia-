@@ -271,6 +271,11 @@ export function RotatingWord({ words, intervalMs = 2600 }: { words: string[]; in
   useEffect(() => {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const id = setInterval(() => {
+      // Don't cycle unwatched: in a hidden tab rAF is suspended, so the
+      // prep→in step below would park the word at opacity 0 until refocus.
+      // Skipping keeps the word standing whenever a frame IS rendered
+      // (previews, tab thumbnails, the user coming back).
+      if (document.hidden) return;
       setPhase("out");
       setTimeout(() => {
         setI((n) => (n + 1) % words.length);
