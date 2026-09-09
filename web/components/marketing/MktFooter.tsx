@@ -14,17 +14,14 @@ import { Reveal } from "./primitives";
 
 type Link = { label: string; href: string };
 
-// The anchor ids belong to the section components (units C and D). They are
-// listed here in one place so a rename shows up as one diff, not five — and
-// each one below is copied from the `<Section id=…>` that actually renders it
-// (Why.tsx "why", HowItWorks.tsx "how", Difference.tsx "difference",
-// TrackRecord.tsx "record", Inside.tsx "inside", Faq.tsx "faq"). A footer link
-// to an id that does not exist is a link that does nothing.
+// Real routes since the five-page split (2026-09-09) — keep in step with
+// MKT_PAGE_PATHS in seo.ts, which is what AppShell routes on and the sitemap
+// advertises. A footer link to a path not on that list renders an AuthGate.
 const PRODUCT: Link[] = [
-  { label: "How it works", href: "#how" },
-  { label: "The difference", href: "#difference" },
-  { label: "Track record", href: "#record" },
-  { label: "Questions", href: "#faq" },
+  { label: "How it works", href: "/how-it-works" },
+  { label: "The difference", href: "/difference" },
+  { label: "Track record", href: "/record" },
+  { label: "Questions", href: "/faq" },
   { label: "Live demo", href: "https://demo.voteconcordia.com" },
 ];
 
@@ -77,9 +74,14 @@ export function MktFooter() {
                   concordia
                 </span>
               </div>
+              {/* Shared chrome on every page, so no benefit-framed custody
+                  line may live here (SPEC §4's once-per-page budget — the
+                  same rule ClosingCTA documents). Custody belongs to the
+                  exempt legal-disclosure block below, which already carries
+                  it. This is the reframed thesis, in step with seo.ts. */}
               <p className="mt-5 text-[14px] leading-[1.65] text-[var(--mkt-muted)]">
-                A private investing club. The club votes, your own account
-                trades, and nobody holds your money.
+                A private investing club. The club votes, being right earns
+                more say, and one basket trades for the whole club.
               </p>
             </div>
 

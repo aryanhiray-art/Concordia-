@@ -1,10 +1,10 @@
 import { Section, SectionHead, Reveal, Glow } from "./primitives";
 
-/* Section 01 — the problem.
+/* The problem section — opens /difference (since the five-page split).
    Deliberately short. The temptation on a page like this is to prove the
    thesis with six cards; the reference sites make a bigger argument in a third
    of the space and read as more certain for it. So: one heading, three beats,
-   one statement that lands into "how it works". Nothing else.
+   one statement that lands into the comparison below. Nothing else.
 
    Every claim here is structural (what a predecessor *is*), never comparative
    performance — see SPEC §0. No dates are invented: the only year named is
@@ -50,9 +50,14 @@ export function Why() {
         <Glow className="-top-32 right-[-14%]" size={520} tone="teal" intensity={0.1} />
       </div>
 
+      {/* Retitled for the /difference page (the ordinal eyebrows died with the
+          one-page site). The old title — "Investing went social everywhere
+          except the one place it costs money." — lives on inside the lead,
+          which carries the same argument; the new title frames the three
+          predecessor beats below it. */}
       <SectionHead
-        eyebrow="01 — The problem"
-        title="Investing went social everywhere except the one place it costs money."
+        eyebrow="The problem"
+        title="Deciding together is an old idea. It just kept breaking."
         lead={
           "The research is collective. The theses are collective. The screenshots, " +
           "the group chat at 9:29, the three-week argument about one ticker — all " +

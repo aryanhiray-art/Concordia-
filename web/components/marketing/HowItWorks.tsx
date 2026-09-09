@@ -1,6 +1,6 @@
 import { Section, SectionHead, Reveal, Glow } from "./primitives";
 
-/* Section 02 — how it works.
+/* The steps section — the spine of /how-it-works (since the five-page split).
    The three steps are ONE list on a single continuous rail, not three cards:
    the whole point of the product is that step 03 is a consequence of 01 and
    02, and disconnected cards would say the opposite. The rail is just the
@@ -21,21 +21,27 @@ const STEPS: Step[] = [
     kicker: "Connect",
     title: "Connect your own brokerage account.",
     body:
+      // Step 01 ends at "same login": the custody clause that used to follow
+      // ("no money moved") would be this page's SECOND custody line — step 03
+      // holds the page's one allowed slot (SPEC §4).
       "Link your Robinhood account through Robinhood's agentic API, and set the " +
       "ceiling — how much of your buying power the club may use. Everything above " +
-      "that line stays yours to run as you always have. Same account, same login, " +
-      "no money moved.",
+      "that line stays yours to run as you always have. Same account, same login.",
   },
   {
     n: "02",
     kicker: "Vote",
     title: "Vote on the basket.",
     body:
+      // Fresh wording, not home's: the Engine section and the hero already
+      // say "one-member-one-vote / whoever-has-the-most-money" and "being
+      // right earns more say" — the primary click path lands here next, so
+      // this paragraph explains the same SPEC §3 mechanism in its own words.
       "Each cycle the club votes across the S&P 500. The names with the most " +
-      "weighted support — roughly twenty — become the basket. Power isn't " +
-      "one-member-one-vote, and it isn't whoever-has-the-most-money either: it " +
-      "blends what you've committed with how right you've been. Being right " +
-      "repeatedly earns you more say.",
+      "weighted support — roughly twenty — become the basket. Your weight " +
+      "blends two things: the capital you've put behind the club, and the " +
+      "record of picks the closes proved right. Keep calling it well and your " +
+      "ballot carries further.",
   },
   {
     n: "03",
@@ -73,10 +79,14 @@ export function HowItWorks() {
         <Glow className="top-1/3 left-[-18%]" size={560} tone="green" intensity={0.09} />
       </div>
 
+      {/* Retitled for the /how-it-works page: the old title ("...Trade in your
+          own account.") duplicated both the page hero above it and the custody
+          framing this page already spends in step 03 — its single allowed
+          custody line (SPEC §4). */}
       <SectionHead
-        eyebrow="02 — How it works"
-        title="Connect once. Vote each cycle. Trade in your own account."
-        lead="No pooled fund, no transfer, no new brokerage to open. The club decides. Your account does the trading."
+        eyebrow="The steps"
+        title="Three steps, one loop."
+        lead="Each step is a consequence of the one before — one unbroken line."
       />
 
       <ol className="mt-14 sm:mt-20">

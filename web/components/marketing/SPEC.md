@@ -32,7 +32,7 @@ plain confidence as native and forced slang as marketing. Prefer the concrete
 noun to the abstract one ("your Robinhood account", not "your financial
 future").
 
-Good: *"The club votes. Your account trades. Nobody holds your money."*
+Good: *"The club votes. Being right earns more say. One basket for the whole club."*
 Good: *"Nothing. No fee, no subscription, no share of profits."*
 Bad: *"Concordia empowers investors to unlock collective intelligence."*
 Bad: *"your portfolio is about to level up fr"*
@@ -99,19 +99,29 @@ Three families of predecessors, and what each got wrong:
 Concordia is the first with all three at once: **a vote, your own account, and
 nobody holding the money.** Broker agent APIs only made that possible in 2026.
 
-## 4. Page structure (owner in brackets)
+## 4. Site structure (five pages since 2026-09-09)
 
-1. Top ticker + fixed nav — [B]
-2. Hero — [B]
-3. Proof strip (index vs SPY, live-since, cost) — [D]
-4. The problem / why now — [C]
-5. How it works, 01→03 — [C]
-6. The difference (3-way comparison) — [C]
-7. Track record chart + disclosure — [D]
-8. Inside the club (capability grid, 6) — [D]
-9. FAQ — [E]
-10. Closing CTA band + waitlist — [E]
-11. Footer + risk disclosure — [E]
+The one-page site split into five. THE MAIN POINT SITE-WIDE IS COLLECTIVE
+WISDOM — the club measures who was right and gives them more say. Custody is a
+BENEFIT, never the lead: at most one benefit-framed custody line per page
+(structural table rows and the footer's legal disclosure don't count against
+it). Shared chrome (ticker, nav, footer) lives in MktShell; ClosingCTA closes
+every page, so its copy is shared state — a custody line there would hit every
+page at once. Teaser cards never carry index figures: the disclosure doesn't
+travel to a teaser, so no number may either.
+
+- `/` — Hero (wisdom tagline) · ProofStrip · Engine (accuracy-weighted power,
+  the one custom section) · ProductPreview · Explore (subpage teaser cards,
+  each reusing its subpage's H1 verbatim) · ClosingCTA
+- `/how-it-works` — PageHero · HowItWorks (3 steps + cadence) · Inside · ClosingCTA
+- `/difference` — PageHero · Why (the problem) · Difference (comparison) · ClosingCTA
+- `/record` — PageHero · TrackRecord (chart + verbatim disclosure) · ClosingCTA
+- `/faq` — Faq (its own SectionHead is the page h1) · ClosingCTA
+
+Routes live in `web/app/<page>/page.tsx` (server, metadata via
+`seo.pageMetadata`) rendering `components/marketing/pages/*` (client, wrapped
+in MktShell). AppShell renders these paths bare for anyone on the apex host —
+keep `MKT_PAGE_PATHS` in seo.ts in step with nav, footer, and sitemap.
 
 ## 5. API contract (built by [A]; assume it exists)
 

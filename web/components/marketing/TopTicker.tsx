@@ -30,15 +30,23 @@ export const TICKER_H = 30;
 // "ONE BALLOT PER CYCLE" deliberately, NOT "one vote per cycle": voting power
 // is weighted by capital and accuracy (SPEC §3), so anything that reads as
 // one-member-one-vote would be false. A ballot per cycle is the true claim.
+//
+// NO benefit-framed custody chips here ("non-custodial", "money never
+// pooled"): this strip is shared chrome on every page, and SPEC §4 caps
+// custody at one benefit line per page — the pages spend theirs locally.
+// "YOUR OWN BROKERAGE ACCOUNT" stays: that is the execution mechanic, not the
+// custody benefit. The two replacements are checked claims: accuracy-weighted
+// power is SPEC §3, and every basket staying on the record is Inside.tsx's
+// verified "baskets lock before they run" fact.
 const CLAIMS = [
   "INVITE-ONLY",
-  "NON-CUSTODIAL",
+  "ACCURACY-WEIGHTED VOTING POWER",
   "YOUR OWN BROKERAGE ACCOUNT",
   "ONE BALLOT PER CYCLE",
   "S&P 500 UNIVERSE",
   "LIVE SINCE JUNE 2026",
   "FREE TO MEMBERS",
-  "MONEY NEVER POOLED",
+  "EVERY DECISION ON THE RECORD",
 ];
 
 // The backend caches quotes for ~75s, so refetching faster than this buys

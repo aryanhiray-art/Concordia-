@@ -43,6 +43,23 @@ const ITEMS: Item[] = [
       </>
     ),
   },
+  // Position 02 by design (the 2026-09-09 wisdom-first reframing): under a
+  // collective-wisdom lead, this is the second question a sceptic asks.
+  {
+    q: "How is voting power calculated?",
+    a: (
+      <>
+        It blends two things: the capital you&rsquo;ve committed, and how
+        accurate your past picks turned out to be. Both feed one score, and your
+        voting power is that score as a share of the club&rsquo;s total. A large
+        balance alone doesn&rsquo;t buy the club, and a member who&rsquo;s
+        repeatedly right gains say over time. Accuracy is scored from closing
+        prices in the cycle after each vote, and power is recomputed on a
+        schedule — not in reaction to any one trade. We describe the mechanism;
+        we don&rsquo;t publish the formula.
+      </>
+    ),
+  },
   {
     q: "What can Concordia actually do inside my account?",
     a: (
@@ -83,21 +100,6 @@ const ITEMS: Item[] = [
         never touched. One honest caveat: both switches lock during the short
         window between a ballot closing and the basket executing — so nobody
         can vote at full weight, watch the tally, then defund the result.
-      </>
-    ),
-  },
-  {
-    q: "How is voting power calculated?",
-    a: (
-      <>
-        It blends two things: the capital you&rsquo;ve committed, and how
-        accurate your past picks turned out to be. Both feed one score, and your
-        voting power is that score as a share of the club&rsquo;s total. A large
-        balance alone doesn&rsquo;t buy the club, and a member who&rsquo;s
-        repeatedly right gains say over time. Accuracy is scored from closing
-        prices in the cycle after each vote, and power is recomputed on a
-        schedule — not in reaction to any one trade. We describe the mechanism;
-        we don&rsquo;t publish the formula.
       </>
     ),
   },
@@ -160,9 +162,10 @@ export function Faq() {
             a second, page-wide sticky blocker that cannot be fixed from here. */}
         <div className="lg:sticky lg:top-28 lg:self-start">
           <SectionHead
+            as="h1"
             eyebrow="Questions"
-            title={<>The things worth asking before you connect an account.</>}
-            lead="Straight answers, no soft ones. Where the honest answer is uncomfortable, it's still the answer."
+            title={<>The questions worth asking first.</>}
+            lead="Straight answers, no soft ones. How the club decides, what it can and can't touch, and what happens when you disagree with a basket."
           />
           {/* Label and links on separate lines. As one mono sentence it wrapped
               mid-phrase at 360px and orphaned the "·" onto its own line —
@@ -197,7 +200,11 @@ export function Faq() {
                       after Tailwind's utilities, so a same-specificity utility
                       loses to it and the class's 0.96 line-height would clamp a
                       wrapping question. Compose the same look from tokens. */}
-                  <h3 className="flex items-start gap-4 font-display text-[1.125rem] font-medium leading-[1.35] tracking-[-0.02em] text-[var(--mkt-ink)] sm:gap-6 sm:text-[1.3rem]">
+                  {/* h2, not h3: since the five-page split this section IS
+                      the /faq page and its SectionHead is the h1, so h3 here
+                      would skip a level. Classes are token-composed, not
+                      level-derived, so the look is unchanged. */}
+                  <h2 className="flex items-start gap-4 font-display text-[1.125rem] font-medium leading-[1.35] tracking-[-0.02em] text-[var(--mkt-ink)] sm:gap-6 sm:text-[1.3rem]">
                     {/* Decorative ordinal. aria-hidden, or the heading (and the
                         summary's accessible name) reads "01Does Concordia ever
                         hold my money?" with no separator. */}
@@ -215,7 +222,7 @@ export function Faq() {
                       <span className="absolute left-1/2 top-1/2 h-px w-[9px] -translate-x-1/2 -translate-y-1/2 bg-current" />
                       <span className="absolute left-1/2 top-1/2 h-[9px] w-px -translate-x-1/2 -translate-y-1/2 bg-current transition-transform duration-300 ease-[var(--mkt-ease)] group-open:scale-y-0 motion-reduce:transition-none" />
                     </span>
-                  </h3>
+                  </h2>
                 </summary>
                 {/* Indented to the question's text column on wide screens, flush
                     left on phones where 2.6rem of dead gutter costs real width. */}

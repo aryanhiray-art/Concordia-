@@ -8,7 +8,7 @@
 // deliberately thin and the omissions are documented at the bottom.
 //
 // Not a client module by intent, but it must stay importable from one:
-// MarketingSite.tsx is "use client" and renders `jsonLd` into a <script>. So
+// MktShell.tsx is "use client" and renders `jsonLd` into a <script>. So
 // this file holds plain serialisable values and a type-only Next import —
 // no next/headers, no server-only, no React.
 
@@ -20,23 +20,52 @@ import type { Metadata } from "next";
 export const SITE_URL = "https://voteconcordia.com";
 export const SITE_NAME = "Concordia";
 
-/** SPEC.md §1's model sentence. Single source of truth — the OG card renders
- *  the same three clauses, so the share image and the <meta> never drift. */
+/** The site's three-line thesis (collective wisdom leads — the 2026-09-09
+ *  reframing; custody is a benefit, not the headline). Single source of truth —
+ *  the OG card renders the same three clauses, so the share image and the
+ *  <meta> never drift. Width guard: the OG card sets its type size for these
+ *  exact lines; check app/opengraph-image.tsx if a line grows past ~29 chars. */
 export const TAGLINE_LINES = [
   "The club votes.",
-  "Your account trades.",
-  "Nobody holds your money.",
+  "Being right earns more say.",
+  "One basket for the whole club.",
 ] as const;
 
 export const TAGLINE = TAGLINE_LINES.join(" ");
 
-const TITLE = "Concordia — the club votes, your account trades";
+/** The marketing subpages (the site split into five pages, 2026-09-09).
+ *  AppShell reads this to render them outside the app shell; sitemap.ts reads
+ *  it so a page can't exist without being crawlable. "/" is not listed — the
+ *  home route keeps its own signed-in/signed-out fork in AppShell. */
+export const MKT_PAGE_PATHS = ["/how-it-works", "/difference", "/record", "/faq"];
 
-// ~150 chars: long enough to carry the three load-bearing facts (vote, own
-// account, no custody), short enough that Google shows all of it.
+/** Per-page <head> for the subpages. Title reads "<page> — Concordia";
+ *  canonical and og:url point at the page itself ON PRODUCTION, for the same
+ *  reason siteMetadata pins the apex: beta./demo. serve this build too. */
+export function pageMetadata(path: string, title: string, description: string): Metadata {
+  const full = `${title} — ${SITE_NAME}`;
+  return {
+    title: full,
+    description,
+    alternates: { canonical: path },
+    openGraph: {
+      type: "website",
+      siteName: SITE_NAME,
+      url: `${SITE_URL}${path}`,
+      title: full,
+      description,
+    },
+    twitter: { card: "summary_large_image", title: full, description },
+  };
+}
+
+const TITLE = "Concordia — the club votes, being right earns more say";
+
+// ~150 chars: long enough to carry the three load-bearing facts (vote,
+// merit-weighted say, own account), short enough that Google shows all of it.
 const DESCRIPTION =
-  "An invite-only investing club. The club votes on which S&P 500 names to hold. " +
-  "The basket trades in your own Robinhood account. Nobody holds your money.";
+  "An invite-only investing club. Members vote each cycle; being right earns " +
+  "more say. One basket for the whole club, traded in your own Robinhood account.";
 
 export const siteMetadata: Metadata = {
   // Absolute-URL base for canonical + og:url + og:image. Without it Next emits
@@ -98,7 +127,7 @@ export const siteMetadata: Metadata = {
 };
 
 /* ── Structured data ───────────────────────────────────────────────────────
-   Organization + WebSite, rendered by MarketingSite.tsx into one
+   Organization + WebSite, rendered by MktShell.tsx into one
    application/ld+json script.
 
    `Organization` and not `FinancialService`/`InvestmentOrDeposit`: the latter

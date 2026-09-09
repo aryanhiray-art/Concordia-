@@ -76,10 +76,13 @@ export function Eyebrow({ children, className = "" }: { children: React.ReactNod
 
 /** Section header: eyebrow + display heading + optional lead paragraph. */
 export function SectionHead({
-  eyebrow, title, lead, align = "left", className = "",
+  eyebrow, title, lead, align = "left", className = "", as: H = "h2",
 }: {
   eyebrow?: React.ReactNode; title: React.ReactNode; lead?: React.ReactNode;
   align?: "left" | "center"; className?: string;
+  /** "h1" when the section head IS the page head — since the five-page split,
+   *  a section that opens its own page (Faq on /faq) carries the h1. */
+  as?: "h1" | "h2";
 }) {
   const c = align === "center";
   return (
@@ -90,7 +93,7 @@ export function SectionHead({
         </Reveal>
       )}
       <Reveal delay={60}>
-        <h2 className="mkt-display mkt-h2 mt-5 text-[var(--mkt-ink)]">{title}</h2>
+        <H className="mkt-display mkt-h2 mt-5 text-[var(--mkt-ink)]">{title}</H>
       </Reveal>
       {lead && <Reveal delay={120}><p className="mkt-lead mt-5">{lead}</p></Reveal>}
     </div>

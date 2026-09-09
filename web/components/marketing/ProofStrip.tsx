@@ -68,7 +68,9 @@ export function ProofStrip() {
       label: "Cost to members",
       // "non-custodial" breaks across the hyphen in a 2-up phone column; the
       // plain phrase says the same thing and stays on one line.
-      note: "no fees · no custody",
+      // "no profit share", not "no custody": the hero trust chip above is
+      // home's ONE custody line (SPEC §4), and this strip must not double it.
+      note: "no fee · no profit share",
     },
   ];
 

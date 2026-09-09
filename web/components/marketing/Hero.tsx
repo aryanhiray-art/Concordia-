@@ -2,7 +2,7 @@
 // resolve into a spinner. Every claim below is SPEC.md §2/§3 verbatim or a
 // direct paraphrase; the only number on the screen is the live-since date.
 
-import { CTA, Glow, RotatingWord, Section, Tag } from "./primitives";
+import { CTA, Glow, Section, Tag } from "./primitives";
 
 /* ── The convergence figure ────────────────────────────────────────────────
    The club's own idea drawn as geometry: many fine lines running inward from
@@ -109,8 +109,11 @@ function ConvergenceFigure() {
 }
 
 /* ── Trust row ─────────────────────────────────────────────────────────────
-   The four facts a sceptical reader wants before the fold, all from SPEC §2. */
-const TRUST = ["Free to members", "Non-custodial", "Invite-only", "Your own account"];
+   The four facts a sceptical reader wants before the fold, all from SPEC §2.
+   "Non-custodial" here is HOME'S ONE custody line (SPEC §4's once-per-page
+   budget) — nothing else on this page may restate it. "One ballot per cycle"
+   uses the fenced phrasing (never "one vote" — power is weighted). */
+const TRUST = ["Free to members", "Invite-only", "One ballot per cycle", "Non-custodial"];
 
 export function Hero() {
   return (
@@ -139,22 +142,22 @@ export function Hero() {
           <Tag dot>Live since June 2026</Tag>
         </div>
 
-        {/* Three beats, one per line, in SPEC §3's order: the vote, the
-            account, the custody. The rotating verb is the hero's single moving
-            part, and every word it can show is independently true — never
-            held (§2 custody: none), never pooled (§3), and free to members
-            (§2), so no state of this line is a claim we cannot stand behind.
-            CONSTRAINT for anyone editing the list: RotatingWord reserves the
-            width of the LONGEST word only, so words must be near-identical in
-            rendered width or the trailing "the money." visibly jumps. These
-            three measure 195/197/199px at the largest hero size; "keeps" is
-            214 and "touches" is 287 — both were cut for exactly that reason. */}
+        {/* Three beats, one per line: the vote, the wisdom engine, the output.
+            The 2026-09-09 reframing — collective wisdom leads, custody is a
+            benefit chip in the trust row below. Static since then: the old
+            RotatingWord verb rotated custody synonyms, and rotating synonyms
+            of "right" would read as the claim drifting, so line two holds
+            still. Every line is mechanism, not outcome: the club VOTES, power
+            follows accuracy (SPEC §3), one basket comes out. The accent sits
+            on the engine phrase — the one claim nothing else in this market
+            makes. Kept in sync with seo.ts TAGLINE_LINES (the OG card renders
+            the same three lines). */}
         <h1 className="mkt-display mkt-h1 mt-7 text-[var(--mkt-ink)] sm:mt-8">
           <span className="block">The club votes.</span>
-          <span className="block">Your account trades.</span>
           <span className="block">
-            Nobody <RotatingWord words={["holds", "pools", "takes"]} /> the money.
+            Being right earns <span className="text-[var(--mkt-green)]">more say</span>.
           </span>
+          <span className="block">One basket for the whole club.</span>
         </h1>
 
         {/* items-START, not centre or end: the figure is taller than the copy
@@ -164,10 +167,17 @@ export function Hero() {
             diagonal the whole composition is built on. */}
         <div className="mt-9 grid gap-12 lg:mt-12 lg:grid-cols-[minmax(0,1fr)_minmax(0,380px)] lg:items-start lg:gap-16">
           <div>
+            {/* "sized to each member's own settings", never "executes the same
+                for everyone" — participation and allocation are per-member
+                (HowItWorks step 03; the FAQ's "What can Concordia actually
+                do" and "What if I disagree" answers), and the tidier sentence
+                is false. */}
             <p className="mkt-lead max-w-[52ch]">
-              Each cycle, the club votes on which S&amp;P 500 names to hold. The
-              winning basket executes in your own Robinhood account — never
-              pooled, never transferred, never held by us.
+              Each cycle, the club votes on which S&amp;P 500 names to hold.
+              Voting power blends what you&rsquo;ve committed with how right
+              you&rsquo;ve been — the club keeps learning who to listen to. One
+              basket comes out, sized to your settings, in your own Robinhood
+              account.
             </p>
 
             <div className="mt-9 flex flex-wrap items-center gap-3">

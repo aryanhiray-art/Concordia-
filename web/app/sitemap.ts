@@ -1,6 +1,6 @@
 import type { MetadataRoute } from "next";
 
-import { SITE_URL } from "@/components/marketing/seo";
+import { MKT_PAGE_PATHS, SITE_URL } from "@/components/marketing/seo";
 
 // The public marketing surface, and nothing else. Every other route in this
 // app (/vote, /account, /history, /stocks, /welcome, /connected, /join) is
@@ -17,11 +17,19 @@ export default function sitemap(): MetadataRoute.Sitemap {
   return [
     {
       url: `${SITE_URL}/`,
-      // The homepage's live figures move with the club's weekly cadence
-      // (ballot Thursday → basket Monday), so weekly is the honest signal.
-      changeFrequency: "weekly",
+      // The homepage's live figures move with the club's trading cadence
+      // (currently every trading day), so daily is the honest signal.
+      changeFrequency: "daily",
       priority: 1,
     },
+    // The marketing subpages, from the same list AppShell routes on — a page
+    // added there is crawlable by construction. Their copy moves with deploys,
+    // not with the market.
+    ...MKT_PAGE_PATHS.map((p) => ({
+      url: `${SITE_URL}${p}`,
+      changeFrequency: "monthly" as const,
+      priority: 0.8,
+    })),
     { url: `${SITE_URL}/terms`, changeFrequency: "yearly", priority: 0.3 },
     { url: `${SITE_URL}/privacy`, changeFrequency: "yearly", priority: 0.3 },
   ];

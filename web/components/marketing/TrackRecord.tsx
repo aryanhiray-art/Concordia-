@@ -159,10 +159,13 @@ export function TrackRecord() {
       {/* z-index above the Glow, which is absolute at z-0 inside this section */}
       <div className="relative z-[1]">
         <div className="max-w-[760px]">
-          <Reveal><Eyebrow>The record</Eyebrow></Reveal>
+          {/* The page hero above (/record) carries "The record" and the old
+              title; this head now introduces the chart itself, honest-negative
+              first — the disclosure below is the long form of the same claim. */}
+          <Reveal><Eyebrow>The index</Eyebrow></Reveal>
           <Reveal delay={60}>
             <h2 className="mkt-display mkt-h2 mt-5 text-[var(--mkt-ink)]">
-              What the votes actually picked.
+              The index, and what it is not.
             </h2>
           </Reveal>
           <Reveal delay={120}>
@@ -318,13 +321,13 @@ export function TrackRecord() {
           </figure>
         </Reveal>
 
-        {/* The page's only mid-scroll call to action, and deliberately the
-            quietest one: six sections run between the hero and the closing
-            band, and the record is the point where a reader either believes it
-            or wants to poke at it. Pointing them at the sandbox rather than at
-            signup is also the honest ask — the demo runs this same code on
-            fake money, so it answers the question the chart just raised
-            without anyone connecting a brokerage account first. */}
+        {/* The quiet call to action under the chart: the record is the point
+            where a reader either believes it or wants to poke at it (since
+            the five-page split, this section IS /record's body). Pointing
+            them at the sandbox rather than at signup is also the honest ask —
+            the demo runs this same code on fake money, so it answers the
+            question the chart just raised without anyone connecting a
+            brokerage account first. */}
         <Reveal delay={80}>
           <div className="mt-10 flex flex-col items-start gap-4 sm:mt-12 sm:flex-row sm:items-center sm:justify-between">
             <p className="max-w-[46ch] text-[14px] leading-relaxed text-[var(--mkt-muted)]">

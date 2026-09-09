@@ -10,6 +10,7 @@ import { Nav } from "@/components/Nav";
 import { AdminConsole, AdminDenied } from "@/components/AdminConsole";
 import { LoadingScreen } from "@/components/ui";
 import { MarketingSite } from "@/components/marketing/MarketingSite";
+import { MKT_PAGE_PATHS } from "@/components/marketing/seo";
 import { isAdminHost, isBetaHost, isDemoHost } from "@/lib/host";
 import { WIZARD_DONE_KEY, WIZARD_SKIP_KEY, getWizardFlag } from "@/components/wizard/flags";
 
@@ -20,6 +21,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // /terms + /privacy are documents, not app screens: they must render for a
   // half-verified member, on the admin host, and without any account data.
   const isLegal = pathname === "/terms" || pathname === "/privacy";
+  // The marketing subpages are public documents too (the site split into five
+  // pages, 2026-09-09): they bring their own chrome (MktShell) and must render
+  // for anyone — signed out, signed in, half-verified — without the app shell
+  // wrapping them and without the welcome-wizard redirect yanking a member off
+  // a page that is just prose.
+  const isMktPage = MKT_PAGE_PATHS.includes(pathname);
 
   // A brand-new member belongs in /welcome no matter WHERE they signed in.
   // The redirect used to live only on the Overview route, so someone who
@@ -31,11 +38,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // conditions are checked inside.
   const connectedRH = !!(member?.robinhood?.status === "connected" && member?.robinhood?.account_number);
   useEffect(() => {
-    if (!member || connectedRH || isLegal || pathname === "/welcome") return;
+    if (!member || connectedRH || isLegal || isMktPage || pathname === "/welcome") return;
     if (isAdminHost() || member.needs_email_verification) return;
     if (getWizardFlag(WIZARD_SKIP_KEY, member.id) || getWizardFlag(WIZARD_DONE_KEY, member.id)) return;
     router.replace("/welcome");
-  }, [member, connectedRH, isLegal, pathname, router]);
+  }, [member, connectedRH, isLegal, isMktPage, pathname, router]);
+
+  // ── Marketing subpages ───────────────────────────────────────────────────
+  // Rendered as-is for everyone, exactly like Robinhood shows its product
+  // pages whether or not you're logged in. The children ARE the page (each
+  // route wraps itself in MktShell). ABOVE the `ready` gate on purpose: these
+  // are the SEO surface, and behind the gate their prerendered HTML would be
+  // nothing but the auth LoadingScreen — a crawler would index a spinner. No
+  // host check here either: the host helpers are false during SSR, so a
+  // server/client fork on them would hydrate two different trees. MktShell
+  // owns the sibling-host bounce (admin/demo/beta have no marketing surface)
+  // as a client effect instead.
+  if (isMktPage) return <>{children}</>;
 
   if (!ready) return <LoadingScreen label="starting concordia" />;
 

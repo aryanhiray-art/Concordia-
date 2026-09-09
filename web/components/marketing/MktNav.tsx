@@ -19,22 +19,29 @@
 // is no seam for content to scroll through.
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { Logo } from "@/components/ui";
 import { TICKER_H } from "./TopTicker";
 
 // Mono microtype rather than sentence case: it is the texture the rest of the
 // page is built from, and it keeps four links inside a 768px bar without the
 // centre cluster colliding with the CTAs.
+//
+// Real routes since the five-page split (2026-09-09), not #anchors — next/link
+// so moving between marketing pages stays client-side. Keep in step with
+// MKT_PAGE_PATHS in seo.ts (AppShell + sitemap route on that list).
 const LINKS: { href: string; label: string }[] = [
-  { href: "#how", label: "How it works" },
-  { href: "#difference", label: "Difference" },
-  { href: "#record", label: "Record" },
-  { href: "#faq", label: "FAQ" },
+  { href: "/how-it-works", label: "How it works" },
+  { href: "/difference", label: "Difference" },
+  { href: "/record", label: "Record" },
+  { href: "/faq", label: "FAQ" },
 ];
 
 const NAV_H = "h-[60px] sm:h-[68px]";
 
 export function MktNav() {
+  const pathname = usePathname();
   const [dock, setDock] = useState(TICKER_H);
   const [scrolled, setScrolled] = useState(false);
   const [open, setOpen] = useState(false);
@@ -143,18 +150,24 @@ export function MktNav() {
           {/* flex-1 rather than absolute centring: an absolutely centred group
               can overlap the CTAs at exactly 768px, where the bar is tightest. */}
           <nav
-            aria-label="Page sections"
+            aria-label="Site pages"
             className="hidden min-w-0 flex-1 items-center justify-center gap-0.5 md:flex"
           >
-            {LINKS.map((l) => (
-              <a
-                key={l.href}
-                href={l.href}
-                className="mkt-mono whitespace-nowrap rounded-full px-2.5 py-2 text-[var(--mkt-muted)] transition-colors duration-300 hover:bg-[var(--mkt-panel)] hover:text-[var(--mkt-ink)]"
-              >
-                {l.label}
-              </a>
-            ))}
+            {LINKS.map((l) => {
+              const active = pathname === l.href;
+              return (
+                <Link
+                  key={l.href}
+                  href={l.href}
+                  aria-current={active ? "page" : undefined}
+                  className={`mkt-mono whitespace-nowrap rounded-full px-2.5 py-2 transition-colors duration-300 hover:bg-[var(--mkt-panel)] hover:text-[var(--mkt-ink)] ${
+                    active ? "bg-[var(--mkt-panel)] text-[var(--mkt-ink)]" : "text-[var(--mkt-muted)]"
+                  }`}
+                >
+                  {l.label}
+                </Link>
+              );
+            })}
           </nav>
 
           <div className="ml-auto flex flex-none items-center gap-2">
@@ -209,17 +222,23 @@ export function MktNav() {
               : `max-height ${ms(280)}ms var(--mkt-ease), visibility 0s linear ${ms(280)}ms`,
           }}
         >
-          <nav aria-label="Page sections" className="mx-auto w-full max-w-[1180px] px-5 pb-6 pt-1 sm:px-8">
-            {LINKS.map((l) => (
-              <a
-                key={l.href}
-                href={l.href}
-                onClick={() => setOpen(false)}
-                className="mkt-mono block border-t border-[var(--mkt-hair)] py-4 text-[var(--mkt-muted)] transition-colors duration-300 hover:text-[var(--mkt-ink)]"
-              >
-                {l.label}
-              </a>
-            ))}
+          <nav aria-label="Site pages" className="mx-auto w-full max-w-[1180px] px-5 pb-6 pt-1 sm:px-8">
+            {LINKS.map((l) => {
+              const active = pathname === l.href;
+              return (
+                <Link
+                  key={l.href}
+                  href={l.href}
+                  onClick={() => setOpen(false)}
+                  aria-current={active ? "page" : undefined}
+                  className={`mkt-mono block border-t border-[var(--mkt-hair)] py-4 transition-colors duration-300 hover:text-[var(--mkt-ink)] ${
+                    active ? "text-[var(--mkt-ink)]" : "text-[var(--mkt-muted)]"
+                  }`}
+                >
+                  {l.label}
+                </Link>
+              );
+            })}
             <a
               href="/join"
               onClick={() => setOpen(false)}

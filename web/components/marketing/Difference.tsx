@@ -1,6 +1,6 @@
 import { Section, SectionHead, Reveal, Glow } from "./primitives";
 
-/* Section 03 — the three-way comparison.
+/* The three-way comparison — follows Why on /difference (five-page split).
    Two hard constraints shaped this file.
 
    1. FAIRNESS. The alternatives are not strawmen: a copy-trading app really
@@ -76,7 +76,7 @@ export function Difference() {
       </div>
 
       <SectionHead
-        eyebrow="04 — The difference"
+        eyebrow="The comparison"
         title="Same market. Different structure."
         lead="Three ways to invest alongside other people. All of them can hold the same stock on the same day. The difference is who decides — and whose account it lands in."
       />

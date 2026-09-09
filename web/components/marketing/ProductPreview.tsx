@@ -90,16 +90,20 @@ export function ProductPreview() {
 
       <div className="relative z-[1]">
         <div className="max-w-[760px]">
-          <Reveal><Eyebrow>03 — The interface</Eyebrow></Reveal>
+          <Reveal><Eyebrow>The interface</Eyebrow></Reveal>
           <Reveal delay={60}>
             <h2 className="mkt-display mkt-h2 mt-5 text-[var(--mkt-ink)]">
-              A cycle, end to end.
+              Watch a consensus form.
             </h2>
           </Reveal>
           <Reveal delay={120}>
+            {/* "Split ... among the names you'd back", not "Spend ... across
+                the names you want held" — the Engine section directly above
+                opens with that construction, and adjacent sections must not
+                share their first breath. */}
             <p className="mkt-lead mt-5">
-              Spend your voting power across the names you want held. Everyone else does the
-              same. The tally decides the basket — and the basket trades in every
+              Split your voting power among the names you&apos;d back. Everyone else does
+              the same. The tally decides the basket — and the basket trades in every
               member&apos;s own account.
             </p>
           </Reveal>

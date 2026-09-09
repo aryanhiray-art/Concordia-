@@ -21,7 +21,11 @@ type Status = "idle" | "busy" | "done" | "error";
 // Enough repeats that the doubled track is wider than any viewport — the
 // Marquee keyframe translates by exactly -50%, which only reads as seamless if
 // one copy already overflows the screen. At this type size four is plenty.
-const BANNER = Array.from({ length: 4 }, () => "Nobody holds your money");
+// This band closes EVERY page since the five-page split, so its copy is
+// shared state: a custody line here would hit each page's once-per-page
+// budget at once (SPEC §4). The marquee line is belonging, not mechanism —
+// by the time a reader is here, the engine has been said enough times.
+const BANNER = Array.from({ length: 4 }, () => "Nobody invests alone here");
 
 export function ClosingCTA() {
   const [email, setEmail] = useState("");
@@ -51,10 +55,11 @@ export function ClosingCTA() {
     <Section id="join" width="full" className="relative overflow-hidden py-24 sm:py-32">
       <Glow className="left-1/2 top-[6%] -translate-x-1/2" tone="green" intensity={0.13} size={720} />
 
-      {/* Oversized display marquee. It is decoration carrying a true sentence,
-          so it is aria-hidden and repeated in the copy below in a form screen
-          readers actually get. The child selector out-specifies .mkt-mono's
-          11px, which is the one place on the page that type is not microtype. */}
+      {/* Oversized display marquee. It is decoration — tone, not information
+          a screen-reader user would miss (the band's real content is the h2 +
+          lead below) — so it is aria-hidden. The child selector out-specifies
+          .mkt-mono's 11px, which is the one place on the page that type is
+          not microtype. */}
       <div
         aria-hidden
         className="relative mb-14 select-none opacity-[0.09] [&_.mkt-mono]:text-[clamp(2.6rem,9vw,6.5rem)] [&_.mkt-mono]:tracking-[-0.02em] [&_.mkt-mono]:text-[var(--mkt-ink)] sm:mb-20"
@@ -65,15 +70,15 @@ export function ClosingCTA() {
       <div className="relative mx-auto max-w-[720px] text-center">
         <Reveal>
           <h2 className="mkt-display mkt-h2 text-[var(--mkt-ink)]">
-            Bring your own account.
+            Join the argument.
           </h2>
         </Reveal>
 
         <Reveal delay={80}>
           <p className="mkt-lead mx-auto mt-6 max-w-[46ch]">
             Concordia is invite-only. With a code: connect your own Robinhood
-            account, set how much of it the club may use, and vote. The club
-            never takes custody of a cent. No code? Leave an email — invites go
+            account, set how much of it the club may use, and vote — your say
+            grows as your picks prove out. No code? Leave an email — invites go
             out in small rounds.
           </p>
         </Reveal>
