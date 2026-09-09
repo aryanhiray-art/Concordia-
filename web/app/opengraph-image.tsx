@@ -162,11 +162,10 @@ export default async function OpengraphImage() {
             style={{
               display: "flex",
               flexDirection: "column",
-              // 64, not 74: satori doesn't shrink-to-fit, and the longest
-              // tagline line ("One basket, your own account.", 29 chars) has
-              // ~1005px of card to live in. Re-measure here if TAGLINE_LINES
-              // ever grows a longer line.
-              fontSize: 64,
+              // Satori doesn't shrink-to-fit: the longest tagline line
+              // ("More right, more power.", 23 chars) fits ~1005px of card at
+              // 74. Re-measure here if TAGLINE_LINES ever grows a longer line.
+              fontSize: 74,
               lineHeight: 1.08,
               letterSpacing: "-0.035em",
             }}

@@ -32,7 +32,7 @@ plain confidence as native and forced slang as marketing. Prefer the concrete
 noun to the abstract one ("your Robinhood account", not "your financial
 future").
 
-Good: *"Vote together. Be right. Earn more say. One basket, your own account."*
+Good: *"Vote together. More right, more power."*
 Good: *"Nothing. No fee, no subscription, no share of profits."*
 Bad: *"Concordia empowers investors to unlock collective intelligence."*
 Bad: *"your portfolio is about to level up fr"*
