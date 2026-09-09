@@ -188,16 +188,19 @@ export function Hero() {
             diagonal the whole composition is built on. */}
         <div className="mt-9 grid gap-12 lg:mt-12 lg:grid-cols-[minmax(0,1fr)_minmax(0,380px)] lg:items-start lg:gap-16">
           <div>
-            {/* "sized to each member's own settings", never "executes the same
-                for everyone" — participation and allocation are per-member
-                (HowItWorks step 03; the FAQ's "What can Concordia actually
-                do" and "What if I disagree" answers), and the tidier sentence
-                is false. */}
+            {/* Three short beats, nothing else (owner: "more concise"). Two
+                guards bind this paragraph: "sized to your settings", never
+                "executes the same for everyone" — participation/allocation
+                are per-member and the tidier sentence is false (HowItWorks
+                step 03, the FAQ's "What if I disagree") — and the middle
+                sentence is the H1 rotation's anchor ("power follows the
+                record" pins Earn/Win to say; "keeps learning who to listen
+                to" grounds Learn). The capital-blend detail moved down to
+                the Engine section and the FAQ, where it always lived. */}
             <p className="mkt-lead max-w-[52ch]">
               Each cycle, the club votes on which S&amp;P 500 names to hold.
-              Voting power blends what you&rsquo;ve committed with how right
-              you&rsquo;ve been — the club keeps learning who to listen to. One
-              basket comes out, sized to your settings, in your own Robinhood
+              Power follows the record — the club keeps learning who to listen
+              to. One basket, sized to your settings, in your own Robinhood
               account.
             </p>
 
