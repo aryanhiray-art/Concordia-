@@ -2,29 +2,24 @@
 @tailwind components;
 @tailwind utilities;
 
-/* The app and the public site are one product and now share one language.
-   These values are the `.mkt` block in app/marketing.css, brought inward:
-
-   * The canvas drops to #050809. The old #06080C was a blue-black; against a
-     mint accent it read cold and slightly plastic.
-   * Ink/muted/subtle move off the cool blue-grey ramp (#9AA7B4 / #7E8A98) onto
-     a neutral one measured against the canvas — 17.7 / 9.4 / 7.1 contrast, all
-     above WCAG AAA. The old --subtle measured 4.6 and was the reason small
-     labels looked washed out.
-   * Panels take a wash of the ACCENT rather than white. White at 4% on a
-     near-black page goes grey and muddy; the same opacity of mint keeps the
-     surface tinted and alive. This is the single biggest visual change, since
-     every card, input and pill in the app is built on --panel. */
+/* The app's ORIGINAL palette, restored (owner call, 2026-09-10: the 08-27
+   marketing-alignment made the whole app "feel more green"). The member app
+   and the public site are one product but keep their own skins: the site is
+   the mint-tinted room with the lights low; the app is the cooler, whiter
+   working instrument it always was. Layout/behavior changes from the 08-27
+   pass (mastheads, drill-in fixes, sticky/overflow rules) are KEPT — only
+   colors and typography revert. --hair-warm survives as a token (newer
+   components reference it) but is now a white warm-up, not a mint one. */
 :root {
   color-scheme: dark;
-  --bg: #050809;
-  --panel: rgba(52, 227, 168, 0.045);
-  --panel2: rgba(52, 227, 168, 0.075);
-  --ink: #ecf2f0;
-  --muted: #a4b5b2;
-  --subtle: #8a9d9a;
-  --hair: rgba(236, 242, 240, 0.09);
-  --hair-warm: rgba(52, 227, 168, 0.16);
+  --bg: #06080c;
+  --panel: rgba(255, 255, 255, 0.04);
+  --panel2: rgba(255, 255, 255, 0.06);
+  --ink: #f4f7fa;
+  --muted: #9aa7b4;
+  --subtle: #7e8a98;
+  --hair: rgba(255, 255, 255, 0.1);
+  --hair-warm: rgba(255, 255, 255, 0.24);
   --teal: #2dd4bf;
   --teal-deep: #0fa896;
   --green: #34e3a8;
@@ -85,8 +80,8 @@ body { background: transparent; }
    background necessarily covers the fixed layers, so they are switched off
    here rather than left painting invisibly. Desktop keeps the full aurora. */
 @media (max-width: 768px) {
-  html { background: #050809; }
-  body { background-color: #050809; }   /* ← Safari 26 samples THIS for its UI */
+  html { background: #091416; }
+  body { background-color: #091416; }   /* ← Safari 26 samples THIS for its UI */
   .bgfx,
   .aurora { display: none; }
 }
@@ -110,12 +105,12 @@ body { background: transparent; }
 /* frosted glass — replicated exactly from Concordia shell.css */
 .glass {
   position: relative;
-  background: var(--panel);
-  border: 1px solid var(--glassbd, var(--hair));
-  border-radius: 20px;
+  background: rgba(12, 16, 22, 0.5);
+  border: 1px solid var(--glassbd, rgba(255, 255, 255, 0.1));
+  border-radius: 18px;
   -webkit-backdrop-filter: blur(22px) saturate(160%);
   backdrop-filter: blur(22px) saturate(160%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 18px 46px -26px rgba(0, 0, 0, 0.85);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 18px 46px -26px rgba(0, 0, 0, 0.8);
 }
 .glass-2 { background: var(--panel2); }
 
@@ -142,13 +137,9 @@ body { background: transparent; }
 /* ── Label / inputs ─────────────────────────────────────────────────────── */
 .label {
   display: block;
-  /* Mono, not Inter. Every card header in the app is a .label, so this one
-     rule is what makes the app read like the site — the microtype is the
-     texture that ties the two surfaces together. */
-  font: 500 10.5px/1 var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
-  letter-spacing: 0.16em;
+  font: 600 11.5px/1 var(--font-inter), sans-serif;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  font-variant-numeric: tabular-nums slashed-zero;
   color: var(--subtle);
 }
 .input {
@@ -170,14 +161,8 @@ body { background: transparent; }
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font: 500 11px/1 var(--font-mono), ui-monospace, monospace;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  /* Pills carry money ("$1,000 buying power"), and JetBrains Mono's default
-     zero is DOTTED — at 10.5px on a dark ground that dot reads as the crossbar
-     of an 8, so $1,000 looked like $1,080. Slashed zero is unmistakable, and
-     tabular figures stop the pill resizing as a number ticks. */
-  font-variant-numeric: tabular-nums slashed-zero;
+  font: 600 12px/1 var(--font-inter), sans-serif;
+  font-variant-numeric: tabular-nums;
   color: var(--muted);
   background: var(--panel2);
   border: 1px solid var(--hair);
@@ -209,9 +194,9 @@ body { background: transparent; }
   align-items: center;
   justify-content: center;
   gap: 9px;
-  font: 600 14px/1 var(--font-inter), sans-serif;
-  padding: 12px 20px;
-  border-radius: 9999px;
+  font: 700 14px/1 var(--font-inter), sans-serif;
+  padding: 12px 18px;
+  border-radius: 12px;
   border: 1px solid transparent;
   cursor: pointer;
   transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s, border-color 0.15s;
@@ -219,12 +204,12 @@ body { background: transparent; }
 .btn:disabled { opacity: 0.5; cursor: default; transform: none !important; }
 .btn-go {
   color: #04201c;
-  background: linear-gradient(150deg, var(--green), var(--teal-deep));
-  box-shadow: 0 10px 30px -14px rgba(45, 212, 191, 0.5);
+  background: linear-gradient(150deg, #3fe9d2, #0fa896);
+  box-shadow: 0 16px 36px -16px rgba(45, 212, 191, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.5);
 }
-.btn-go:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 16px 38px -14px rgba(45, 212, 191, 0.65); }
+.btn-go:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 20px 42px -16px rgba(45, 212, 191, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.5); }
 .btn-glass { color: var(--ink); background: var(--panel2); border-color: var(--hair); }
-.btn-glass:hover:not(:disabled) { border-color: var(--hair-warm); transform: translateY(-1px); }
+.btn-glass:hover:not(:disabled) { border-color: rgba(255, 255, 255, 0.24); transform: translateY(-1px); }
 .btn-ok { color: var(--green); background: rgba(52, 227, 168, 0.1); border-color: rgba(52, 227, 168, 0.32); }
 .btn-ok:hover:not(:disabled) { background: rgba(52, 227, 168, 0.18); }
 .btn-danger { color: var(--red); background: transparent; border-color: rgba(255, 107, 107, 0.32); }
@@ -248,8 +233,8 @@ body { background: transparent; }
 .mark svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
 
 /* ── Allocation bars ────────────────────────────────────────────────────── */
-.bar { height: 7px; border-radius: 999px; background: rgba(236, 242, 240, 0.07); overflow: hidden; }
-.bar > i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--teal), var(--green)); transition: width 0.5s cubic-bezier(0.2, 0, 0, 1); }
+.bar { height: 9px; border-radius: 6px; background: rgba(255, 255, 255, 0.06); overflow: hidden; }
+.bar > i { display: block; height: 100%; border-radius: 6px; background: linear-gradient(90deg, var(--teal), var(--teal-deep)); transition: width 0.5s cubic-bezier(0.2, 0, 0, 1); }
 
 /* ── Spinner + motion ───────────────────────────────────────────────────── */
 .spin { width: 16px; height: 16px; border: 2px solid rgba(4, 32, 28, 0.4); border-top-color: #04201c; border-radius: 50%; animation: sp 0.7s linear infinite; }
@@ -405,7 +390,7 @@ body { background: transparent; }
   overflow: hidden; background: rgba(12, 16, 22, 0.55);
   border: 1px solid var(--glassbd, rgba(255,255,255,0.1));
   -webkit-backdrop-filter: blur(22px) saturate(160%); backdrop-filter: blur(22px) saturate(160%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 18px 46px -26px rgba(0, 0, 0, 0.85);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 18px 46px -26px rgba(0, 0, 0, 0.8);
   animation: navin 0.55s cubic-bezier(0.55,0.05,0.18,1) both;
 }
 @keyframes navin { from { opacity: 0; transform: translateX(-50%) translateY(-12px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
