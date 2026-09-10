@@ -322,3 +322,39 @@ export type ExecutionRow = {
   error: string | null;
   display_name?: string;
 };
+
+/* ── The club feed (/club, routes/social.py) ─────────────────────────────── */
+
+/** The dial payload: everything is nullable on purpose — share/rank/pool come
+ *  from power snapshots that may not exist yet (pre-first-reweight members,
+ *  stake-mode history), and the dial renders an em-dash for null, never 0. */
+export type SocialPowerStats = {
+  power_usd: number | null;
+  share: number | null;          // 0..1 of the club's total say
+  rank: number | null;           // among all active members, bots included
+  as_of_week: string | null;
+  accuracy: number | null;       // signed EWMA excess vs benchmark (score, not a return)
+  accuracy_short: number | null;
+  accuracy_long: number | null;
+  cycles_scored: number | null;
+  capital_usd: number | null;
+};
+
+export type SocialAuthor = {
+  id: number;
+  name: string;
+  share: number;                 // 0..1 — why power-promoted posts rank first
+};
+
+export type SocialPost = {
+  id: number;
+  author: SocialAuthor | null;   // null once soft-deleted
+  body: string;
+  created_at: number;
+  deleted: boolean;
+  up: number;
+  down: number;
+  my_vote: 1 | -1 | null;
+  net?: number;
+  replies?: SocialPost[];        // top-level posts carry their flat replies
+};

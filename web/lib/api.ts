@@ -1,6 +1,6 @@
 "use client";
 
-import type { Member, SessionView, UniverseItem, ExecutionRow, PowerView, Account, HoldingsView, ApiKey, ResearchResult, PerfView, AdminPanel, AdminMemberRow, ClubHistoryView, MyVotesView, StockDetail, StockHistory, StockRangeKey, StockSearchResult, EquityHistory, EquityRangeKey } from "./types";
+import type { Member, SessionView, UniverseItem, ExecutionRow, PowerView, Account, HoldingsView, ApiKey, ResearchResult, PerfView, AdminPanel, AdminMemberRow, ClubHistoryView, MyVotesView, StockDetail, StockHistory, StockRangeKey, StockSearchResult, EquityHistory, EquityRangeKey, SocialPowerStats, SocialPost } from "./types";
 
 // Empty base = same-origin (Vercel rewrites /api + /oauth to the forge backend).
 // Local dev sets NEXT_PUBLIC_CONCORD_API=http://localhost:8780.
@@ -608,4 +608,20 @@ export const api = {
   adminSendDigest: () =>
     req<{ subject: string; printed: boolean; sent: string[]; failed: string[] }>(
       "/api/admin/digest", { method: "POST" }),
+
+  // ── the club feed (/club) — routes/social.py ─────────────────────────────
+  socialMe: () => req<SocialPowerStats>("/api/social/me"),
+  socialFeed: (sort: "top" | "new" = "top") =>
+    req<{ posts: SocialPost[]; sort: string }>(`/api/social/feed?sort=${sort}`),
+  socialPost: (body: string, parentId?: number | null) =>
+    req<{ ok: boolean; id: number }>("/api/social/posts", {
+      method: "POST",
+      body: JSON.stringify({ body, parent_id: parentId ?? null }),
+    }),
+  // dir: 1 up, -1 down, 0 withdraws — the response's counts are authoritative
+  socialVote: (postId: number, dir: 1 | -1 | 0) =>
+    req<{ ok: boolean; up: number; down: number; my_vote: 1 | -1 | null }>(
+      `/api/social/posts/${postId}/vote`, { method: "POST", body: JSON.stringify({ dir }) }),
+  socialDelete: (postId: number) =>
+    req<{ ok: boolean }>(`/api/social/posts/${postId}`, { method: "DELETE" }),
 };

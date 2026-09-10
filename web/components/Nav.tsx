@@ -11,9 +11,12 @@ import { Logo } from "./ui";
 const TABS = [
   { href: "/", label: "Overview" },
   { href: "/vote", label: "Vote" },
+  { href: "/club", label: "Club" },
   { href: "/history", label: "History" },
   { href: "/account", label: "Account" },
 ];
+// NOTE: the mobile nav CSS was width-budgeted for "5 tabs + Log out at 375px"
+// (globals.css ~432) — Club spends that last slot. A sixth tab needs new CSS.
 
 function money(n?: number | null) {
   if (n == null) return "—";

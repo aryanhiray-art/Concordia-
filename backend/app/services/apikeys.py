@@ -50,13 +50,26 @@ def revoke_key(member_id: int, key_id: int) -> bool:
 
 
 def resolve_member_id(presented: str | None) -> int | None:
-    """Return the member id for a valid, non-revoked key, else None. Touches last_used_at."""
+    """Return the member id for a valid, non-revoked key, else None. Touches last_used_at.
+
+    The JOIN through membership.active_clause is load-bearing: removal
+    (membership.set_left) bumps session_version, which kills SESSIONS, but
+    API keys carry no version — without this filter a removed member's
+    pre-created key would keep authenticating forever (found in the 2026-09
+    club-feed review: the feed was the first key-readable surface carrying
+    other members' content). Keys are not revoked on removal, so a
+    reinstated member's keys resume working — the filter, not the key row,
+    is what enforces membership.
+    """
     if not presented or not presented.startswith("ck_"):
         return None
+    from . import membership  # local import: apikeys is imported by deps at startup
     prefix, kh = presented[:16], hash_api_key(presented)
     with db() as conn:
         rows = conn.execute(
-            "SELECT id,member_id,key_hash FROM api_keys WHERE prefix=? AND revoked_at IS NULL",
+            "SELECT k.id, k.member_id, k.key_hash FROM api_keys k "
+            "JOIN members m ON m.id = k.member_id "
+            f"WHERE k.prefix=? AND k.revoked_at IS NULL AND {membership.active_clause('m')}",
             (prefix,),
         ).fetchall()
     for r in rows:

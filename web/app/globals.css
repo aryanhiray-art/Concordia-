@@ -435,9 +435,13 @@ a:focus-visible, button:focus-visible { background: rgba(255,255,255,0.06); }
   .cnav { gap: 4px; padding: 8px 9px; }
   .cnav .cnav-word { display: none; }              /* wordmark goes — logo only */
   .cnav-tabs { gap: 1px; margin-left: 0; }
-  .ctab { font-size: 11px; padding: 7px 4.5px; }
-  .ctab.on::after { left: 4px; right: 4px; bottom: -7px; }
-  .cnav .cnav-out { padding: 5px 7px; font-size: 10.5px; }
+  /* 3.5px, not 4.5px: the 5th tab (Club) spent the old budget — measured
+     at 360px (the common Android width) the row needs the tighter padding
+     to keep ~1px of slack, and nowrap stops Log out from wrapping the pill
+     to two lines when it loses the flex fight. */
+  .ctab { font-size: 11px; padding: 7px 3.5px; }
+  .ctab.on::after { left: 3px; right: 3px; bottom: -7px; }
+  .cnav .cnav-out { padding: 5px 7px; font-size: 10.5px; white-space: nowrap; }
 }
 
 /* ═══ Hero number ═══════════════════════════════════════════════════════ */
@@ -721,4 +725,25 @@ html, body { overscroll-behavior-x: none; }
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--subtle);
+}
+
+/* The stagger ladder above only delays children 1-4; the /club dial's stats
+   grid has six. Two more rungs so the entrance reads left-to-right. */
+.stagger > *:nth-child(5) { animation-delay: 0.3s; }
+.stagger > *:nth-child(6) { animation-delay: 0.37s; }
+
+/* ── /club: the feed + dial ─────────────────────────────────────────────────
+   The dial's sparkline draws itself on mount (the stats panel remounts it on
+   every expand); killed under reduced motion with the rest. */
+@keyframes clubspark { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+/* App-owned copy of the marketing dial rotation: /club must not depend on
+   marketing.css keeping .mkt-dial a bare global class (its stated contract
+   is "scoped under .mkt"). Same 80s crawl. */
+@keyframes club-dial-turn { to { transform: rotate(360deg); } }
+.club-dial { animation: club-dial-turn 80s linear infinite; transform-origin: 50% 50%; }
+@media (prefers-reduced-motion: reduce) {
+  [style*="clubspark"] { animation: none !important; stroke-dashoffset: 0 !important; }
+  .club-dial { animation: none !important; }
+  /* the progress arc's 1.2s dash sweep is inline — !important outguns it */
+  .club-arc { transition: none !important; }
 }

@@ -400,6 +400,40 @@ CREATE TABLE IF NOT EXISTS waitlist (
 CREATE INDEX IF NOT EXISTS ix_login_events_ts ON login_events(ts);
 CREATE INDEX IF NOT EXISTS ix_exec_created ON executions(created_at);
 CREATE INDEX IF NOT EXISTS ix_votes_created ON votes(created_at);
+
+-- THE CLUB FEED (routes/club.py): member posts and replies, one table.
+-- parent_id NULL = top-level post; otherwise a flat reply to that post (no
+-- deeper nesting on purpose — Reddit mechanics, not Reddit topology).
+-- Rows are soft-deleted (deleted=1, body scrubbed to '') so a removed post
+-- keeps its replies' thread shape; a member's FULL account deletion hard-
+-- deletes their rows instead (routes/members.py delete_account — feed posts
+-- are personal content and join that contract). Bodies are sanitized and
+-- profanity-checked server-side (services/textguard.py) before insert.
+CREATE TABLE IF NOT EXISTS club_posts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    member_id  INTEGER NOT NULL,
+    parent_id  INTEGER,                       -- NULL = top-level
+    body       TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    deleted    INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_club_posts_parent  ON club_posts(parent_id);
+CREATE INDEX IF NOT EXISTS ix_club_posts_member  ON club_posts(member_id);
+CREATE INDEX IF NOT EXISTS ix_club_posts_created ON club_posts(created_at);
+
+-- One vote per member per post, direction +1/-1; changing your mind is an
+-- upsert, withdrawing is a delete (routes/social.py). Votes are feed karma
+-- ONLY: nothing here may ever feed back into reputation/voting power — that
+-- direction is the load-bearing invariant of the merit form (reputation.py
+-- header), and the feed reads power, never writes anything power reads.
+CREATE TABLE IF NOT EXISTS club_post_votes (
+    post_id    INTEGER NOT NULL,
+    member_id  INTEGER NOT NULL,
+    dir        INTEGER NOT NULL,              -- +1 or -1
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (post_id, member_id)
+);
+CREATE INDEX IF NOT EXISTS ix_club_post_votes_member ON club_post_votes(member_id);
 """
 
 

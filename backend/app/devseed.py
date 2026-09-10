@@ -82,13 +82,44 @@ def main() -> None:
             print("devseed: no connected demo brokerage row to copy — connect once in the UI "
                   "and re-run to get the populated screens.", file=sys.stderr)
 
-        # Two snapshots so the /vote header shows a real figure AND an as-of week.
+        # Two snapshots so the /vote header shows a real figure AND an as-of
+        # week — with share/rank/pool populated so the /club dial's stats
+        # reveal renders its full branch in the sandbox.
         conn.execute("DELETE FROM voting_power_history WHERE member_id=?", (mid,))
         conn.executemany(
             "INSERT INTO voting_power_history(member_id, week_start, power, equity, prev_power, "
-            "delta, created_at, share) VALUES(?,?,?,?,?,?,?,?)",
-            [(mid, "2026-08-09", 412.50, 500.0, None, None, now - 1209600, 0.041),
-             (mid, "2026-08-23", 486.20, 500.0, 412.50, 73.70, now - 259200, 0.049)])
+            "delta, created_at, share, rank_at_snapshot, n_active, pool_usd) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            [(mid, "2026-08-09", 412.50, 500.0, None, None, now - 1209600, 0.041, 9, 24, 10060.0),
+             (mid, "2026-08-23", 486.20, 500.0, 412.50, 73.70, now - 259200, 0.049, 7, 24, 9922.0)])
+        conn.execute(
+            "UPDATE member_settings SET voting_power_share=0.049, last_capital_usd=500 "
+            "WHERE member_id=?", (mid,))
+
+        # A couple of feed posts so /club opens populated. Idempotent: the
+        # sandbox member's posts are wiped and re-seeded each run.
+        conn.execute(
+            "DELETE FROM club_post_votes WHERE post_id IN "
+            "(SELECT id FROM club_posts WHERE member_id=?)", (mid,))
+        conn.execute("DELETE FROM club_posts WHERE member_id=?", (mid,))
+        cur = conn.execute(
+            "INSERT INTO club_posts(member_id, parent_id, body, created_at) VALUES(?,?,?,?)",
+            (mid, None,
+             "Made the case for MSFT in my thesis this cycle — cloud spend guidance "
+             "was the whole story. Curious if anyone read it differently.",
+             now - 5400))
+        first_post = int(cur.lastrowid)
+        conn.execute(
+            "INSERT INTO club_posts(member_id, parent_id, body, created_at) VALUES(?,?,?,?)",
+            (mid, first_post,
+             "Replying to my own post to show a thread — the demo is a sandbox.",
+             now - 3600))
+        conn.execute(
+            "INSERT INTO club_posts(member_id, parent_id, body, created_at) VALUES(?,?,?,?)",
+            (mid, None,
+             "Reminder: ballots close 09:15 ET. If you have conviction, say it in a "
+             "thesis — the tally shows the case next to the number.",
+             now - 900))
 
     print(f"devseed: member #{mid} ready — {EMAIL} / {PASSWORD}")
     print("devseed: `npm run dev` will now sign in automatically; add ?signin to skip.")

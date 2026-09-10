@@ -597,6 +597,24 @@ def delete_account(body: DeleteAccountBody, member: dict = Depends(require_sessi
             conn.execute("DELETE FROM api_keys WHERE member_id=?", (mid,))
             conn.execute("DELETE FROM oauth_identities WHERE member_id=?", (mid,))
             conn.execute("DELETE FROM login_events WHERE member_id=?", (mid,))
+            # the club feed is personal CONTENT, not club books — the
+            # member's words and votes are erased with the account. Ordering
+            # and shape matter (2026-09 review): votes ON their posts go
+            # first (the subquery needs the posts still present), their
+            # top-level posts that anchor OTHER members' replies soft-delete
+            # into an authorless tombstone so those replies survive, and
+            # everything else hard-deletes.
+            conn.execute(
+                "DELETE FROM club_post_votes WHERE post_id IN "
+                "(SELECT id FROM club_posts WHERE member_id=?)", (mid,))
+            conn.execute("DELETE FROM club_post_votes WHERE member_id=?", (mid,))
+            conn.execute(
+                "UPDATE club_posts SET deleted=1, body='' WHERE member_id=? "
+                "AND parent_id IS NULL AND id IN "
+                "(SELECT parent_id FROM club_posts WHERE parent_id IS NOT NULL "
+                " AND member_id<>?)", (mid, mid))
+            conn.execute(
+                "DELETE FROM club_posts WHERE member_id=? AND deleted=0", (mid,))
             # erase identity; bump session_version so every live session dies now
             # left_at is the membership primitive every service now filters on;
             # the anonymized email alone was an implicit convention that four

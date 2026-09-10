@@ -76,11 +76,13 @@ def set_left(member_id: int, actor: str | None, reason: str = "left") -> bool:
     """
     now = int(time.time())
     with db() as conn:
-        # session_version is bumped with the same UPDATE so every live session
-        # and API token for this member dies immediately. deps.py checks the
-        # token's `ver` against this column; without the bump an owner-removed
-        # member keeps a working session and can carry on using the app after
-        # being removed. delete_account has always done this — removal must too.
+        # session_version is bumped with the same UPDATE so every live SESSION
+        # for this member dies immediately (deps.py checks the token's `ver`
+        # against this column). API keys carry no version — they die because
+        # apikeys.resolve_member_id filters on active_clause, keyed off the
+        # left_at this UPDATE sets. Without the bump an owner-removed member
+        # keeps a working session and can carry on using the app after being
+        # removed. delete_account has always done this — removal must too.
         cur = conn.execute(
             "UPDATE members SET left_at=?, session_version=session_version+1 "
             "WHERE id=? AND left_at IS NULL", (now, member_id))
