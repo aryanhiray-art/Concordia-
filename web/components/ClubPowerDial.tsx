@@ -120,6 +120,9 @@ export function ClubPowerDial() {
   const [stats, setStats] = useState<SocialPowerStats | null>(null);
   const [failed, setFailed] = useState(false);
   const [open, setOpen] = useState(false);
+  // bumped on every OPEN — keys the sparkline so it redraws its line each
+  // time the panel unfolds (it draws on mount)
+  const [openSeq, setOpenSeq] = useState(0);
   const [armed, setArmed] = useState(false); // arc animates from 0 after mount
 
   useEffect(() => {
@@ -154,10 +157,10 @@ export function ClubPowerDial() {
     <section aria-label="Your voting power">
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen((v) => { if (!v) setOpenSeq((n) => n + 1); return !v; })}
         aria-expanded={open}
         aria-controls="club-dial-stats"
-        className="group relative mx-auto block w-[min(320px,78vw)] cursor-pointer rounded-full outline-offset-8 sm:w-[360px]"
+        className="group relative mx-auto block w-[min(320px,78vw)] cursor-pointer rounded-full outline-offset-8 transition-transform duration-200 active:scale-[0.985] motion-reduce:transition-none sm:w-[360px]"
       >
         <svg viewBox="0 0 420 420" className="h-auto w-full" aria-hidden>
           <defs>
@@ -239,61 +242,85 @@ export function ClubPowerDial() {
         </div>
       </button>
 
-      {/* the reveal: a grid-rows expansion — no measuring, no portals */}
+      {/* The reveal, choreographed BOTH ways (owner ask, 2026-09-10):
+          content stays mounted so the close can animate — an unmounting
+          panel just vanishes. Opening: the box unfolds (grid-rows 0fr→1fr)
+          and the tiles rise in left-to-right, 70ms apart, after a 120ms
+          beat so the box leads. Closing: the tiles cascade OUT in reverse
+          (last in, first out, 40ms apart) while the box waits 160ms and
+          then folds over them. No measuring, no portals; reduced motion
+          collapses every step to an instant cut. */}
       <div
         id="club-dial-stats"
+        aria-hidden={!open}
         className="grid transition-[grid-template-rows,opacity] duration-500 [transition-timing-function:var(--ease)] motion-reduce:transition-none"
-        style={{ gridTemplateRows: open ? "1fr" : "0fr", opacity: open ? 1 : 0 }}
+        style={{
+          gridTemplateRows: open ? "1fr" : "0fr",
+          opacity: open ? 1 : 0,
+          transitionDelay: open ? "0ms" : "160ms",
+        }}
       >
         <div className="overflow-hidden">
-          {open && stats && (
-            <div className="stagger mx-auto mt-6 grid max-w-[720px] gap-3 sm:grid-cols-3">
-              <Stat
-                label="voting power"
-                value={stats.power_usd != null && stats.as_of_week ? money(stats.power_usd) : "—"}
-                sub={stats.as_of_week ? `as of ${stats.as_of_week}` : "no snapshot yet"}
-              />
-              {/* rank alone, no "of N" — a member headcount stays off member
-                  surfaces, the same posture the ballot takes with voter counts */}
-              <Stat
-                label="club rank"
-                value={stats.rank != null ? `#${stats.rank}` : "—"}
-                sub="across the active club"
-              />
-              <Stat
-                label="committed stake"
-                value={stats.capital_usd != null ? money(stats.capital_usd) : "—"}
-                sub="what the club may use"
-              />
-              {/* accuracy ×100 into points: real EWMA values live at ±0.0x
-                  and would all collapse to "+0.00" at raw 2dp. Normalize -0
-                  so a flat record never renders the broken "-0.00". */}
-              <Stat
-                label="accuracy score"
-                value={(() => {
-                  if (stats.accuracy == null) return "—";
-                  const pts = Math.round(stats.accuracy * 100 * 100) / 100 + 0;
-                  const v = Object.is(pts, -0) ? 0 : pts;
-                  return `${v >= 0 ? "+" : ""}${v.toFixed(2)}`;
-                })()}
-                sub="signed score vs benchmark, ×100 — not a return"
-              />
-              <Stat
-                label="cycles scored"
-                value={stats.cycles_scored != null ? String(stats.cycles_scored) : "—"}
-                sub="closed cycles behind your record"
-              />
-              <div className="glass rise p-4">
-                <div className="label">power trend</div>
-                {histPoints.length >= 2 ? (
-                  <div className="mt-2"><Spark points={histPoints} /></div>
-                ) : (
-                  <div className="mt-1.5 font-display text-[22px] font-semibold text-ink">—</div>
-                )}
-                <div className="mt-1 text-[11.5px] leading-snug text-subtle">
-                  weekly snapshots — say is re-earned, not banked
+          {stats && (
+            <div className="mx-auto mt-6 grid max-w-[720px] gap-3 pb-1 sm:grid-cols-3">
+              {[
+                <Stat
+                  key="power"
+                  label="voting power"
+                  value={stats.power_usd != null && stats.as_of_week ? money(stats.power_usd) : "—"}
+                  sub={stats.as_of_week ? `as of ${stats.as_of_week}` : "no snapshot yet"}
+                />,
+                // rank alone, no "of N" — a member headcount stays off member
+                // surfaces, the same posture the ballot takes with voter counts
+                <Stat key="rank" label="club rank"
+                  value={stats.rank != null ? `#${stats.rank}` : "—"}
+                  sub="across the active club" />,
+                <Stat key="stake" label="committed stake"
+                  value={stats.capital_usd != null ? money(stats.capital_usd) : "—"}
+                  sub="what the club may use" />,
+                // accuracy ×100 into points: real EWMA values live at ±0.0x
+                // and would all collapse to "+0.00" at raw 2dp. Normalize -0
+                // so a flat record never renders the broken "-0.00".
+                <Stat key="acc" label="accuracy score"
+                  value={(() => {
+                    if (stats.accuracy == null) return "—";
+                    const pts = Math.round(stats.accuracy * 100 * 100) / 100 + 0;
+                    const v = Object.is(pts, -0) ? 0 : pts;
+                    return `${v >= 0 ? "+" : ""}${v.toFixed(2)}`;
+                  })()}
+                  sub="signed score vs benchmark, ×100 — not a return" />,
+                <Stat key="cycles" label="cycles scored"
+                  value={stats.cycles_scored != null ? String(stats.cycles_scored) : "—"}
+                  sub="closed cycles behind your record" />,
+                <div key="trend" className="glass rise p-4">
+                  <div className="label">power trend</div>
+                  {histPoints.length >= 2 ? (
+                    // keyed by openSeq: remounts per open, so the line draws
+                    // itself again each time the panel unfolds
+                    <div className="mt-2"><Spark key={openSeq} points={histPoints} /></div>
+                  ) : (
+                    <div className="mt-1.5 font-display text-[22px] font-semibold text-ink">—</div>
+                  )}
+                  <div className="mt-1 text-[11.5px] leading-snug text-subtle">
+                    weekly snapshots — say is re-earned, not banked
+                  </div>
+                </div>,
+              ].map((tile, i, all) => (
+                <div
+                  key={i}
+                  className="motion-reduce:!transition-none"
+                  style={{
+                    opacity: open ? 1 : 0,
+                    transform: open ? "none" : "translateY(14px) scale(0.98)",
+                    transition: "opacity 450ms var(--ease), transform 450ms var(--ease)",
+                    transitionDelay: open
+                      ? `${120 + i * 70}ms`
+                      : `${(all.length - 1 - i) * 40}ms`,
+                  }}
+                >
+                  {tile}
                 </div>
-              </div>
+              ))}
             </div>
           )}
         </div>
