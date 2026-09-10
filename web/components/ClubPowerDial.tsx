@@ -70,10 +70,8 @@ function useCountUp(target: number | null, ms = 1100): number | null {
 }
 
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  // hairline boxes, not .glass: these live INSIDE the page's glass card, and
-  // glass-in-glass double-tints the panels (the app never nests it)
   return (
-    <div className="rounded-[14px] border border-hair bg-white/[0.02] p-4">
+    <div className="glass rise p-4">
       <div className="label">{label}</div>
       <div className="mt-1.5 font-display text-[22px] font-semibold tracking-tight text-ink tnum">
         {value}
@@ -153,14 +151,13 @@ export function ClubPowerDial() {
   const histPoints = (power?.history ?? []).map((h) => h.power).filter((n) => n != null) as number[];
 
   return (
-    <section aria-label="Your voting power" className="glass shine rise p-4 sm:p-5">
-      <span className="label">voting power</span>
+    <section aria-label="Your voting power">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-controls="club-dial-stats"
-        className="group relative mx-auto mt-2 block w-[min(280px,72vw)] cursor-pointer rounded-full outline-offset-8 sm:w-[320px]"
+        className="group relative mx-auto block w-[min(320px,78vw)] cursor-pointer rounded-full outline-offset-8 sm:w-[360px]"
       >
         <svg viewBox="0 0 420 420" className="h-auto w-full" aria-hidden>
           <defs>
@@ -250,7 +247,7 @@ export function ClubPowerDial() {
       >
         <div className="overflow-hidden">
           {open && stats && (
-            <div className="stagger mt-5 grid gap-3 sm:grid-cols-3">
+            <div className="stagger mx-auto mt-6 grid max-w-[720px] gap-3 sm:grid-cols-3">
               <Stat
                 label="voting power"
                 value={stats.power_usd != null && stats.as_of_week ? money(stats.power_usd) : "—"}
@@ -286,7 +283,7 @@ export function ClubPowerDial() {
                 value={stats.cycles_scored != null ? String(stats.cycles_scored) : "—"}
                 sub="closed cycles behind your record"
               />
-              <div className="rounded-[14px] border border-hair bg-white/[0.02] p-4">
+              <div className="glass rise p-4">
                 <div className="label">power trend</div>
                 {histPoints.length >= 2 ? (
                   <div className="mt-2"><Spark points={histPoints} /></div>
