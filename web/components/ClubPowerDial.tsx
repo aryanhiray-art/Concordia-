@@ -123,7 +123,9 @@ export function ClubPowerDial() {
   // bumped on every OPEN — keys the sparkline so it redraws its line each
   // time the panel unfolds (it draws on mount)
   const [openSeq, setOpenSeq] = useState(0);
-  const [armed, setArmed] = useState(false); // arc animates from 0 after mount
+  // bumped on EVERY click — keys the arc so its sweep-from-zero keyframe
+  // replays; the first mount plays it on page load
+  const [arcSeq, setArcSeq] = useState(0);
 
   useEffect(() => {
     let dead = false;
@@ -139,17 +141,13 @@ export function ClubPowerDial() {
   // share as a 0..100 percentage, or null before the first snapshot
   const pct = stats?.share != null ? stats.share * 100 : null;
   const shown = useCountUp(pct);
-  useEffect(() => {
-    if (pct == null) return;
-    if (document.hidden) { setArmed(true); return; }  // rAF suspended — arm now
-    const id = requestAnimationFrame(() => requestAnimationFrame(() => setArmed(true)));
-    return () => cancelAnimationFrame(id);
-  }, [pct]);
 
   // the arc: pathLength=360 makes the dash array read as degrees. A true 0%
   // share draws NO arc — the 1.5° legibility floor is only for small-but-real
-  // slices.
-  const sweep = armed && pct != null && pct > 0 ? Math.max(1.5, (pct / 100) * 360) : 0;
+  // slices. The sweep-in is the .club-arc keyframe (globals.css), which runs
+  // from 0° to this value on every mount of the keyed circle below — no rAF
+  // arming needed, CSS animations ride the wall clock even in hidden tabs.
+  const sweep = pct != null && pct > 0 ? Math.max(1.5, (pct / 100) * 360) : 0;
 
   const histPoints = (power?.history ?? []).map((h) => h.power).filter((n) => n != null) as number[];
 
@@ -157,7 +155,10 @@ export function ClubPowerDial() {
     <section aria-label="Your voting power">
       <button
         type="button"
-        onClick={() => setOpen((v) => { if (!v) setOpenSeq((n) => n + 1); return !v; })}
+        onClick={() => {
+          setArcSeq((n) => n + 1);
+          setOpen((v) => { if (!v) setOpenSeq((n) => n + 1); return !v; });
+        }}
         aria-expanded={open}
         aria-controls="club-dial-stats"
         className="group relative mx-auto block w-[min(320px,78vw)] cursor-pointer rounded-full outline-offset-8 transition-transform duration-200 active:scale-[0.985] motion-reduce:transition-none sm:w-[360px]"
@@ -199,15 +200,17 @@ export function ClubPowerDial() {
           {/* your slice of it — dash degrees == your share of the circle.
               Rotation is the ATTRIBUTE (start at 12 o'clock); the dash is the
               only thing CSS animates, so the two never fight. */}
-          <circle
-            className="club-arc"
-            cx={C} cy={C} r={196} fill="none"
-            stroke="var(--green)" strokeWidth={3} strokeLinecap="round"
-            pathLength={360}
-            strokeDasharray={`${sweep} ${360 - sweep}`}
-            transform={`rotate(-90 ${C} ${C})`}
-            style={{ transition: "stroke-dasharray 1200ms var(--ease)" }}
-          />
+          {sweep > 0 && (
+            <circle
+              key={arcSeq}
+              className="club-arc"
+              cx={C} cy={C} r={196} fill="none"
+              stroke="var(--green)" strokeWidth={3} strokeLinecap="round"
+              pathLength={360}
+              strokeDasharray={`${sweep} ${360 - sweep}`}
+              transform={`rotate(-90 ${C} ${C})`}
+            />
+          )}
 
           {/* the dial ring — slow ambient rotation via the standalone
               .mkt-dial animation; no transform attribute here, CSS owns it */}

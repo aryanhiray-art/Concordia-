@@ -726,9 +726,16 @@ html, body { overscroll-behavior-x: none; }
    is "scoped under .mkt"). Same 80s crawl. */
 @keyframes club-dial-turn { to { transform: rotate(360deg); } }
 .club-dial { animation: club-dial-turn 80s linear infinite; transform-origin: 50% 50%; }
+/* The dial's progress arc sweeps out from 0° to the member's share. A
+   KEYFRAME, not a transition: the arc element is keyed in React, so a fresh
+   mount replays the sweep — once on page load, and again on every dial
+   click (owner ask, 2026-09-10). `from` only; `to` is the element's own
+   stroke-dasharray, so the same rule serves every share value. */
+@keyframes club-arc-sweep { from { stroke-dasharray: 0 360; } }
+.club-arc { animation: club-arc-sweep 1100ms var(--ease); }
+
 @media (prefers-reduced-motion: reduce) {
   [style*="clubspark"] { animation: none !important; stroke-dashoffset: 0 !important; }
   .club-dial { animation: none !important; }
-  /* the progress arc's 1.2s dash sweep is inline — !important outguns it */
-  .club-arc { transition: none !important; }
+  .club-arc { animation: none !important; transition: none !important; }
 }
