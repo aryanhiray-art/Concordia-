@@ -1052,3 +1052,139 @@ def test_cash_buffer_no_longer_strands_a_fully_committed_account():
     from app.config import settings
     assert settings.cash_buffer_pct == 0.0
     assert executor.deployable(1000.0) == 1000.0
+
+
+# ─── the unsellable-microshare fix (Charlie's ALL, 2026-09-10) ───────────────
+# A month of rejected 0.000001-share sells traced to two defects: the raw
+# 6dp floor chopped a full-position 0.00399 to 0.003989 (float representation
+# error minting an unsellable crumb), and both sell paths then ordered the
+# crumb daily — which Robinhood rejects onto the member's phone.
+
+def test_floor_qty6_is_float_safe():
+    # the bug: math.floor(0.00399*1e6)/1e6 == 0.003989 — the epsilon repairs it
+    assert executor.floor_qty6(0.00399) == 0.00399
+    assert executor.floor_qty6(0.003990) == 0.00399
+    # a genuinely sub-6dp quantity still floors DOWN, never up
+    assert executor.floor_qty6(0.0039896) == 0.003989
+    assert executor.floor_qty6(0.0039899999) == 0.003989
+    # boundary crumbs
+    assert executor.floor_qty6(0.000001) == 0.000001
+    assert executor.floor_qty6(0.0) == 0.0
+
+
+def test_min_sell_qty_covers_truncation_residues_but_not_real_dust():
+    # truncation residues are ≤ 1e-6 by construction → always below the floor
+    assert 0.000001 < executor.MIN_SELL_QTY
+    # real dust (a $0.30 crumb at a $250 stock ≈ 0.0012 sh) stays sweepable
+    assert 0.0012 > executor.MIN_SELL_QTY
+
+
+def test_dust_cleanup_skips_unsellable_residue(monkeypatch):
+    """A 1e-6 leftover must never reach the broker again: no review, no order,
+    a skipped entry with the reason instead."""
+    mid = _member("crumb@example.com")
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO executions(session_id, member_id, symbol, side, type, dollar_amount, "
+            "ref_id, status, created_at) VALUES(1, ?, 'ALL', 'buy', 'market', 1.0, 'r', "
+            "'placed', strftime('%s','now'))", (mid,))
+
+    calls = {"review": 0}
+
+    class CrumbClient:
+        def get_quotes(self, symbols):
+            return {"data": {"results": [{"quote": {"symbol": "ALL", "last_trade_price": "254.00"}}]}}
+
+        def review_market_sell(self, *a, **k):
+            calls["review"] += 1
+            raise AssertionError("an unsellable residue must not even be reviewed")
+
+    monkeypatch.setattr(vault, "ensure_client", lambda m: CrumbClient())
+    monkeypatch.setattr(executor.positions, "live_positions",
+                        lambda m: [{"symbol": "ALL", "quantity": 0.000001}])
+
+    out = executor.dust_cleanup(mid, dry_run=True)
+    assert out["ok"] is True
+    assert calls["review"] == 0
+    entries = [o for o in out["orders"] if o["symbol"] == "ALL"]
+    assert entries and entries[0]["status"] == "skipped"
+    assert "below broker sell minimum" in entries[0]["note"]
+
+
+def test_dust_cleanup_formats_six_decimals(monkeypatch):
+    """Real dust sweeps go out at Robinhood's 6dp format — the old path sent
+    8dp strings like '0.00120000'."""
+    mid = _member("dusty@example.com")
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO executions(session_id, member_id, symbol, side, type, dollar_amount, "
+            "ref_id, status, created_at) VALUES(1, ?, 'MSFT', 'buy', 'market', 1.0, 'r2', "
+            "'placed', strftime('%s','now'))", (mid,))
+
+    seen = {}
+
+    class DustClient:
+        def get_quotes(self, symbols):
+            return {"data": {"results": [{"quote": {"symbol": "MSFT", "last_trade_price": "500.00"}}]}}
+
+        def review_market_sell(self, acct, symbol, qstr):
+            seen["qstr"] = qstr
+            return {"data": {"symbol": symbol, "order_checks": {}}}
+
+    monkeypatch.setattr(vault, "ensure_client", lambda m: DustClient())
+    monkeypatch.setattr(executor.positions, "live_positions",
+                        lambda m: [{"symbol": "MSFT", "quantity": 0.0012}])
+
+    out = executor.dust_cleanup(mid, dry_run=True)
+    assert out["ok"] is True
+    assert seen["qstr"] == "0.001200"
+    assert [o for o in out["orders"] if o["symbol"] == "MSFT"][0]["status"] == "reviewed"
+
+
+def test_rebalance_sell_leg_skips_residue(monkeypatch):
+    mid = _member("selleg-residue@x.com")
+    # club ledger says the member holds a 1e-6 ALL crumb (Charlie's case):
+    # a prior placed buy whose est qty is the crumb.
+    sid_prev = 97001
+    executor._record(sid_prev, mid, "ALL", 1.0, "crumb-ref", "placed",
+                     place={"_concord_est_qty": 0.000001})
+    # today's cycle drops ALL from the basket → full exit path
+    closed = _closed_session(datetime.date(2026, 12, 27), mid, ["MSFT"])
+    sid = closed["id"]
+    client = FakeClient(quotes={"MSFT": 500.0, "ALL": 254.0},
+                        positions=[("ALL", 0.000001)], buying_power=100.0)
+    _use_client(monkeypatch, client)
+
+    summary = executor.run(closed, force_dry_run=True)
+
+    # never reviewed, never placed
+    assert client.trades_for("review_sell", f"ACC{mid}", "ALL") == []
+    assert client.trades_for("place_sell", f"ACC{mid}", "ALL") == []
+    rows = _exec_rows(sid, mid, "ALL", "sell")
+    assert rows and rows[-1]["status"] == "skipped"
+    assert "below broker sell minimum" in (rows[-1]["error"] or "")
+    assert rows[-1]["ref_id"] == executor.ref_id_for(sid, mid, "SELL:ALL")
+    # the skip is NOT treated as already-sold idempotency state
+    assert (mid, "ALL", "sell") not in executor._placed_keys(sid)
+    ms = [m for m in summary["members"] if m["member_id"] == mid][0]
+    entry = [o for o in ms["orders"] if o["symbol"] == "ALL"][0]
+    assert entry["status"] == "skipped" and entry["note"] == "unsellable residue"
+
+
+def test_full_exit_of_0_00399_sells_exact_quantity(monkeypatch):
+    """The minting bug itself, through the real sell leg: a live balance of
+    0.00399 exits as '0.003990', not '0.003989'."""
+    mid = _member("selleg-exact@x.com")
+    sid_prev = 97002
+    executor._record(sid_prev, mid, "ALL", 1.0, "crumb-ref2", "placed",
+                     place={"_concord_est_qty": 0.00399})
+    closed = _closed_session(datetime.date(2026, 12, 25), mid, ["MSFT"])
+    client = FakeClient(quotes={"MSFT": 500.0, "ALL": 254.0},
+                        positions=[("ALL", 0.00399)], buying_power=100.0)
+    _use_client(monkeypatch, client)
+
+    executor.run(closed, force_dry_run=True)
+
+    sells = client.trades_for("review_sell", f"ACC{mid}", "ALL")
+    assert sells, "expected the full exit to be reviewed"
+    assert sells[0][3] == "0.003990", sells[0]

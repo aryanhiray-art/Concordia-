@@ -35,6 +35,7 @@ import uuid
 
 from ..config import settings
 from ..db import audit, db, is_armed, kv_get
+from . import executor
 from ..robinhood import vault
 from . import positions, voting
 
@@ -127,9 +128,15 @@ def rescue_sell(member_id: int, symbol: str, actor: str, dry_run: bool = True) -
     symbol = symbol.strip().upper()
     acct = vault.account_number_for(member_id)
     client = vault.ensure_client(member_id)
-    # 6dp: Robinhood rejects a fractional quantity carrying any non-zero digit
-    # beyond the 6th decimal — the same floor the executor's sell leg applies.
-    qty = int(p["sell_qty"] * 1_000_000) / 1_000_000
+    # 6dp via the executor's own float-safe floor — the raw int(q*1e6) form
+    # this used had the crumb-minting truncation bug (0.00399 → 0.003989),
+    # and a residue below the broker's sell minimum must not be ordered at
+    # all (a month of Charlie's rejected 1e-6 ALL sells, 2026-09-10).
+    qty = executor.floor_qty6(p["sell_qty"])
+    if 0 < qty < executor.MIN_SELL_QTY:
+        p["placed"] = False
+        p["reason"] = "residue below broker sell minimum — left in place"
+        return p
     ref = _ref_id(member_id, symbol)
     with db() as conn:
         if conn.execute("SELECT 1 FROM executions WHERE ref_id=?", (ref,)).fetchone():

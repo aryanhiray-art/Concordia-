@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import math
+from decimal import ROUND_FLOOR, Decimal
 import os
 import time
 import uuid
@@ -738,13 +739,24 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                     why = "exited basket · dust swept"
             # Robinhood REJECTS a fractional order quantity that carries any non-zero
             # digit beyond the 6th decimal ("Order quantity cannot include fractional
-            # shares"), so EVERY sell floors to 6dp. The old 8dp full-exit (meant to
-            # avoid leaving a ~1e-6 crumb) instead hard-rejected the ENTIRE order for
-            # any holding whose live balance had >6 decimals — stranding the whole
-            # position on every cycle (AOS/ALLE/BLDR). A 6dp floor leaves at most a
-            # ~$0.0001 crumb, which dust_cleanup / the next exit sweeps.
-            qfloor = math.floor(sell_qty * 1e6) / 1e6
+            # shares"), so EVERY sell floors to 6dp — via floor_qty6, whose epsilon
+            # keeps a full-position 0.00399 from becoming 0.003989 (the float bug
+            # that minted Charlie's unsellable ALL microshare). The old 8dp
+            # full-exit (meant to avoid leaving a ~1e-6 crumb) instead
+            # hard-rejected the ENTIRE order for any holding whose live balance
+            # had >6 decimals — stranding the whole position on every cycle
+            # (AOS/ALLE/BLDR).
+            qfloor = floor_qty6(sell_qty)
             if qfloor <= 0:
+                continue
+            if qfloor < MIN_SELL_QTY:
+                # an unsellable residue: the broker rejects it, the member gets
+                # the notification, and the value at stake is sub-cent — leave
+                # it in place, on the record
+                _record(sid, mid, symbol, None, ref_id, "skipped", side="sell",
+                        error="residue below broker sell minimum — left in place")
+                msum["orders"].append({"symbol": symbol, "side": "sell",
+                                       "status": "skipped", "note": "unsellable residue"})
                 continue
             qstr = f"{qfloor:.6f}"
             try:
@@ -1080,6 +1092,39 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
     return summary
 
 
+# Robinhood's fractional sell format is exactly six decimals, and its matching
+# engine rejects quantities below a real minimum — a month of Charlie's ALL
+# rejections (2026-08-11 → 09-10) proved 0.000001 shares is unsellable, over
+# and over, as a daily push notification. Two rules fall out, shared by every
+# sell path:
+#
+#   * floor_qty6() floors to 6dp WITH a 1e-9 epsilon: math.floor(0.00399*1e6)
+#     is 3989 because the float is really 0.00398999…, and that off-by-one is
+#     what MINTED the unsellable crumb — the exit sweep set sell_qty to the
+#     full live balance and the raw floor chopped the last microshare back
+#     off. The epsilon only repairs representation error; a genuine
+#     0.0039896 still floors to 0.003989.
+#   * MIN_SELL_QTY: a residue below this is left in place, recorded as
+#     skipped, and never sent to the broker — a rejected order helps nobody
+#     and pings the member's phone. 1e-5 sh clears every truncation residue
+#     (those are ≤1e-6 by construction) while real dust (≥0.0001 sh) stays
+#     sweepable.
+MIN_SELL_QTY = 0.00001
+
+
+def floor_qty6(qty: float) -> float:
+    """Floor a share quantity to Robinhood's 6-decimal format, float-safely.
+
+    Decimal over epsilon arithmetic: str() round-trips the float's shortest
+    repr, so a broker-reported 6dp balance (0.00399, 536.152752) floors to
+    itself EXACTLY at any magnitude — the earlier +1e-9 epsilon under-repaired
+    above ~32 shares, where qty*1e6's own rounding error outgrows it, and
+    quietly re-minted the crumb this function exists to prevent. A genuine
+    7th-decimal digit still floors down (ROUND_FLOOR).
+    """
+    return float(Decimal(str(qty)).quantize(Decimal("0.000001"), rounding=ROUND_FLOOR))
+
+
 def dust_cleanup(member_id: int, dry_run: bool = True) -> dict:
     """Sweep sub-$1 crumb positions left on club-traded names (est-vs-fill drift).
 
@@ -1122,10 +1167,20 @@ def dust_cleanup(member_id: int, dry_run: bool = True) -> dict:
         if price is None or qty * price > 1.00:
             continue                                   # can't verify it's dust → leave it
         ref_id = ref_id_for(latest_sid, member_id, f"DUST:{symbol}")
-        qfloor = math.floor(qty * 1e8) / 1e8           # full sweep at broker precision
+        # 6dp, not the old 8dp: Robinhood's quantity format is six decimals
+        # (the sell path's comment has said so all along — this path sent
+        # "0.00000100" anyway), and anything below MIN_SELL_QTY is the
+        # unsellable-residue case: skip it silently rather than hand the
+        # broker an order it will reject onto the member's phone.
+        qfloor = floor_qty6(qty)
         if qfloor <= 0:
             continue
-        qstr = f"{qfloor:.8f}"
+        if qfloor < MIN_SELL_QTY:
+            entry = {"symbol": symbol, "side": "sell", "qty": f"{qfloor:.6f}",
+                     "status": "skipped", "note": "residue below broker sell minimum"}
+            out["orders"].append(entry)
+            continue
+        qstr = f"{qfloor:.6f}"
         entry = {"symbol": symbol, "side": "sell", "qty": qstr,
                  "value": round(qty * price, 4), "ref_id": ref_id}
         try:
