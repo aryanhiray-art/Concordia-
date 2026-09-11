@@ -1079,36 +1079,102 @@ def test_min_sell_qty_covers_truncation_residues_but_not_real_dust():
     assert 0.0012 > executor.MIN_SELL_QTY
 
 
-def test_dust_cleanup_skips_unsellable_residue(monkeypatch):
-    """A 1e-6 leftover must never reach the broker again: no review, no order,
-    a skipped entry with the reason instead."""
-    mid = _member("crumb@example.com")
+class _CrumbClient:
+    """A client for crumb scenarios: SELL review of a crumb is forbidden
+    (unsellable — the old bug ordered it for a month), BUY review/get_portfolio
+    serve the repair path."""
+
+    def __init__(self, bp=100.0):
+        self.bp = bp
+        self.buy_reviews: list[tuple] = []
+
+    def get_quotes(self, symbols):
+        return {"data": {"results": [{"quote": {"symbol": s, "last_trade_price": "254.00"}}
+                                     for s in symbols]}}
+
+    def get_portfolio(self, acct):
+        return {"data": {"buying_power": {"buying_power": str(self.bp)}}}
+
+    def review_market_sell(self, *a, **k):
+        raise AssertionError("an unsellable residue must never be sell-reviewed")
+
+    def review_market_buy(self, acct, symbol, amt):
+        self.buy_reviews.append((symbol, amt))
+        return {"data": {"order_checks": {}}}
+
+
+def _crumb_setup(monkeypatch, email: str, *, picks: list[str], date: datetime.date,
+                 bp: float = 100.0) -> tuple[int, "_CrumbClient"]:
+    mid = _member(email)
     with db() as conn:
         conn.execute(
             "INSERT INTO executions(session_id, member_id, symbol, side, type, dollar_amount, "
-            "ref_id, status, created_at) VALUES(1, ?, 'ALL', 'buy', 'market', 1.0, 'r', "
-            "'placed', strftime('%s','now'))", (mid,))
-
-    calls = {"review": 0}
-
-    class CrumbClient:
-        def get_quotes(self, symbols):
-            return {"data": {"results": [{"quote": {"symbol": "ALL", "last_trade_price": "254.00"}}]}}
-
-        def review_market_sell(self, *a, **k):
-            calls["review"] += 1
-            raise AssertionError("an unsellable residue must not even be reviewed")
-
-    monkeypatch.setattr(vault, "ensure_client", lambda m: CrumbClient())
+            "ref_id, status, created_at) VALUES(1, ?, 'ALL', 'buy', 'market', 1.0, ?, "
+            "'placed', strftime('%s','now'))", (mid, f"seed-{mid}"))
+    # a fresh NEWEST session pins latest_sid + the current basket deterministically
+    _closed_session(date, mid, picks)
+    client = _CrumbClient(bp=bp)
+    monkeypatch.setattr(vault, "ensure_client", lambda m: client)
     monkeypatch.setattr(executor.positions, "live_positions",
                         lambda m: [{"symbol": "ALL", "quantity": 0.000001}])
+    return mid, client
 
+
+def test_unsellable_residue_gets_repaired_not_sold(monkeypatch):
+    """A 1e-6 crumb is never sell-reviewed; instead the sweep plans the
+    broker-minimum top-up BUY (next cycle's sell leg exits the whole
+    position)."""
+    mid, client = _crumb_setup(monkeypatch, "crumb@example.com",
+                               picks=["MSFT"], date=datetime.date(2026, 12, 13))
     out = executor.dust_cleanup(mid, dry_run=True)
     assert out["ok"] is True
-    assert calls["review"] == 0
+    entries = [o for o in out["orders"] if o["symbol"] == "ALL"]
+    assert entries and entries[0]["side"] == "buy"
+    assert entries[0]["status"] == "reviewed" and entries[0]["amount"] == "1.00"
+    assert client.buy_reviews == [("ALL", "1.00")]
+
+
+def test_crumb_on_basket_name_is_left_to_the_buy_leg(monkeypatch):
+    """If the crumb's name is IN the current basket, the ordinary top-up
+    absorbs it — no repair order."""
+    mid, client = _crumb_setup(monkeypatch, "crumb-basket@example.com",
+                               picks=["ALL"], date=datetime.date(2026, 12, 14))
+    out = executor.dust_cleanup(mid, dry_run=True)
     entries = [o for o in out["orders"] if o["symbol"] == "ALL"]
     assert entries and entries[0]["status"] == "skipped"
-    assert "below broker sell minimum" in entries[0]["note"]
+    assert "buy leg absorbs" in entries[0]["note"]
+    assert client.buy_reviews == []
+
+
+def test_crumb_repair_needs_buying_power(monkeypatch):
+    """No repair on an account without headroom — skip with the reason."""
+    mid, client = _crumb_setup(monkeypatch, "crumb-broke@example.com",
+                               picks=["MSFT"], date=datetime.date(2026, 12, 16), bp=0.50)
+    out = executor.dust_cleanup(mid, dry_run=True)
+    entries = [o for o in out["orders"] if o["symbol"] == "ALL"]
+    assert entries and entries[0]["status"] == "skipped"
+    assert "buying power" in entries[0]["note"]
+    assert client.buy_reviews == []
+
+
+def test_crumb_repair_idempotent_within_a_session(monkeypatch):
+    """A second sweep in the same session sees the DUSTFIX row and does not
+    review a second buy."""
+    mid, client = _crumb_setup(monkeypatch, "crumb-again@example.com",
+                               picks=["MSFT"], date=datetime.date(2026, 12, 19))
+    with db() as conn:
+        sid = conn.execute("SELECT MAX(id) FROM vote_sessions").fetchone()[0]
+    fix_ref = executor.ref_id_for(sid, mid, "DUSTFIX:ALL")
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO executions(session_id, member_id, symbol, side, type, dollar_amount, "
+            "ref_id, status, created_at) VALUES(?, ?, 'ALL', 'buy', 'market', 1.0, ?, "
+            "'reviewed', strftime('%s','now'))", (sid, mid, fix_ref))
+    out = executor.dust_cleanup(mid, dry_run=True)
+    entries = [o for o in out["orders"] if o["symbol"] == "ALL"]
+    assert entries and entries[0]["status"] == "skipped"
+    assert "already attempted" in entries[0]["note"]
+    assert client.buy_reviews == []
 
 
 def test_dust_cleanup_formats_six_decimals(monkeypatch):
@@ -1188,3 +1254,86 @@ def test_full_exit_of_0_00399_sells_exact_quantity(monkeypatch):
     sells = client.trades_for("review_sell", f"ACC{mid}", "ALL")
     assert sells, "expected the full exit to be reviewed"
     assert sells[0][3] == "0.003990", sells[0]
+
+
+# ─── crumb repair: no same-day round trip, exit next session, bounded ───────
+
+def test_repaired_position_not_sold_same_session_but_exits_next(monkeypatch):
+    """The must-fix from the repair review: a same-day RE-RUN must not sell
+    what the morning's repair bought (that is a PDT day trade); the NEXT
+    session's sell leg exits the whole position."""
+    mid = _member("repair-lifecycle@x.com")
+    closed = _closed_session(datetime.date(2027, 2, 2), mid, ["AAPL"])
+    sid = closed["id"]
+    fix_ref = executor.ref_id_for(sid, mid, "DUSTFIX:TSLA")
+    # the morning's repair: a placed $1 top-up of off-basket TSLA
+    executor._record(sid, mid, "TSLA", 1.00, fix_ref, "placed",
+                     place={"_concord_est_qty": 0.004})
+    client = FakeClient(quotes={"AAPL": 100.0, "TSLA": 250.0},
+                        positions=[("TSLA", "0.004")])
+    _use_client(monkeypatch, client)
+
+    summary = executor.run(closed, force_dry_run=True)          # same-day re-run
+    assert client.trades_for("review_sell", f"ACC{mid}", "TSLA") == []
+    skip = next(o for o in _mrow(summary, mid)["orders"]
+                if o["symbol"] == "TSLA" and o["side"] == "sell")
+    assert skip["status"] == "skipped" and "repaired today" in skip["note"]
+
+    # next session: a different sid → different DUSTFIX ref → full exact exit
+    closed2 = _closed_session(datetime.date(2027, 2, 3), mid, ["AAPL"])
+    executor.run(closed2, force_dry_run=True)
+    sells = client.trades_for("review_sell", f"ACC{mid}", "TSLA")
+    assert len(sells) == 1 and sells[0][3] == "0.004000"
+
+
+def test_repaired_position_not_dust_swept_same_session(monkeypatch):
+    """A price dip that turns the repaired ~$1 position into a dust candidate
+    must not sell it in the same session either."""
+    mid = _member("repair-dip@x.com")
+    closed = _closed_session(datetime.date(2027, 2, 4), mid, ["AAPL"])
+    sid = closed["id"]
+    fix_ref = executor.ref_id_for(sid, mid, "DUSTFIX:TSLA")
+    executor._record(sid, mid, "TSLA", 1.00, fix_ref, "placed",
+                     place={"_concord_est_qty": 0.004})
+    client = _CrumbClient()
+    monkeypatch.setattr(vault, "ensure_client", lambda m: client)
+    # 0.004 sh at a dipped $240 = $0.96 ≤ $1 → dust candidate on value/qty
+    monkeypatch.setattr(client, "get_quotes",
+                        lambda symbols: {"data": {"results": [
+                            {"quote": {"symbol": s, "last_trade_price": "240.00"}}
+                            for s in symbols]}})
+    monkeypatch.setattr(executor.positions, "live_positions",
+                        lambda m: [{"symbol": "TSLA", "quantity": 0.004}])
+
+    out = executor.dust_cleanup(mid, dry_run=True)
+    entries = [o for o in out["orders"] if o["symbol"] == "TSLA"]
+    assert entries and entries[0]["status"] == "skipped"
+    assert "exits next cycle" in entries[0]["note"]
+
+
+def test_repair_budget_is_bounded_per_run(monkeypatch):
+    """At most _REPAIR_MAX_PER_RUN top-ups per sweep; the rest wait."""
+    mid = _member("repair-cap@x.com")
+    syms = ["TSLA", "NVDA", "AMD", "NFLX"]
+    with db() as conn:
+        for i, sym in enumerate(syms):
+            conn.execute(
+                "INSERT INTO executions(session_id, member_id, symbol, side, type, "
+                "dollar_amount, ref_id, status, created_at) VALUES(1, ?, ?, 'buy', "
+                "'market', 1.0, ?, 'placed', strftime('%s','now'))",
+                (mid, sym, f"cap-seed-{mid}-{i}"))
+    _closed_session(datetime.date(2027, 2, 5), mid, ["AAPL"])
+    client = _CrumbClient()
+    monkeypatch.setattr(vault, "ensure_client", lambda m: client)
+    monkeypatch.setattr(client, "get_quotes",
+                        lambda symbols: {"data": {"results": [
+                            {"quote": {"symbol": s, "last_trade_price": "254.00"}}
+                            for s in symbols]}})
+    monkeypatch.setattr(executor.positions, "live_positions",
+                        lambda m: [{"symbol": s, "quantity": 0.000001} for s in syms])
+
+    out = executor.dust_cleanup(mid, dry_run=True)
+    statuses = {o["symbol"]: o["status"] for o in out["orders"]}
+    assert sum(1 for v in statuses.values() if v == "reviewed") == executor._REPAIR_MAX_PER_RUN
+    budget_skips = [o for o in out["orders"] if "budget" in (o.get("note") or "")]
+    assert len(budget_skips) == 1

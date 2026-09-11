@@ -677,7 +677,26 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         # weight target is trimmed back to target, so the proceeds redistribute
         # into the rest of the new basket.
         placed_sell_usd = 0.0   # ≈ proceeds in flight; the both-day BP poll's early-exit target
+        # Names repaired by a crumb top-up THIS session (DUSTFIX ref, placed):
+        # a same-day RE-RUN of this session (reboot catch-up, Execute-now)
+        # must not sell what the morning's repair just bought — that is the
+        # PDT day trade the repair design exists to avoid. Next session's ref
+        # differs, so tomorrow's exit fires normally.
+        repaired_today: set[str] = set()
+        if held:
+            _fix_refs = {ref_id_for(sid, mid, f"DUSTFIX:{s}"): s for s in held}
+            with db() as conn:
+                _marks = ",".join("?" * len(_fix_refs))
+                repaired_today = {
+                    _fix_refs[r["ref_id"]] for r in conn.execute(
+                        f"SELECT ref_id FROM executions WHERE status='placed' "
+                        f"AND ref_id IN ({_marks})", tuple(_fix_refs)).fetchall()
+                }
         for symbol, qty in (sorted(held.items()) if phase in ("sell", "both") else []):
+            if symbol in repaired_today:
+                msum["orders"].append({"symbol": symbol, "side": "sell", "status": "skipped",
+                                       "note": "repaired today — exits next session"})
+                continue
             price = prices.get(symbol)
             # Reconcile the club ledger to the LIVE account BEFORE sizing. club_shares
             # is an ESTIMATE (dollars/price at placement, never trued-up to the real
@@ -1111,6 +1130,18 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
 #     sweepable.
 MIN_SELL_QTY = 0.00001
 
+# Crumb REPAIR (owner ask, 2026-09-11): an unsellable residue is topped up
+# with the broker-minimum buy so it becomes an ordinary position; the NEXT
+# cycle's sell leg then exits the whole thing first (the name is off the
+# basket, and floor_qty6 sells the exact live quantity) before that day's
+# buys run. Deliberately buy-today/sell-tomorrow, never a same-day round
+# trip — that would burn a PDT day trade per repair. Cost per repair ≈ the
+# spread on $1. Bounded per run so a pathological account can't turn the
+# sweep into a shopping spree.
+_REPAIR_BUY_USD = 1.00
+_REPAIR_MAX_PER_RUN = 3
+_REPAIR_MIN_BP = 2.00      # leave headroom — never spend the account's last dollar
+
 
 def floor_qty6(qty: float) -> float:
     """Floor a share quantity to Robinhood's 6-decimal format, float-safely.
@@ -1145,6 +1176,17 @@ def dust_cleanup(member_id: int, dry_run: bool = True) -> dict:
             (member_id,)
         ).fetchall()}
         latest_sid = conn.execute("SELECT COALESCE(MAX(id),0) FROM vote_sessions").fetchone()[0]
+        _picks_row = conn.execute(
+            "SELECT picks_json FROM vote_sessions WHERE id=?", (latest_sid,)
+        ).fetchone()
+    # The CURRENT basket: a crumb on an in-basket name needs no repair — the
+    # buy leg's next top-up absorbs it into a normal position; repair targets
+    # only names the club has exited, whose top-up would otherwise never come.
+    try:
+        latest_basket = ({p["symbol"] for p in json.loads(_picks_row["picks_json"] or "[]")}
+                         if _picks_row else set())
+    except Exception:  # noqa: BLE001 — malformed picks_json must not kill the sweep
+        latest_basket = set()
     if not row or not row["account_number"] or row["status"] != "connected":
         return {"ok": False, "error": "no connected Robinhood account",
                 "member_id": member_id, "orders": []}
@@ -1159,6 +1201,8 @@ def dust_cleanup(member_id: int, dry_run: bool = True) -> dict:
     prices = _quotes(client, [p["symbol"] for p in live])
     out = {"ok": True, "member_id": member_id, "dry_run": dry_run,
            "will_place": will_place, "orders": []}
+    repairs = 0                 # crumb top-ups placed/reviewed this run (bounded)
+    repair_bp: float | None = None   # lazily fetched — most sweeps repair nothing
     for p in live:
         symbol, qty = p["symbol"], p["quantity"]
         if symbol not in club_syms or qty >= 0.01:
@@ -1176,10 +1220,108 @@ def dust_cleanup(member_id: int, dry_run: bool = True) -> dict:
         if qfloor <= 0:
             continue
         if qfloor < MIN_SELL_QTY:
-            entry = {"symbol": symbol, "side": "sell", "qty": f"{qfloor:.6f}",
-                     "status": "skipped", "note": "residue below broker sell minimum"}
+            # Unsellable on its own — REPAIR by topping up with the minimum
+            # buy (see the constants' comment for the full story). Tomorrow's
+            # sell leg exits the repaired position exactly; if anything here
+            # half-lands, the position is then normal-sized and every
+            # existing path handles it.
+            entry = {"symbol": symbol, "side": "buy", "amount": f"{_REPAIR_BUY_USD:.2f}",
+                     "note": "crumb repair — top up, next cycle exits the whole position"}
+            fix_ref = ref_id_for(latest_sid, member_id, f"DUSTFIX:{symbol}")
+            if symbol in latest_basket:
+                # the buy leg's own top-up will absorb this crumb — no repair
+                entry.update(status="skipped", note="crumb on a basket name — the buy leg absorbs it")
+                out["orders"].append(entry)
+                continue
+            with db() as conn:
+                if conn.execute("SELECT 1 FROM executions WHERE ref_id=?", (fix_ref,)).fetchone():
+                    entry.update(status="skipped", note="repair already attempted this session")
+                    out["orders"].append(entry)
+                    continue
+            if repairs >= _REPAIR_MAX_PER_RUN:
+                entry.update(status="skipped", note="repair budget for this run used up")
+                out["orders"].append(entry)
+                continue
+            if repair_bp is None:
+                try:
+                    _port = client.get_portfolio(acct)
+                    _pd = _port.get("data", _port) if isinstance(_port, dict) else {}
+                    _bp = _pd.get("buying_power") or {}
+                    repair_bp = _num(_bp.get("buying_power") if isinstance(_bp, dict) else _bp) or 0.0
+                except Exception:  # noqa: BLE001
+                    repair_bp = 0.0
+            if repair_bp < _REPAIR_MIN_BP:
+                entry.update(status="skipped", note="buying power too low to repair")
+                out["orders"].append(entry)
+                continue
+            try:
+                review = client.review_market_buy(acct, symbol, f"{_REPAIR_BUY_USD:.2f}")
+            except Exception as e:  # noqa: BLE001
+                # 'skipped', not 'error': nothing reached the broker, and an
+                # error row would hold the session's executed-flip open —
+                # review failures cluster on exactly these exited/halted names.
+                if not dry_run:
+                    _record(latest_sid, member_id, symbol, _REPAIR_BUY_USD, fix_ref, "skipped",
+                            error=f"repair review failed: {e}")
+                entry.update(status="skipped", note=f"review failed: {e}")
+                out["orders"].append(entry)
+                continue
+            blocked, alerts = has_blocking_alerts(review)
+            if blocked:
+                if not dry_run:
+                    _record(latest_sid, member_id, symbol, _REPAIR_BUY_USD, fix_ref, "skipped",
+                            review=review, error="blocking pre-trade alert (repair)")
+                entry.update(status="skipped", alerts=alerts)
+                out["orders"].append(entry)
+                continue
+            if not will_place:
+                if not dry_run:
+                    _record(latest_sid, member_id, symbol, _REPAIR_BUY_USD, fix_ref, "reviewed",
+                            review=review)
+                entry.update(status="reviewed")
+                out["orders"].append(entry)
+                repairs += 1
+                continue
+            try:
+                place = client.place_market_buy(acct, symbol, f"{_REPAIR_BUY_USD:.2f}",
+                                                ref_id=fix_ref)
+                if isinstance(place, dict) and price:
+                    place["_concord_est_qty"] = round(_REPAIR_BUY_USD / price, 6)
+                _record(latest_sid, member_id, symbol, _REPAIR_BUY_USD, fix_ref, "placed",
+                        review=review, place=place)
+                audit(f"member:{member_id}", "club_dust_repair", f"sym:{symbol}",
+                      {"usd": _REPAIR_BUY_USD, "crumb_qty": qfloor})
+                entry.update(status="placed")
+                repairs += 1
+                repair_bp -= _REPAIR_BUY_USD
+            except Exception as e:  # noqa: BLE001
+                _record(latest_sid, member_id, symbol, _REPAIR_BUY_USD, fix_ref, "error",
+                        review=review, error=f"repair place: {e}")
+                entry.update(status="error", note=str(e))
             out["orders"].append(entry)
             continue
+        # Repaired THIS session? Then this position was bought minutes-to-
+        # hours ago by the crumb top-up — selling it now is the same-day
+        # round trip (a PDT day trade) the repair design forbids. It exits
+        # with the next session's sell leg instead. And if this session's
+        # SELL leg is already exiting the name, a second dust sell of the
+        # same shares would only bounce off the broker as insufficient —
+        # skip that too (a pre-existing wart the repair tests surfaced).
+        with db() as conn:
+            if conn.execute(
+                "SELECT 1 FROM executions WHERE status='placed' AND ref_id=?",
+                (ref_id_for(latest_sid, member_id, f"DUSTFIX:{symbol}"),),
+            ).fetchone():
+                out["orders"].append({"symbol": symbol, "side": "sell", "status": "skipped",
+                                      "note": "repaired this session — exits next cycle"})
+                continue
+            if conn.execute(
+                "SELECT 1 FROM executions WHERE status IN ('placed','reviewed') AND ref_id=?",
+                (ref_id_for(latest_sid, member_id, f"SELL:{symbol}"),),
+            ).fetchone():
+                out["orders"].append({"symbol": symbol, "side": "sell", "status": "skipped",
+                                      "note": "already exiting this session"})
+                continue
         qstr = f"{qfloor:.6f}"
         entry = {"symbol": symbol, "side": "sell", "qty": qstr,
                  "value": round(qty * price, 4), "ref_id": ref_id}
