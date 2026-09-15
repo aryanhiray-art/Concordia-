@@ -940,11 +940,40 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                 # the name really is at/over target, or the top-up is real but
                 # smaller than Robinhood's $1 minimum order (common on small
                 # stakes, where a per-name target is barely over $1 itself).
+                #
+                # THE SECOND CASE IS UNDEPLOYED CLUB MONEY AND MUST CARRY.
+                # A name short of target has three fates: >= $1 the buy leg tops
+                # it up; >= _RESIZE_MIN_FRAC of target the sell leg exits it
+                # whole and the buy leg re-enters at size; below BOTH it is
+                # unreachable this cycle. Returning here without accruing left
+                # those dollars nowhere — not deployed, not resized, not carried
+                # — so the positions-only mark lost them and the write-back
+                # stamped the shrunken figure as the new committed stake. Live
+                # 2026-09-15: a $20.93 stake ratcheted to $13.49 over eleven
+                # sessions, ~$7 stranded as idle cash, nobody having touched it.
+                # It bites hardest where per-name targets sit near $1 — the
+                # smallest stakes.
+                #
+                # need <= 0 carries NOTHING: the name is at or above target and
+                # owes the slice nothing. Carrying there would top the slice up
+                # out of the member's own cash on any down move, which is the
+                # one thing compounding must never do.
+                if need > 0:
+                    unplaced_usd += need
                 note = (f"at target (${held_val:.2f} ≥ ${_tgt:.2f})" if need <= 0 else
                         f"top-up ${need:.2f} below the $1 minimum order "
                         f"(${held_val:.2f} of ${_tgt:.2f})")
                 msum["orders"].append({"symbol": symbol, "side": "buy", "status": "held",
                                        "note": note})
+                continue
+            if order_count >= member_max_orders:
+                # Cap check BEFORE affordability: a capped member places
+                # nothing regardless, so a capped name must neither consume
+                # buy-leg headroom nor be mislabeled a partial.
+                unplaced_usd += need
+                _record(sid, mid, symbol, need, ref_id_for(sid, mid, symbol), "skipped",
+                        error="max_orders cap reached")
+                msum["orders"].append({"symbol": symbol, "side": "buy", "status": "skipped", "note": "max_orders cap"})
                 continue
             if need > bp_left + 0.005:
                 # BUY WHAT IS AFFORDABLE rather than dropping the name.
