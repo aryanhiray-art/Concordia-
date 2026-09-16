@@ -85,9 +85,9 @@ class GoogleBody(BaseModel):
 def _default_settings(member_id: int) -> None:
     with db() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO member_settings(member_id,opted_in,buying_power_pct,"
-            "daily_cap_usd,max_orders,voting_power,updated_at) VALUES(?,?,?,?,?,?,?)",
-            (member_id, 0, 0, 0, settings.max_orders, settings.voting_power_base, int(time.time())),
+            "INSERT OR IGNORE INTO member_settings(member_id,opted_in,"
+            "daily_cap_usd,max_orders,voting_power,updated_at) VALUES(?,?,?,?,?,?)",
+            (member_id, 0, 0, settings.max_orders, settings.voting_power_base, int(time.time())),
         )
 
 

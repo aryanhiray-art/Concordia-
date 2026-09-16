@@ -13,7 +13,8 @@ accumulates two ways:
   • the ledger keeps PHANTOM shares of names that were actually fully sold.
 
 The fix is to reconcile to truth: read each placed order's real fill from the
-broker — matched by our deterministic uuid5 ref_id — and rewrite place_json so
+broker — matched by the broker order id a row already carries, else by symbol +
+side + same-ET-date closest-time among agentic orders — and rewrite place_json so
 `club_shares` (which already prefers a real cumulative_quantity over the
 estimate) becomes fill-based. Then the next full exit sells the true quantity
 and the residual collapses to genuine dust the A7 sweep clears.
@@ -30,8 +31,10 @@ from __future__ import annotations
 import datetime
 import json
 import time
+import uuid
 from urllib.parse import parse_qs, urlparse
 
+from ..calendar_us import ET, today_et
 from ..db import audit, db
 from ..robinhood import vault
 from . import membership, positions
@@ -43,14 +46,21 @@ _FILLED_STATES = {"filled", "partially_filled"}
 _DEAD_STATES = {"cancelled", "canceled", "rejected", "failed", "voided"}
 
 # The Robinhood agentic API returns ref_id=null on every order, so we CANNOT
-# match on our ref_id. Instead we match a club execution to a broker order by
-# symbol + side + closest created-time, but ONLY among orders this agent placed
+# match on our ref_id. A row that already carries a broker order id (stamped by
+# a prior pass, or embedded in the synchronous place response) binds to exactly
+# that order. Everything else matches by symbol + side + SAME US/Eastern
+# calendar date + closest created-time, but ONLY among orders this agent placed
 # (placed_agent='agentic') — a member's personal ('user') order is never a
-# candidate, so reconciliation can never touch personal shares. (symbol,side,day)
-# is unique among agentic orders, and cycles are ≥1 day apart, so the window
-# below (well under the inter-cycle gap) yields an unambiguous 1:1 match.
-_MATCH_TOLERANCE_S = 20 * 3600      # ±20h
+# candidate, so reconciliation can never touch personal shares. The cadence is
+# daily and a row is stamped seconds from its broker order, so the ET-date bind
+# plus a tight window removes cross-session ambiguity (a 20h window bought
+# nothing but that ambiguity); each broker order is claimed by at most one row.
+_MATCH_TOLERANCE_S = 2 * 3600       # ±2h
 _MAX_ORDER_PAGES = 12               # paginate deep enough to cover the club's history
+
+# An unmatched 'error' row older than this is aged out (spans a weekend on the
+# daily cadence) — see reconcile_fills' aging pass.
+_ERROR_AGE_OUT_S = 3 * 86400
 
 
 def _num(v) -> float | None:
@@ -120,19 +130,25 @@ def _index_orders(orders: list[dict]) -> dict[tuple[str, str], list[tuple[float,
     return idx
 
 
-def _match_order(idx, symbol: str, side: str, exec_ts: float | None) -> dict | None:
-    """The agentic order best matching this execution: same symbol+side, created
-    closest in time, within the tolerance window. None if nothing close enough."""
-    cands = idx.get((str(symbol).upper(), str(side).lower()))
-    if not cands or exec_ts is None:
-        return None
-    best, best_dt = None, None
-    for ots, o in cands:
-        dt = abs(ots - exec_ts)
-        if best_dt is None or dt < best_dt:
-            best, best_dt = o, dt
-    if best is not None and best_dt is not None and best_dt <= _MATCH_TOLERANCE_S:
-        return best
+def _et_date(ts: float) -> datetime.date:
+    """US/Eastern calendar date of an epoch timestamp — the fuzzy match binds
+    to the trade date, and an epoch's UTC date leaks after ~8pm ET."""
+    return datetime.datetime.fromtimestamp(ts, tz=ET).date()
+
+
+def _order_id(o: dict) -> str:
+    return str(o.get("id") or o.get("order_id") or "")
+
+
+def _order_amount(order: dict) -> float | None:
+    """Best-effort dollar amount of a broker order (dollar-denominated buys)."""
+    for key in ("dollar_amount", "amount", "notional", "total_notional", "executed_notional"):
+        v = order.get(key)
+        if isinstance(v, dict):
+            v = v.get("amount")
+        n = _num(v)
+        if n is not None:
+            return n
     return None
 
 
@@ -155,16 +171,64 @@ def _order_filled_qty(o: dict) -> float | None:
     return total if seen else None
 
 
+def _session_retired(session_id: int) -> bool:
+    """True once a session can no longer place anything for itself.
+
+    An errored BUY may only be aged out (and its dollars credited back to the
+    slice) when its session is terminal or too stale to re-run — otherwise a
+    live re-run of that session would re-place the order AND keep the credit,
+    deploying the same dollars twice. 5 days mirrors executor.STALE_BASKET_DAYS,
+    which is what actually refuses the buy leg (not imported: executor imports
+    this module).
+    """
+    with db() as conn:
+        row = conn.execute(
+            "SELECT status, trade_date FROM vote_sessions WHERE id=?", (session_id,)).fetchone()
+    if not row:
+        return True
+    if row["status"] in ("executed", "lapsed"):
+        return True
+    try:
+        y, m, d = (int(x) for x in str(row["trade_date"] or "").split("-"))
+    except ValueError:
+        return False
+    return (today_et() - datetime.date(y, m, d)).days > 5
+
+
+def _is_repair_row(r: dict) -> bool:
+    """True for a crumb-repair (DUSTFIX) buy row.
+
+    Repair dollars are account cash fronted OUTSIDE the member's commitment —
+    only a PLACED repair is charged to the slice (executor debits slice_carry
+    for it), so an unplaced one must never be credited back into the slice.
+    ref_ids are opaque uuid5, so the only way to recognise one is to recompute
+    it; the namespace mirrors executor._REF_NS (executor imports this module, so
+    the constant is duplicated rather than imported).
+    """
+    ns = uuid.UUID("c0c0c0c0-0000-4000-8000-000000000000")
+    want = str(uuid.uuid5(ns, f"{r['session_id']}:{r['member_id']}:DUSTFIX:{r['symbol']}"))
+    return str(r.get("ref_id") or "") == want
+
+
 def reconcile_fills(member_id: int, client=None, account_number: str | None = None,
                     session_id: int | None = None, dry_run: bool = False) -> dict:
     """Reconcile this member's placed/errored executions against real broker fills.
 
-    Matches by our deterministic ref_id only (never a fuzzy symbol/amount match —
-    that could claim a member's PERSONAL order). Returns a summary of the changes
-    (or would-be changes when dry_run=True). Places no orders.
+    Matching is broker-order-id-bound where a row already carries one, otherwise
+    fuzzy by symbol + side + same-ET-date + closest created-time — 1:1, so each
+    broker order reconciles at most one row ('placed' rows claim before 'error'
+    rows), and only among agentic orders (never a member's personal order). An
+    'error' row is promoted to 'placed' only when the matched order's size agrees
+    with the row's own recorded intent. Unmatched 'error' rows past the age-out
+    window are retired; an aged-out BUY credits the member's carry_pending once
+    (the dollars never deployed, so they must ride the next cycle — the buy
+    leg's write-back drains that column into the slice). Returns a
+    summary of the changes (or would-be changes when dry_run=True). Places no
+    orders.
     """
     out: dict = {"ok": True, "member_id": member_id, "dry_run": dry_run,
-                 "reconciled": [], "promoted": [], "demoted": [], "unmatched": 0, "pending": 0}
+                 "reconciled": [], "promoted": [], "demoted": [], "unmatched": 0,
+                 "pending": 0, "unchanged": 0, "aged": [], "carry_credited": []}
     if account_number is None:
         account_number = vault.account_number_for(member_id)
     if not account_number:
@@ -172,16 +236,39 @@ def reconcile_fills(member_id: int, client=None, account_number: str | None = No
 
     # Candidate rows: placed rows still on an estimate (never reconciled) + error
     # rows that may actually have filled. Scoped to a session when asked.
-    where = "member_id=? AND status IN ('placed','error')"
+    # Synthetic corrective rows (TRUEUP / CORPACT) have no broker order behind
+    # them and must never be time-matched to a real one.
+    # 'skipped' rows are normally finished business, but one carrying a parked
+    # carry claim (an order the broker killed whose session could still have
+    # re-placed it) must stay visible until that claim is paid or deleted.
+    where = ("member_id=? AND (status IN ('placed','error') "
+             "OR (status='skipped' AND place_json LIKE '%_concord_awaiting_credit%')) "
+             "AND ref_id NOT LIKE 'TRUEUP:%' AND ref_id NOT LIKE 'CORPACT:%'")
     args: list = [member_id]
     if session_id is not None:
         where += " AND session_id=?"
         args.append(session_id)
     with db() as conn:
-        rows = [dict(r) for r in conn.execute(
-            f"SELECT id, session_id, symbol, side, status, ref_id, place_json, dollar_amount, created_at "
+        fetched = [dict(r) for r in conn.execute(
+            f"SELECT id, session_id, member_id, symbol, side, status, ref_id, place_json, "
+            f"dollar_amount, error, created_at "
             f"FROM executions WHERE {where}", args
         ).fetchall()]
+    rows: list[dict] = []
+    for r in fetched:
+        raw = r.get("place_json") or ""
+        if "ledger_trueup" in raw or "corporate_action" in raw:
+            continue                    # corrective row that slipped the ref_id filter
+        try:
+            pj = json.loads(raw) if raw else {}
+        except Exception:  # noqa: BLE001
+            pj = {}
+        if not isinstance(pj, dict):
+            pj = {}
+        if pj.get("_concord_aged_out"):
+            continue                    # terminally aged — never re-scan or re-age
+        r["_pj"] = pj
+        rows.append(r)
     if not rows:
         return out
 
@@ -198,35 +285,161 @@ def reconcile_fills(member_id: int, client=None, account_number: str | None = No
     idx = _index_orders(orders)
     out["agentic_orders"] = len(orders)
 
-    updates: list[tuple] = []          # (place_json, status, id) to write
+    # 1:1 claims — an order's key is its broker id, or a list-index surrogate
+    # for id-less orders. Claim order: id-bound rows first, then 'placed' rows
+    # by global-nearest greedy, then 'error' rows over whatever is left — so
+    # the row created seconds from an order always beats a stale row hours away.
+    by_id: dict[str, dict] = {}
+    key_of: dict[int, str] = {}
+    for i, o in enumerate(orders):
+        oid = _order_id(o)
+        key_of[id(o)] = oid or f"#{i}"
+        if oid and oid not in by_id:
+            by_id[oid] = o
+    claimed: set[str] = set()
+    assigned: dict[int, dict] = {}      # execution row id → matched broker order
+
+    fuzzy_placed: list[dict] = []
+    fuzzy_error: list[dict] = []
     for r in rows:
-        order = _match_order(idx, r["symbol"], r["side"], _num(r.get("created_at")))
+        bound = r["_pj"].get("_concord_broker_order_id") \
+            or ((r["_pj"].get("data") or {}).get("order") or {}).get("id")
+        if bound:
+            # A row already carrying a broker order id matches ONLY that order —
+            # no fuzzy fallback (its order paging out of the feed ≠ a new match).
+            o = by_id.get(str(bound))
+            if o is not None and key_of[id(o)] not in claimed:
+                claimed.add(key_of[id(o)])
+                assigned[r["id"]] = o
+        elif r["status"] == "placed":
+            fuzzy_placed.append(r)
+        else:
+            fuzzy_error.append(r)
+
+    def _greedy(pool: list[dict]) -> None:
+        cands: list[tuple[float, dict, dict]] = []
+        for r in pool:
+            ets = _num(r.get("created_at"))
+            if ets is None:
+                continue
+            rdate = _et_date(ets)
+            for ots, o in idx.get((str(r["symbol"]).upper(), str(r["side"]).lower()), []):
+                dt = abs(ots - ets)
+                if dt <= _MATCH_TOLERANCE_S and _et_date(ots) == rdate:
+                    cands.append((dt, r, o))
+        cands.sort(key=lambda c: c[0])
+        taken: set[int] = set()
+        for _dt, r, o in cands:
+            k = key_of[id(o)]
+            if k in claimed or r["id"] in taken:
+                continue
+            claimed.add(k)
+            taken.add(r["id"])
+            assigned[r["id"]] = o
+
+    _greedy(fuzzy_placed)
+    _greedy(fuzzy_error)
+
+    def _promotion_agrees(r: dict, pj: dict, order: dict, filled: float) -> bool:
+        """Economic gate on promoting a fuzzy-matched 'error' row: the order's
+        size must agree with the row's own recorded intent — otherwise the
+        match is some other cycle's order and promotion would double-count the
+        ledger."""
+        if r["side"] == "buy":
+            amt = _num(r.get("dollar_amount"))
+            oamt = _order_amount(order)
+            return (amt is not None and oamt is not None
+                    and abs(oamt - amt) <= max(0.02, 0.01 * amt))
+        est = _num(pj.get("_concord_est_qty"))
+        if est is not None:
+            return abs(filled - est) <= max(1e-6, 0.01 * est)
+        # No recorded size at all: accept only when this order is the sole
+        # same-date (symbol, side) candidate not claimed by another row.
+        ets = _num(r.get("created_at"))
+        if ets is None:
+            return False
+        rdate = _et_date(ets)
+        okey = key_of[id(order)]
+        n = 0
+        for ots, o in idx.get((str(r["symbol"]).upper(), str(r["side"]).lower()), []):
+            if _et_date(ots) != rdate:
+                continue
+            k = key_of[id(o)]
+            if k == okey or k not in claimed:
+                n += 1
+        return n == 1
+
+    oldest_ts = min((ts for cands in idx.values() for ts, _o in cands), default=None)
+    now = time.time()
+    updates: list[tuple] = []          # (place_json, status, error_or_None, id) to write
+    credits: list[float] = []          # slice_carry credits for aged-out buys
+    for r in rows:
+        pj = r["_pj"]
+        order = assigned.get(r["id"])
         if order is None:
-            # No close agentic order → do NOT guess. An estimate-based placed row
-            # keeps its estimate; an error row stays for A4 / the next cycle.
-            out["unmatched"] += 1
+            # No claimable agentic order → do NOT guess. An estimate-based
+            # placed row keeps its estimate; a fresh error row stays for A4 /
+            # the next cycle. A dead error row past the age-out window is
+            # retired here — the feed read SUCCEEDED, so absence is evidence
+            # (a BUY additionally needs the feed to provably cover the row's
+            # window, since pagination is bounded and the broker may have
+            # accepted an order the feed no longer shows).
+            # Absence is only evidence when the feed provably reaches back past
+            # the row: _fetch_agentic_orders returns [] on any payload shape it
+            # does not recognise and pages at most _MAX_ORDER_PAGES, so an
+            # "empty" read is not the same as "no such order". Both sides need
+            # that proof; only a BUY additionally waits for its session to be
+            # past re-placing, because only a buy returns dollars to the slice.
+            if (r["status"] == "error"
+                    and (_num(r.get("created_at")) or now) < now - _ERROR_AGE_OUT_S
+                    and oldest_ts is not None
+                    and oldest_ts < (_num(r.get("created_at")) or 0)
+                    and (r["side"] == "sell" or _session_retired(r["session_id"]))):
+                pj["_concord_aged_out"] = True
+                amt = _num(r.get("dollar_amount"))
+                if r["side"] == "buy" and amt and not _is_repair_row(r):
+                    # The buy never landed: the dollars sat undeployed, so they
+                    # return to the member's carry — exactly once (the aged-out
+                    # marker is the idempotency guard).
+                    pj.pop("_concord_awaiting_credit", None)
+                    pj["_concord_carry_credited"] = round(amt, 2)
+                    credits.append(round(amt, 2))
+                    out["carry_credited"].append(
+                        {"symbol": r["symbol"], "amount": round(amt, 2),
+                         "session_id": r["session_id"]})
+                new_err = ("aged out: no broker match — superseded by a later cycle; "
+                           + (r.get("error") or ""))
+                updates.append((json.dumps(pj), "skipped", new_err, r["id"]))
+                out["aged"].append({"symbol": r["symbol"], "side": r["side"],
+                                    "session_id": r["session_id"]})
+            else:
+                out["unmatched"] += 1
             continue
         state = _order_state(order)
-        try:
-            pj = json.loads(r["place_json"]) if r["place_json"] else {}
-        except Exception:  # noqa: BLE001
-            pj = {}
-        if not isinstance(pj, dict):
-            pj = {}
+        oid = _order_id(order)
 
         if state in _FILLED_STATES:
             real = _order_filled_qty(order)
             if real is None or real <= 0:
                 out["pending"] += 1
                 continue
+            if r["status"] == "error" and not _promotion_agrees(r, pj, order, real):
+                out["unmatched"] += 1
+                continue
             data = pj.setdefault("data", {})
             odict = data.setdefault("order", {})
             prev = _num(odict.get("cumulative_quantity")) or 0.0
+            if (pj.get("_concord_reconciled") and prev == real
+                    and str(odict.get("state") or "").lower() == state):
+                out["unchanged"] += 1   # already fill-true — write nothing
+                continue
             odict["cumulative_quantity"] = real
             odict["state"] = state
             pj["_concord_reconciled"] = True
+            if oid:
+                pj["_concord_broker_order_id"] = oid   # later passes re-bind exactly
             new_status = "placed" if r["status"] == "error" else r["status"]
-            updates.append((json.dumps(pj), new_status, r["id"]))
+            updates.append((json.dumps(pj), new_status, None, r["id"]))
             entry = {"symbol": r["symbol"], "side": r["side"], "est_or_prev": round(prev, 8),
                      "real": round(real, 8), "session_id": r["session_id"]}
             if r["status"] == "error":
@@ -234,30 +447,134 @@ def reconcile_fills(member_id: int, client=None, account_number: str | None = No
             else:
                 out["reconciled"].append(entry)
         elif state in _DEAD_STATES:
-            # Positively did not fill. A 'placed' row here was never a real fill →
-            # demote so club_shares stops counting it. An 'error' row is correct
-            # as-is (buys: A4 re-places; sells: next cycle re-attempts).
+            # "Dead" is not the same as "never filled": a day order can fill in
+            # PART and have its remainder cancelled at the close. Whatever
+            # filled is real — keep it, count it, and only ever hand back the
+            # dollars we can prove never reached the market.
+            partial = _order_filled_qty(order) or 0.0
+            data = pj.setdefault("data", {})
+            odict = data.setdefault("order", {})
+            odict["cumulative_quantity"] = partial if partial > 0 else 0.0
+            odict["state"] = state
+            pj["_concord_reconciled"] = True
+            if oid:
+                pj["_concord_broker_order_id"] = oid
+            amt = _num(r.get("dollar_amount"))
+            unfilled = 0.0          # dollars provably still in the account
+            if r["side"] == "buy" and amt and not _is_repair_row(r):
+                if partial <= 0:
+                    unfilled = round(amt, 2)
+                else:
+                    _exec = _num(order.get("executed_notional"))
+                    # Without a trustworthy executed notional the split is a
+                    # guess, and guessing HIGH mints money — credit nothing and
+                    # let the filled shares speak for themselves in club_value.
+                    unfilled = round(max(0.0, amt - _exec), 2) if _exec is not None else 0.0
+
+            if partial > 0:
+                # The shares exist, so the row is a real holding either way.
+                entry = {"symbol": r["symbol"], "side": r["side"], "state": state,
+                         "real": round(partial, 8), "session_id": r["session_id"]}
+                if unfilled > 0.01 and _session_retired(r["session_id"]):
+                    pj.pop("_concord_awaiting_credit", None)
+                    pj["_concord_carry_credited"] = unfilled
+                    credits.append(unfilled)
+                    out["carry_credited"].append(
+                        {"symbol": r["symbol"], "amount": unfilled,
+                         "session_id": r["session_id"]})
+                elif unfilled > 0.01:
+                    # Creditable, but this session could still re-place the
+                    # remainder; hold the claim until it cannot (below).
+                    pj["_concord_awaiting_credit"] = unfilled
+                updates.append((json.dumps(pj), "placed", None, r["id"]))
+                (out["promoted"] if r["status"] == "error" else out["reconciled"]).append(entry)
+                continue
+
             if r["status"] == "placed":
-                data = pj.setdefault("data", {})
-                odict = data.setdefault("order", {})
-                odict["cumulative_quantity"] = 0.0
-                odict["state"] = state
-                pj["_concord_reconciled"] = True
-                updates.append((json.dumps(pj), "skipped", r["id"]))
+                # Never filled, so the ledger must stop claiming the shares NOW —
+                # a phantom holding is what lets a later exit reach into the
+                # member's personal position. The dollars are a separate
+                # question: crediting them while this session can still re-place
+                # the name would deploy the same money twice, so the claim is
+                # parked on the row. A live re-run deletes this 'skipped' row
+                # (and its claim) and re-places the order — exactly right; if no
+                # re-run ever comes, the sweep below pays it out.
+                if unfilled > 0.01:
+                    if _session_retired(r["session_id"]):
+                        pj.pop("_concord_awaiting_credit", None)
+                        pj["_concord_carry_credited"] = unfilled
+                        credits.append(unfilled)
+                        out["carry_credited"].append(
+                            {"symbol": r["symbol"], "amount": unfilled,
+                             "session_id": r["session_id"]})
+                    else:
+                        pj["_concord_awaiting_credit"] = unfilled
+                updates.append((json.dumps(pj), "skipped", None, r["id"]))
                 out["demoted"].append({"symbol": r["symbol"], "side": r["side"],
                                        "state": state, "session_id": r["session_id"]})
+            else:
+                # An 'error' row whose order the broker positively killed did not
+                # fill — but retiring it and returning its dollars are ONE
+                # decision, not two. While the session can still re-place the
+                # name, a re-run would deploy those dollars again, so we neither
+                # credit NOR retire: the row stays 'error' and this branch
+                # re-evaluates it on a later pass (a retired row would be skipped
+                # forever, and its dollars would simply vanish from the slice).
+                if not _session_retired(r["session_id"]):
+                    out["pending"] += 1
+                    continue
+                pj["_concord_aged_out"] = True
+                if unfilled > 0.01:
+                    pj.pop("_concord_awaiting_credit", None)
+                    pj["_concord_carry_credited"] = unfilled
+                    credits.append(unfilled)
+                    out["carry_credited"].append(
+                        {"symbol": r["symbol"], "amount": unfilled,
+                         "session_id": r["session_id"]})
+                new_err = (f"verified dead at broker ({state}); " + (r.get("error") or ""))
+                updates.append((json.dumps(pj), "skipped", new_err, r["id"]))
+                out["aged"].append({"symbol": r["symbol"], "side": r["side"],
+                                    "session_id": r["session_id"], "state": state})
         else:
             out["pending"] += 1  # queued/confirmed/new — still working, try later
 
-    if updates and not dry_run:
+    # Parked claims: dollars from a killed order, demoted immediately so the
+    # ledger stopped counting phantom shares, but not creditable while their
+    # session could still re-place them. A live re-run deletes the row (and its
+    # claim) and re-places the order; if no re-run ever comes, pay it here.
+    for r in rows:
+        pj = r["_pj"]
+        claim = _num(pj.get("_concord_awaiting_credit"))
+        if not claim or claim <= 0.01 or pj.get("_concord_carry_credited"):
+            continue
+        if not _session_retired(r["session_id"]):
+            continue
+        pj.pop("_concord_awaiting_credit", None)
+        pj["_concord_carry_credited"] = round(claim, 2)
+        credits.append(round(claim, 2))
+        out["carry_credited"].append({"symbol": r["symbol"], "amount": round(claim, 2),
+                                      "session_id": r["session_id"]})
+        updates.append((json.dumps(pj), r["status"], None, r["id"]))
+
+    if (updates or credits) and not dry_run:
         with db() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
-                for pj_str, status, rid in updates:
+                for pj_str, status, err, rid in updates:
                     conn.execute(
-                        "UPDATE executions SET place_json=?, status=? WHERE id=?",
-                        (pj_str, status, rid),
+                        "UPDATE executions SET place_json=?, status=?, "
+                        "error=COALESCE(?, error) WHERE id=?",
+                        (pj_str, status, err, rid),
                     )
+                for amt in credits:
+                    # carry_pending, NOT slice_carry: the buy leg's write-back
+                    # overwrites slice_carry with the cycle's own undeployed
+                    # figure, so an asynchronous credit written there is either
+                    # erased or (worse) re-added by the next write-back. The
+                    # write-back drains this column instead, exactly once.
+                    conn.execute(
+                        "UPDATE member_settings SET carry_pending=COALESCE(carry_pending,0)+? "
+                        "WHERE member_id=?", (amt, member_id))
                 conn.execute("COMMIT")
             except BaseException:
                 conn.execute("ROLLBACK")
@@ -282,12 +599,15 @@ def ledger_trueup(member_id: int, *, client=None, account_number: str | None = N
 
     Mechanism copied from renames.migrate, the proven corporate-action true-up:
     an APPEND-ONLY $0 execution row per symbol carrying the corrective quantity
-    in _concord_est_qty — history is never edited, and the derived net folds to
-    zero. Guards: live position must be exactly absent (never "small"), and any
-    symbol with an execution row in the last 48h is skipped so an in-flight exit
-    whose fill has not reached the feed yet is left alone. ref_id carries the
-    date, so a rerun today is idempotent while a future re-drift can be trued
-    again.
+    in _concord_est_qty — history is never edited; positions.trueup_shares folds
+    these rows into club_shares_derived, so a trued symbol's derived net reads
+    zero and the phantom is never re-detected. Guards: live position must be
+    exactly absent (never "small"); any symbol with an execution row in the last
+    48h is skipped so an in-flight exit whose fill has not reached the feed yet
+    is left alone; and prior TRUEUP coverage is netted off the detected phantom
+    before inserting (defense-in-depth: even if the derived source goes blind
+    again, the same phantom can never be zeroed twice). ref_id carries the date,
+    so a rerun today is idempotent while a future re-drift can be trued again.
     """
     if account_number is None:
         account_number = vault.account_number_for(member_id)
@@ -320,6 +640,20 @@ def ledger_trueup(member_id: int, *, client=None, account_number: str | None = N
                 (member_id, sym, cutoff)).fetchone()
             if recent:
                 continue                       # in-flight exit — leave for the feed
+            # Net off what earlier TRUEUP rows already corrected (sells cover,
+            # compensating repair buys un-cover) — a phantom is only trued up
+            # for the portion no prior correction accounts for.
+            coverage = 0.0
+            for p in conn.execute(
+                    "SELECT side, place_json FROM executions WHERE ref_id LIKE ?",
+                    (f"TRUEUP:{member_id}:{sym}:%",)).fetchall():
+                try:
+                    est = float(json.loads(p["place_json"] or "{}").get("_concord_est_qty") or 0.0)
+                except Exception:  # noqa: BLE001
+                    est = 0.0
+                coverage += est if p["side"] == "sell" else -est
+            if qty - coverage <= 1e-9:
+                continue                       # already covered — never zero twice
             ref = f"TRUEUP:{member_id}:{sym}:{day}"
             if conn.execute("SELECT 1 FROM executions WHERE ref_id=?", (ref,)).fetchone():
                 continue

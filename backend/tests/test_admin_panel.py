@@ -28,9 +28,10 @@ os.environ.setdefault("SESSION_SECRET", "test-secret")
 from cryptography.fernet import Fernet  # noqa: E402
 
 os.environ.setdefault("CONCORD_FERNET_KEY", Fernet.generate_key().decode())
-# This module sorts FIRST alphabetically, so ITS imports win the process-wide
-# app.config singleton — mirror the env the previously-first module
-# (test_audit_fixes) set, or the whole suite's TOP_N/EXECUTION_MODE shift.
+# Kept for running this file on its own. Under the full suite these are no-ops:
+# tests/conftest.py pins the same values before any test module is imported, so
+# the process-wide app.config singleton no longer depends on which module
+# happens to be collected first.
 os.environ.setdefault("TOP_N", "3")
 os.environ.setdefault("EXECUTION_MODE", "dry_run")
 
@@ -53,6 +54,22 @@ def setup_module(_):
     object.__setattr__(settings, "resend_api_key", "")
     object.__setattr__(settings, "execution_mode", "dry_run")
     set_armed(False, actor="test-setup")
+
+    # The panel reports CLUB-level state — current_session(), latest_session(),
+    # the cached perf blob — all of which are "whatever is newest in the whole
+    # DB", not "whatever this module inserted". The DB is shared process-wide, so
+    # any module that ran earlier and left a later-dated session behind silently
+    # becomes this module's cycle: test_watchdog's 2099-12 'open' rows made the
+    # quorum gate count 0 human voters, and a later 'executed' row displaced
+    # cycle.last_executed. Same story for the kv perf cache that test_public and
+    # test_performance seed. Start from a clean club so the assertions below mean
+    # what they say. Same rationale (and same table list shape) as
+    # test_reputation's wipe; members are deliberately left alone — each test
+    # here makes its own, and the panel only ever reports on those.
+    with db() as conn:
+        for t in ("executions", "votes", "bot_picks", "cycle_prices", "vote_sessions"):
+            conn.execute(f"DELETE FROM {t}")
+        conn.execute("DELETE FROM kv WHERE key='club_perf_v1'")   # adminview._PERF_CACHE_KEY
 
 
 # ─── helpers ─────────────────────────────────────────────────────────────────

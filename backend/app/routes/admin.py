@@ -187,7 +187,7 @@ def cycles_list(limit: int = 30, admin: dict = Depends(require_admin)):
     limit = max(1, min(int(limit), 60))
     with db() as conn:
         sessions = conn.execute(
-            "SELECT * FROM vote_sessions WHERE status IN ('closed','executed') "
+            "SELECT * FROM vote_sessions WHERE status IN ('closed','executed','lapsed') "
             "ORDER BY trade_date DESC LIMIT ?", (limit,)).fetchall()
         latest_decided = svc._latest_decided_session_id()
         out = []

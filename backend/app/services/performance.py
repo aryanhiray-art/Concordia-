@@ -51,8 +51,10 @@ def decided_cycles() -> list[dict]:
     """
     with db() as conn:
         rows = conn.execute(
+            # 'lapsed' included: a lapsed session may have partially traded;
+            # dropping it would rewrite the published series.
             "SELECT trade_date, picks_json FROM vote_sessions "
-            "WHERE status IN ('closed','executed') AND picks_json IS NOT NULL "
+            "WHERE status IN ('closed','executed','lapsed') AND picks_json IS NOT NULL "
             "ORDER BY trade_date ASC"
         ).fetchall()
     out: list[dict] = []

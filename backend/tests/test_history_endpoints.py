@@ -264,29 +264,42 @@ def test_status_display_marks_stale_closed_as_executed():
     _vote(s_stale, mid, [("AAPL", 100)])
     _vote(s_latest, mid, [("MSFT", 100)])
 
-    r = client.get("/api/club/history?limit=60", headers=_hdrs(tok))
-    assert r.status_code == 200
-    by_id = {s["id"]: s for s in r.json()["sessions"]}
-    # stale closed → displayed executed; raw status kept in the payload
-    assert by_id[s_stale]["status"] == "closed"
-    assert by_id[s_stale]["status_display"] == "executed"
-    # the latest decided session IS the live cycle — stays closed
-    assert by_id[s_latest]["status"] == "closed"
-    assert by_id[s_latest]["status_display"] == "closed"
-    # executed rows display as themselves
-    assert by_id[s_exec]["status"] == by_id[s_exec]["status_display"] == "executed"
-    # derivation only — the trading rows are untouched
-    with db() as conn:
-        raw = conn.execute("SELECT status FROM vote_sessions WHERE id IN (?,?,?) "
-                           "ORDER BY id", (s_stale, s_exec, s_latest)).fetchall()
-    assert [x["status"] for x in raw] == ["closed", "executed", "closed"]
+    # Being the newest decided session in the whole shared DB is the POINT of
+    # this fixture, which also makes it the club's current basket for every
+    # module that runs later — and picks_json is NULL here, i.e. an empty
+    # basket, so verify.verify_member reports every real holding as
+    # "dropped from basket but still held" (test_executor_fixes::
+    # test_verify_clean_account_passes). Only alphabetical order hid that. Drop
+    # the rows on the way out, the same way the sibling status_display tests do.
+    try:
+        r = client.get("/api/club/history?limit=60", headers=_hdrs(tok))
+        assert r.status_code == 200
+        by_id = {s["id"]: s for s in r.json()["sessions"]}
+        # stale closed → displayed executed; raw status kept in the payload
+        assert by_id[s_stale]["status"] == "closed"
+        assert by_id[s_stale]["status_display"] == "executed"
+        # the latest decided session IS the live cycle — stays closed
+        assert by_id[s_latest]["status"] == "closed"
+        assert by_id[s_latest]["status_display"] == "closed"
+        # executed rows display as themselves
+        assert by_id[s_exec]["status"] == by_id[s_exec]["status_display"] == "executed"
+        # derivation only — the trading rows are untouched
+        with db() as conn:
+            raw = conn.execute("SELECT status FROM vote_sessions WHERE id IN (?,?,?) "
+                               "ORDER BY id", (s_stale, s_exec, s_latest)).fetchall()
+        assert [x["status"] for x in raw] == ["closed", "executed", "closed"]
 
-    # the personal history applies the SAME derivation
-    mine = {s["id"]: s for s in
-            client.get("/api/me/votes", headers=_hdrs(tok)).json()["sessions"]}
-    assert mine[s_stale]["status"] == "closed"
-    assert mine[s_stale]["status_display"] == "executed"
-    assert mine[s_latest]["status_display"] == "closed"
+        # the personal history applies the SAME derivation
+        mine = {s["id"]: s for s in
+                client.get("/api/me/votes", headers=_hdrs(tok)).json()["sessions"]}
+        assert mine[s_stale]["status"] == "closed"
+        assert mine[s_stale]["status_display"] == "executed"
+        assert mine[s_latest]["status_display"] == "closed"
+    finally:
+        with db() as conn:
+            ids = (s_stale, s_exec, s_latest)
+            conn.execute("DELETE FROM votes WHERE session_id IN (?,?,?)", ids)
+            conn.execute("DELETE FROM vote_sessions WHERE id IN (?,?,?)", ids)
 
 
 # ─── status_display: an abandoned open ballot is 'expired', not 'open' ────────

@@ -80,6 +80,22 @@ def _mrow(summary: dict, mid: int) -> dict:
     return next(r for r in summary["members"] if r["member_id"] == mid)
 
 
+def _backdate(sid: int, mid: int, days: int = 5) -> None:
+    """Make a seeded prior-cycle row look like a prior cycle.
+
+    `executor._record` stamps created_at=now, so a holding seeded to represent
+    "what the club already owns" reads to the sell leg's time-based PDT guard as
+    bought THIS morning — every exit/trim/resize is then skipped with "bought
+    today — PDT guard". 5 days clears the guard's cutoff (the previous trading
+    day's 16:00 ET) no matter which weekday the suite runs on.
+    """
+    with db() as conn:
+        conn.execute(
+            "UPDATE executions SET created_at=? WHERE session_id=? AND member_id=?",
+            (int(time.time()) - days * 86400, sid, mid),
+        )
+
+
 def _exec_rows(sid: int, mid: int, symbol: str, side: str = "buy") -> list[dict]:
     with db() as conn:
         rows = conn.execute(
@@ -230,29 +246,47 @@ def test_recovery_matches_on_ref_id_echo(monkeypatch):
 
 
 def test_unverifiable_prior_error_is_skipped_not_replaced(monkeypatch):
-    """If the broker orders can't be fetched, NEVER re-place blind — skip."""
+    """If the broker orders can't be fetched, NEVER re-place blind — skip.
+
+    Contract change (error-evidence lifecycle): the unverifiable case no longer
+    overwrites the row with a 'skipped' shadow. The 'error' row is the only proof
+    that an order the broker may have accepted exists, so it survives UNTOUCHED —
+    original status, original error text, original created_at (which is what keeps
+    the next run's match window honest). The skip is reported on the run summary,
+    not by mutating the evidence.
+    """
     mid = _member("a4-unverif@x.com")
     closed = _closed_session(datetime.date(2026, 12, 3), mid, ["AAPL"])
     sid = closed["id"]
     executor._record(sid, mid, "AAPL", 500.0, executor.ref_id_for(sid, mid, "AAPL"),
                      "error", error="place: timeout")
+    before = _exec_rows(sid, mid, "AAPL", "buy")[0]
     client = FakeClient(quotes={"AAPL": 200.0}, orders_exc=RuntimeError("MCP HTTP 500"))
     _use_client(monkeypatch, client)
 
     summary = executor.run(closed, force_dry_run=True)
 
     rows = _exec_rows(sid, mid, "AAPL", "buy")
-    assert len(rows) == 1 and rows[0]["status"] == "skipped"
-    assert rows[0]["error"] == "unverifiable prior error — manual check"
+    assert len(rows) == 1 and rows[0]["status"] == "error"
+    assert rows[0]["error"] == "place: timeout"
+    assert rows[0]["created_at"] == before["created_at"]
     assert not client.trades_for("place_buy", f"ACC{mid}")
     assert not client.trades_for("review_buy", f"ACC{mid}", "AAPL")
     order = next(o for o in _mrow(summary, mid)["orders"] if o["symbol"] == "AAPL")
     assert order["status"] == "skipped"
+    assert order["note"] == "unverifiable prior error — manual check"
 
 
 def test_verified_absent_prior_error_replaces_normally(monkeypatch):
     """Broker orders fetched fine but show NO matching order → the prior place
-    never landed, so the normal (re-)placement path proceeds."""
+    never landed, so the normal (re-)placement path proceeds.
+
+    Contract change (error-evidence lifecycle): a re-placed name legitimately has
+    TWO rows. The old 'error' row is retired to terminal 'superseded' ONLY at the
+    moment a new order actually goes to the broker — this run is a dry run, which
+    places nothing, so the evidence stays 'error' and the re-plan is recorded
+    beside it as 'reviewed'. What must never appear is a 'placed' row.
+    """
     mid = _member("a4-absent@x.com")
     closed = _closed_session(datetime.date(2026, 12, 4), mid, ["AAPL"])
     sid = closed["id"]
@@ -264,14 +298,20 @@ def test_verified_absent_prior_error_replaces_normally(monkeypatch):
     executor.run(closed, force_dry_run=True)
 
     rows = _exec_rows(sid, mid, "AAPL", "buy")
-    assert len(rows) == 1 and rows[0]["status"] == "reviewed"   # dry run reviews
+    assert sorted(r["status"] for r in rows) == ["error", "reviewed"]
+    assert next(r for r in rows if r["status"] == "error")["error"] == "place: 400 rejected"
     assert client.trades_for("review_buy", f"ACC{mid}", "AAPL")
 
 
 def test_a4_ignores_personal_order(monkeypatch):
     """A prior errored club buy + a PERSONAL ('user') broker order of the same
     name/amount is NOT matched by A4 (the fetch is agentic-scoped) → no phantom club
-    'placed' row; the club re-reviews its own buy instead of adopting personal shares."""
+    'placed' row; the club re-reviews its own buy instead of adopting personal shares.
+
+    As in the verified-absent case, the re-plan sits BESIDE the surviving 'error'
+    row (a dry run places nothing, so nothing supersedes it) — the assertion that
+    matters is that no row anywhere reads 'placed'.
+    """
     mid = _member("a4-personal@x.com")
     closed = _closed_session(datetime.date(2026, 12, 11), mid, ["AAPL"])
     sid = closed["id"]
@@ -285,7 +325,7 @@ def test_a4_ignores_personal_order(monkeypatch):
     executor.run(closed, force_dry_run=True)
 
     rows = _exec_rows(sid, mid, "AAPL", "buy")
-    assert len(rows) == 1 and rows[0]["status"] == "reviewed"    # re-reviewed, NOT phantom 'placed'
+    assert sorted(r["status"] for r in rows) == ["error", "reviewed"]   # re-reviewed
     assert all(r["status"] != "placed" for r in rows)            # personal order never adopted
 
 
@@ -351,6 +391,7 @@ def test_exit_sell_sweeps_dust_residual(monkeypatch):
     # club history: a placed buy estimated at 1.0 TSLA share (old session)
     executor._record(90001, mid, "TSLA", 250.0, "old-ref-1", "placed",
                      place={"_concord_est_qty": 1.0})
+    _backdate(90001, mid)
     closed = _closed_session(datetime.date(2026, 12, 7), mid, ["AAPL"])  # TSLA dropped
     client = FakeClient(quotes={"AAPL": 100.0, "TSLA": 250.0},
                         positions=[("TSLA", "1.0005")])
@@ -374,6 +415,7 @@ def test_exit_sell_never_sweeps_personal_position(monkeypatch):
     mid = _member("a7-personal@x.com")
     executor._record(90002, mid, "TSLA", 250.0, "old-ref-2", "placed",
                      place={"_concord_est_qty": 1.0})
+    _backdate(90002, mid)
     closed = _closed_session(datetime.date(2026, 12, 8), mid, ["AAPL"])
     # member personally holds 2 extra TSLA shares (~$500 at $250)
     client = FakeClient(quotes={"AAPL": 100.0, "TSLA": 250.0},
@@ -400,6 +442,7 @@ def test_trim_reconciles_inflated_ledger_to_live(monkeypatch):
     # ledger THINKS the club holds 10 GOOGL; the account really holds 0.02
     executor._record(90010, mid, "GOOGL", 999.0, "old-ref-recon", "placed",
                      place={"_concord_est_qty": 10.0})
+    _backdate(90010, mid)
     closed = _closed_session(datetime.date(2026, 12, 12), mid, ["GOOGL"])  # stays in basket
     client = FakeClient(quotes={"GOOGL": 100.0}, positions=[("GOOGL", "0.02")])
     _use_client(monkeypatch, client)
@@ -423,6 +466,7 @@ def test_dust_cleanup_dry_run_previews(monkeypatch):
                      place={"_concord_est_qty": 0.9992})
     executor._record(90003, mid, "MSFT", 500.0, "old-ref-4", "placed",
                      place={"_concord_est_qty": 5.0})
+    _backdate(90003, mid)
     client = FakeClient(
         quotes={"NVDA": 100.0, "MSFT": 100.0, "GME": 20.0},
         positions=[("NVDA", "0.0008"), ("MSFT", "5.0"), ("GME", "0.0001")],  # GME = personal
@@ -670,6 +714,7 @@ def test_both_day_refreshes_buying_power_after_sells(monkeypatch):
     mid = _member("bothday@x.com", alloc_value=50.0)
     executor._record(90050, mid, "TSLA", 250.0, "bothday-ref-1", "placed",
                      place={"_concord_est_qty": 1.0})
+    _backdate(90050, mid)
     closed = _closed_session(datetime.date(2026, 12, 28), mid, ["AAPL"])  # TSLA dropped
     client = ProceedsClient(quotes={"AAPL": 100.0, "TSLA": 250.0},
                             positions=[("TSLA", "1.0")],
@@ -757,6 +802,7 @@ def test_both_day_polls_past_slow_proceeds_credit(monkeypatch):
     mid = _member("bothlag@x.com", alloc_value=50.0)
     executor._record(90060, mid, "TSLA", 250.0, "bothlag-ref-1", "placed",
                      place={"_concord_est_qty": 1.0})
+    _backdate(90060, mid)
     closed = _closed_session(datetime.date(2026, 12, 30), mid, ["AAPL"])
     # stale reads for the first 3 post-sell fetches, credit on the 4th
     client = LaggyProceedsClient(quotes={"AAPL": 100.0, "TSLA": 250.0},
@@ -791,17 +837,24 @@ def test_run_sweeps_dust_per_member_with_matching_dry_run(monkeypatch):
     """dust_cleanup existed only behind a manual admin button, so 0.000001-share
     crumbs (Neil's MSFT, Charlie's ALL) sat for days. run() now sweeps each
     non-skipped member after the buy leg, with dry_run mirroring will_place —
-    a review-only run must preview the sweep, never place it."""
-    calls: list[tuple[int, bool]] = []
+    a review-only run must preview the sweep, never place it.
+
+    run() now also threads its executing session into the sweep (session_id=sid),
+    so every ref_id, guard and record keys to the session that actually trades —
+    the stub has to accept it.
+    """
+    calls: list[tuple[int, bool, int | None]] = []
     monkeypatch.setattr(executor, "dust_cleanup",
-                        lambda mid, dry_run=True: calls.append((mid, dry_run)) or
+                        lambda mid, dry_run=True, session_id=None:
+                        calls.append((mid, dry_run, session_id)) or
                         {"ok": True, "orders": []})
     mid = _member("dusthook@x.com", alloc_value=50.0)
     closed = _closed_session(datetime.date(2026, 12, 18), mid, ["AAPL"])
     client = FakeClient(quotes={"AAPL": 100.0}, buying_power=50.0)
     _use_client(monkeypatch, client)
     executor.run(closed, force_dry_run=True, phase="both")
-    assert (mid, True) in calls, "dry run → dust preview (dry_run=True), and it ran at all"
+    assert (mid, True, closed["id"]) in calls, \
+        "dry run → dust preview (dry_run=True) keyed to the executing session"
 
 
 def test_limited_margin_buys_what_it_can_afford_instead_of_dropping_the_name(monkeypatch):
@@ -818,6 +871,7 @@ def test_limited_margin_buys_what_it_can_afford_instead_of_dropping_the_name(mon
     kv_set(f"acct_type:{mid}", "limited_margin")
     executor._record(90071, mid, "TSLA", 250.0, "bothlm-ref-1", "placed",
                      place={"_concord_est_qty": 1.0})
+    _backdate(90071, mid)
     closed = _closed_session(datetime.date(2026, 12, 17), mid, ["AAPL"])
     # Credit never fully lands: buying power stops a hair under the target, the
     # exact shape that dropped ADM.
@@ -855,6 +909,7 @@ def test_both_day_cash_account_keeps_single_quick_look(monkeypatch):
     kv_set(f"acct_type:{mid}", "cash")
     executor._record(90061, mid, "TSLA", 250.0, "bothcash-ref-1", "placed",
                      place={"_concord_est_qty": 1.0})
+    _backdate(90061, mid)
     closed = _closed_session(datetime.date(2026, 12, 31), mid, ["AAPL"])
     client = LaggyProceedsClient(quotes={"AAPL": 100.0, "TSLA": 250.0},
                                  positions=[("TSLA", "1.0")], buying_power=3.78,
@@ -1007,6 +1062,83 @@ def test_report_insert_failure_never_fails_the_run(monkeypatch):
 
 # ─── small-stake resize: exit + re-enter when a top-up is unplaceable ────────
 
+def _pin_picks(sid: int, picks: list[str]) -> dict:
+    """Pin a session's consensus list verbatim and return the refreshed row.
+
+    The n_eff tests are about RANK, and close_and_select's ordering of equally
+    weighted picks is not something they should depend on — nor is TOP_N, since
+    the point is a pick list longer than the member can hold. run() reads picks
+    off the session DICT it is handed, so the caller must use the row returned
+    here, not the one close_and_select produced."""
+    with db() as conn:
+        conn.execute("UPDATE vote_sessions SET picks_json=? WHERE id=?",
+                     (json.dumps([{"symbol": s} for s in picks]), sid))
+        return dict(conn.execute("SELECT * FROM vote_sessions WHERE id=?", (sid,)).fetchone())
+
+
+def test_held_name_inside_the_hysteresis_band_keeps_its_slot(monkeypatch):
+    """A small stake holds the TOP n_eff names, and the club re-ranks daily — so
+    a held name drifting one rank past n_eff used to be sold and a new name
+    bought in its place, a full round trip paying the spread on both legs, most
+    cycles. A held name now keeps its slot while it stays within n_eff + H of
+    the top, and the buy leg fills only the slots that are actually free.
+    """
+    mid = _member("hysteresis-keep@x.com", alloc_value=10.0)   # 10% of $25 = $2.50
+    closed = _closed_session(datetime.date(2027, 3, 1), mid, ["AAPL"])
+    sid = closed["id"]
+    # E sits at rank 5 — outside the top 2 the member can afford, inside the band
+    picks = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA"]
+    closed = _pin_picks(sid, picks)
+    executor._record(sid - 1 if sid > 1 else 90900, mid, "NVDA", 1.25, "hyst-keep-ref",
+                     "placed", place={"_concord_est_qty": 0.0125})
+    _backdate(sid - 1 if sid > 1 else 90900, mid)
+    client = FakeClient(quotes={s: 100.0 for s in picks},
+                        positions=[("NVDA", "0.0125")],
+                        buying_power=5.0, total_value=25.0)
+    _use_client(monkeypatch, client)
+
+    summary = executor.run(closed, force_dry_run=True, phase="both")
+
+    row = _mrow(summary, mid)
+    assert row["budget"] == 2.50 and row["per_pick"] == 1.25
+    touched = {o["symbol"] for o in row["orders"]}
+    assert "NVDA" in touched, "the held name stays in the basket"
+    assert not [o for o in row["orders"] if o["symbol"] == "NVDA" and o["side"] == "sell"], \
+        "a held name inside the band is never round-tripped"
+    assert "MSFT" not in touched, "rank 2 does not displace it — the slot is not free"
+    aapl = next(o for o in row["orders"] if o["symbol"] == "AAPL")
+    assert aapl["side"] == "buy" and aapl["status"] == "reviewed", aapl
+
+
+def test_held_name_beyond_the_hysteresis_band_rotates_out(monkeypatch):
+    """The band is BOUNDED on purpose: keeping every held name that lingers
+    anywhere in the club's list would ossify a small member's basket and stop
+    them ever rotating into the club's new conviction. Past n_eff + H the held
+    name is exited and the top names take the slots."""
+    mid = _member("hysteresis-evict@x.com", alloc_value=10.0)
+    closed = _closed_session(datetime.date(2027, 3, 2), mid, ["AAPL"])
+    sid = closed["id"]
+    # JPM sits at rank 8 — well past the n_eff(2) + H(4) band
+    picks = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA", "META", "JPM"]
+    closed = _pin_picks(sid, picks)
+    executor._record(90901, mid, "JPM", 1.25, "hyst-evict-ref", "placed",
+                     place={"_concord_est_qty": 0.0125})
+    _backdate(90901, mid)
+    client = FakeClient(quotes={s: 100.0 for s in picks},
+                        positions=[("JPM", "0.0125")],
+                        buying_power=5.0, total_value=25.0)
+    _use_client(monkeypatch, client)
+
+    summary = executor.run(closed, force_dry_run=True, phase="both")
+
+    row = _mrow(summary, mid)
+    jpm = next(o for o in row["orders"] if o["symbol"] == "JPM")
+    assert jpm["side"] == "sell" and jpm["status"] == "reviewed", jpm
+    assert jpm.get("note") == "exited basket"
+    bought = {o["symbol"] for o in row["orders"] if o["side"] == "buy"}
+    assert bought == {"AAPL", "MSFT"}, bought
+
+
 def test_sub_minimum_topup_resizes_by_selling_and_rebuying(monkeypatch):
     """Charlie's live shape (2026-08-24): a ~$1.30 per-name target with $1.02
     held. The $0.28 top-up is under Robinhood's $1 minimum, so before this the
@@ -1019,6 +1151,7 @@ def test_sub_minimum_topup_resizes_by_selling_and_rebuying(monkeypatch):
     # club ledger: 1.02 shares of a $1.00 stock == $1.02 held
     executor._record(90600, mid, "AAPL", 1.02, "resize-ref", "placed",
                      place={"_concord_est_qty": 1.02})
+    _backdate(90600, mid)
     closed = _closed_session(datetime.date(2027, 6, 15), mid, ["AAPL"])
     client = FakeClient(quotes={"AAPL": 1.00}, positions=[("AAPL", "1.02")],
                         buying_power=1.30, total_value=1.30)
@@ -1135,15 +1268,40 @@ def test_unsellable_residue_gets_repaired_not_sold(monkeypatch):
 
 
 def test_crumb_on_basket_name_is_left_to_the_buy_leg(monkeypatch):
-    """If the crumb's name is IN the current basket, the ordinary top-up
-    absorbs it — no repair order."""
+    """If the crumb's name is IN the current basket AND this member's own buy leg
+    reached it, the ordinary top-up absorbs the crumb — no repair order.
+
+    Contract change: in-basket alone is no longer enough to defer. The skip now
+    also requires the member's OWN plain buy row for the session (ref_id_for(sid,
+    mid, symbol), placed or reviewed) — that row is the evidence an absorbing
+    top-up actually exists. See the sibling test for the small-stake case where
+    it does not.
+    """
     mid, client = _crumb_setup(monkeypatch, "crumb-basket@example.com",
                                picks=["ALL"], date=datetime.date(2026, 12, 14))
+    with db() as conn:
+        sid = conn.execute("SELECT MAX(id) FROM vote_sessions").fetchone()[0]
+    # this member's buy leg did reach ALL this cycle — the absorbing top-up
+    executor._record(sid, mid, "ALL", 1.30, executor.ref_id_for(sid, mid, "ALL"),
+                     "placed", place={"_concord_est_qty": 0.005})
     out = executor.dust_cleanup(mid, dry_run=True)
     entries = [o for o in out["orders"] if o["symbol"] == "ALL"]
     assert entries and entries[0]["status"] == "skipped"
     assert "buy leg absorbs" in entries[0]["note"]
     assert client.buy_reviews == []
+
+
+def test_crumb_on_basket_name_without_own_buy_is_repaired(monkeypatch):
+    """The other half of that contract: a small-stake member whose picks[:n_eff]
+    slice never reaches the name has NO buy row to absorb the crumb, so deferring
+    to "the buy leg" would strand it forever — the repair fires instead."""
+    mid, client = _crumb_setup(monkeypatch, "crumb-basket-nobuy@example.com",
+                               picks=["ALL"], date=datetime.date(2026, 12, 15))
+    out = executor.dust_cleanup(mid, dry_run=True)
+    entries = [o for o in out["orders"] if o["symbol"] == "ALL"]
+    assert entries and entries[0]["side"] == "buy"
+    assert entries[0]["status"] == "reviewed" and entries[0]["amount"] == "1.00"
+    assert client.buy_reviews == [("ALL", "1.00")]
 
 
 def test_crumb_repair_needs_buying_power(monkeypatch):
@@ -1179,13 +1337,22 @@ def test_crumb_repair_idempotent_within_a_session(monkeypatch):
 
 def test_dust_cleanup_formats_six_decimals(monkeypatch):
     """Real dust sweeps go out at Robinhood's 6dp format — the old path sent
-    8dp strings like '0.00120000'."""
+    8dp strings like '0.00120000'.
+
+    The sweep now keys off the newest DECIDED session: it refuses to sell an
+    in-basket name (a sub-$1 slice of a high-priced name is a voted hold) and
+    refuses to sell anything bought since the previous close (PDT). So the
+    fixture pins a newest basket that does NOT hold MSFT and ages the seeded club
+    buy into a prior cycle — otherwise this is testing a guard, not the format.
+    """
     mid = _member("dusty@example.com")
     with db() as conn:
         conn.execute(
             "INSERT INTO executions(session_id, member_id, symbol, side, type, dollar_amount, "
             "ref_id, status, created_at) VALUES(1, ?, 'MSFT', 'buy', 'market', 1.0, 'r2', "
             "'placed', strftime('%s','now'))", (mid,))
+    _backdate(1, mid)
+    _closed_session(datetime.date(2026, 12, 26), mid, ["AAPL"])   # MSFT is off-basket
 
     seen = {}
 
@@ -1214,6 +1381,7 @@ def test_rebalance_sell_leg_skips_residue(monkeypatch):
     sid_prev = 97001
     executor._record(sid_prev, mid, "ALL", 1.0, "crumb-ref", "placed",
                      place={"_concord_est_qty": 0.000001})
+    _backdate(sid_prev, mid)
     # today's cycle drops ALL from the basket → full exit path
     closed = _closed_session(datetime.date(2026, 12, 27), mid, ["MSFT"])
     sid = closed["id"]
@@ -1244,6 +1412,7 @@ def test_full_exit_of_0_00399_sells_exact_quantity(monkeypatch):
     sid_prev = 97002
     executor._record(sid_prev, mid, "ALL", 1.0, "crumb-ref2", "placed",
                      place={"_concord_est_qty": 0.00399})
+    _backdate(sid_prev, mid)
     closed = _closed_session(datetime.date(2026, 12, 25), mid, ["MSFT"])
     client = FakeClient(quotes={"MSFT": 500.0, "ALL": 254.0},
                         positions=[("ALL", 0.00399)], buying_power=100.0)
@@ -1261,7 +1430,14 @@ def test_full_exit_of_0_00399_sells_exact_quantity(monkeypatch):
 def test_repaired_position_not_sold_same_session_but_exits_next(monkeypatch):
     """The must-fix from the repair review: a same-day RE-RUN must not sell
     what the morning's repair bought (that is a PDT day trade); the NEXT
-    session's sell leg exits the whole position."""
+    session's sell leg exits the whole position.
+
+    The guard is now keyed on TIME, not on the session's DUSTFIX ref: anything
+    bought since the previous trading day's 16:00 ET close is unsellable today,
+    whichever session bought it. So the skip note is the PDT one, and "the next
+    session" has to be modelled the way it really arrives — a later trading day,
+    with the repair's buy now behind the cutoff.
+    """
     mid = _member("repair-lifecycle@x.com")
     closed = _closed_session(datetime.date(2027, 2, 2), mid, ["AAPL"])
     sid = closed["id"]
@@ -1277,9 +1453,11 @@ def test_repaired_position_not_sold_same_session_but_exits_next(monkeypatch):
     assert client.trades_for("review_sell", f"ACC{mid}", "TSLA") == []
     skip = next(o for o in _mrow(summary, mid)["orders"]
                 if o["symbol"] == "TSLA" and o["side"] == "sell")
-    assert skip["status"] == "skipped" and "repaired today" in skip["note"]
+    assert skip["status"] == "skipped" and "PDT guard" in skip["note"]
 
-    # next session: a different sid → different DUSTFIX ref → full exact exit
+    # next session = a later trading day: the repair's buy is now older than the
+    # PDT cutoff, so the exit is free to run and sells the exact live quantity
+    _backdate(sid, mid)
     closed2 = _closed_session(datetime.date(2027, 2, 3), mid, ["AAPL"])
     executor.run(closed2, force_dry_run=True)
     sells = client.trades_for("review_sell", f"ACC{mid}", "TSLA")
@@ -1288,7 +1466,13 @@ def test_repaired_position_not_sold_same_session_but_exits_next(monkeypatch):
 
 def test_repaired_position_not_dust_swept_same_session(monkeypatch):
     """A price dip that turns the repaired ~$1 position into a dust candidate
-    must not sell it in the same session either."""
+    must not sell it in the same session either.
+
+    Same contract shift as the sell leg: the sweep's time-based PDT guard runs
+    ahead of (and subsumes) the DUSTFIX-ref check, so the skip reads "bought
+    today" rather than "repaired this session" — the position still exits with a
+    later session, never same-day.
+    """
     mid = _member("repair-dip@x.com")
     closed = _closed_session(datetime.date(2027, 2, 4), mid, ["AAPL"])
     sid = closed["id"]
@@ -1308,7 +1492,7 @@ def test_repaired_position_not_dust_swept_same_session(monkeypatch):
     out = executor.dust_cleanup(mid, dry_run=True)
     entries = [o for o in out["orders"] if o["symbol"] == "TSLA"]
     assert entries and entries[0]["status"] == "skipped"
-    assert "exits next cycle" in entries[0]["note"]
+    assert "bought today — PDT guard" in entries[0]["note"]
 
 
 def test_repair_budget_is_bounded_per_run(monkeypatch):

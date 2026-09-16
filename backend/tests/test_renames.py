@@ -46,10 +46,19 @@ def _snapshot(mid: int, holdings: list[dict]) -> None:
 
 
 def _session() -> int:
+    # Past-dated on purpose. renames only ever needs this row as the NOT NULL fk
+    # anchor for adjustment executions, and it resolves it by `ORDER BY id DESC`
+    # (app/services/renames.py), so trade_date is arbitrary HERE but not globally:
+    # the DB is shared process-wide, and `voting.latest_session()` picks the
+    # current basket by MAX(trade_date) across all 'executed'/'closed' rows. A
+    # far-FUTURE date made these picks-less sessions the current basket for every
+    # module that ran later, so verify.verify_member saw every real holding as
+    # "dropped from basket but still held" (test_executor_fixes::
+    # test_verify_clean_account_passes). Only alphabetical order hid it.
     with db() as conn:
         cur = conn.execute(
             "INSERT INTO vote_sessions(trade_date,status,top_n) VALUES(?, 'executed', 20)",
-            (f"2099-01-{_session.n:02d}",))
+            (f"1990-01-{_session.n:02d}",))
         _session.n += 1
         return cur.lastrowid
 _session.n = 1

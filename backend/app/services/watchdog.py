@@ -474,6 +474,53 @@ def _check_power_snapshot_stale() -> list[dict]:
     return []
 
 
+# ─── W14: member frozen by an unquotable holding ─────────────────────────────
+
+def _check_unquotable_holding() -> list[dict]:
+    """The same member skipped with 'unquotable_holding' on the last TWO runs —
+    a club-held name returning no quote (delisted/OTC/long halt) fails their
+    valuation closed every run, so nothing trades for them until the owner
+    marks the symbol written off. Two consecutive runs rules out a transient
+    quote hiccup.
+
+    'Runs' means TRADING runs on distinct days: run_reports carries a row per
+    invocation — idle days and no-op runs included — and an idle report has no
+    members at all, so counting rows would let one idle day between two frozen
+    trading days silence the alert permanently."""
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT trade_date, summary_json FROM run_reports "
+            "ORDER BY id DESC LIMIT 20").fetchall()
+        frozen: list[set] = []
+        seen_dates: set = set()
+        for r in rows:
+            if len(frozen) >= 2:
+                break
+            if r["trade_date"] in seen_dates:
+                continue
+            try:
+                members = (json.loads(r["summary_json"]) or {}).get("members") or []
+            except Exception:  # noqa: BLE001 — unreadable report → skip it
+                continue
+            if not members:
+                continue                    # idle/no-op day — not a trading run
+            seen_dates.add(r["trade_date"])
+            frozen.append({m.get("member_id") for m in members
+                           if m.get("skip_reason") == "unquotable_holding"})
+        if len(frozen) < 2:
+            return []
+        out: list[dict] = []
+        for mid in sorted(m for m in (frozen[0] & frozen[1]) if m is not None):
+            name_row = conn.execute(
+                "SELECT display_name FROM members WHERE id=?", (mid,)).fetchone()
+            name = name_row["display_name"] if name_row else f"member {mid}"
+            out.append({"key": f"unquotable-holding:{mid}", "severity": "warn",
+                        "message": (f"{name} frozen out by an unquotable holding "
+                                    "2+ runs — mark the symbol written off or "
+                                    "investigate")})
+    return out
+
+
 _CHECKS: list[tuple] = [
     ("member-token-dead", _check_member_token_dead),                    # W1
     ("no-session-on-eve", _check_no_session_on_eve),                    # W2
@@ -488,6 +535,7 @@ _CHECKS: list[tuple] = [
     ("backup-stale", _check_backup_stale),                              # W11
     ("underfunded-stake", _check_underfunded_stake),                    # W12
     ("power-snapshot", _check_power_snapshot_stale),                    # W13
+    ("unquotable-holding", _check_unquotable_holding),                  # W14
 ]
 
 

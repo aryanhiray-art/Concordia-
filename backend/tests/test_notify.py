@@ -8,6 +8,10 @@ Contract:
   taxable-events sentence only when sells placed. A stranded (rh error)
   member gets the reconnect call-to-action instead. A member with nothing
   to report gets NOTHING.
+- A commitment write-down (commit_clamped) is stated outright — both figures
+  and the reason — and earns a receipt even with no orders behind it; a carry
+  drain (carry_drained) rides with the buys it funded. Both come from the
+  member's OWN summary row, never another's.
 - email_enabled=False → each receipt prints to stdout.
 - Constitutionally incapable of hurting a run: executor.run survives
   notify raising outright.
@@ -121,6 +125,105 @@ def test_taxable_sentence_only_when_sells_placed(capsys):
     out = capsys.readouterr().out
     assert "BUY   AAPL" in out
     assert "taxable" not in out
+
+
+# ─── the commitment write-down + the carry drain ─────────────────────────────
+# The executor clamps a committed stake down to what the account can actually
+# deploy (msum["commit_clamped"]) and folds an earlier cycle's undeployed
+# dollars back into this one (msum["carry_drained"]). Both are the member's own
+# money: the receipt says so, and says it with THIS member's figures only.
+
+def test_clamp_is_stated_with_both_figures(capsys):
+    mid = _member("rcpt-clamp@nt.test")
+    row = _mrow(mid, [{"symbol": "AAPL", "side": "buy", "status": "placed",
+                       "amount": "50.00"}])
+    row["commit_clamped"] = {"from": 1984.0, "to": 720.5}
+    notify.send_run_emails(_summary([row]))
+    out = capsys.readouterr().out
+    assert "$720.50" in out and "$1,984.00" in out
+    assert "committed amount" in out
+    assert "deploy" in out, "the receipt says WHY it was reduced"
+    assert "Concordia traded for you — 2028-05-01" in out, \
+        "a run that also traded keeps the trade subject"
+
+
+def test_clamp_alone_earns_a_receipt_of_its_own(capsys):
+    mid = _member("rcpt-clamp-only@nt.test")
+    row = _mrow(mid, [{"symbol": "AAPL", "side": "buy", "status": "held",
+                       "note": "at target"}])
+    row["commit_clamped"] = {"from": 300.0, "to": 120.0}
+    res = notify.send_run_emails(_summary([row]))
+    out = capsys.readouterr().out
+    assert res["printed"] == ["rcpt-clamp-only@nt.test"]
+    assert "reduced your committed amount" in out, \
+        "no orders → the subject must not claim a trade"
+    assert "traded for you" not in out
+    assert "$120.00" in out and "$300.00" in out
+
+
+def test_drain_rides_with_the_buys_it_funded(capsys):
+    mid = _member("rcpt-drain@nt.test")
+    row = _mrow(mid, [{"symbol": "AAPL", "side": "buy", "status": "placed",
+                       "amount": "45.00"}])
+    row["carry_drained"] = 25.0
+    notify.send_run_emails(_summary([row]))
+    out = capsys.readouterr().out
+    assert "$25.00 an earlier cycle couldn't deploy" in out
+    assert "back to work" in out
+
+
+def test_drain_with_every_buy_deferred_claims_no_buy(capsys):
+    """The drain funds the slice, not an order: with nothing placed the receipt
+    must not say the dollars went into buys this run never made."""
+    mid = _member("rcpt-drain-defer@nt.test")
+    row = _mrow(mid, [{"symbol": "AAPL", "side": "buy", "status": "skipped",
+                       "note": "defer · settles next cycle"}])
+    row["carry_drained"] = 25.0
+    notify.send_run_emails(_summary([row]))
+    out = capsys.readouterr().out
+    assert "$25.00 an earlier cycle couldn't deploy" in out
+    assert "back to work in these buys" not in out
+    assert "this cycle's budget" in out
+
+
+def test_drain_without_orders_is_not_a_receipt(capsys):
+    mid = _member("rcpt-drain-quiet@nt.test")
+    row = _mrow(mid, [{"symbol": "AAPL", "side": "buy", "status": "held",
+                       "note": "at target"}])
+    row["carry_drained"] = 25.0
+    res = notify.send_run_emails(_summary([row]))
+    assert res["printed"] == []
+    assert "rcpt-drain-quiet@nt.test" not in capsys.readouterr().out
+
+
+def test_a_clamp_never_leaks_into_another_members_receipt(monkeypatch):
+    a = _member("rcpt-clamp-a@nt.test")
+    b = _member("rcpt-clamp-b@nt.test")
+    object.__setattr__(settings, "resend_api_key", "test-key")   # conftest restores
+    sent: list[tuple] = []
+    monkeypatch.setattr(mailer, "send",
+                        lambda to, subject, html, text: sent.append((to, text)) or True)
+    rowa = _mrow(a, [{"symbol": "AAPL", "side": "buy", "status": "placed", "amount": "10.00"}])
+    rowa["commit_clamped"] = {"from": 900.0, "to": 410.0}
+    rowa["carry_drained"] = 31.25
+    rowb = _mrow(b, [{"symbol": "MSFT", "side": "buy", "status": "placed", "amount": "20.00"}])
+    notify.send_run_emails(_summary([rowa, rowb]))
+    by_to = dict(sent)
+    assert "$410.00" in by_to["rcpt-clamp-a@nt.test"]
+    for figure in ("$410.00", "$900.00", "$31.25"):
+        assert figure not in by_to["rcpt-clamp-b@nt.test"], \
+            "one member's money figures never appear in another's receipt"
+
+
+def test_malformed_clamp_says_nothing_rather_than_guessing(capsys):
+    mid = _member("rcpt-clamp-bad@nt.test")
+    row = _mrow(mid, [{"symbol": "AAPL", "side": "buy", "status": "placed",
+                       "amount": "10.00"}])
+    row["commit_clamped"] = {"from": None}           # shape the executor never writes
+    res = notify.send_run_emails(_summary([row]))
+    out = capsys.readouterr().out
+    assert res["printed"] == ["rcpt-clamp-bad@nt.test"], "the trade receipt still goes"
+    assert "committed amount" not in out
 
 
 # ─── who gets an email (and who never does) ──────────────────────────────────

@@ -5,12 +5,29 @@ account holds none of it. They come from old sells whose estimated quantities
 the broker feed can no longer true up, place no trades, and flag the member's
 verification WARN every cycle (member 2 carried 19).
 """
+import os
+import tempfile
 import time
 
-import pytest
+# Point the app at a throwaway DB BEFORE importing app modules. Without this the
+# module falls through to the working-directory concord.db, where its fixed
+# tu1/tu2/tu3 emails survive the run and the NEXT standalone run dies on the
+# members.email UNIQUE constraint. (In the full suite the setdefault is a no-op —
+# an earlier module already claimed the shared temp DB.)
+os.environ.setdefault("CONCORD_DB_PATH", tempfile.mkstemp(suffix=".db")[1])
+os.environ.setdefault("SESSION_SECRET", "test-secret")
+from cryptography.fernet import Fernet  # noqa: E402
 
-from app.db import db
-from app.services import reconcile
+os.environ.setdefault("CONCORD_FERNET_KEY", Fernet.generate_key().decode())
+
+import pytest  # noqa: E402
+
+from app.db import db, init_db  # noqa: E402
+from app.services import reconcile  # noqa: E402
+
+
+def setup_module(_):
+    init_db()
 
 
 def _member(email: str) -> int:

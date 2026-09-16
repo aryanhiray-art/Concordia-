@@ -236,6 +236,21 @@ def set_allocation(body: AllocationBody, member: dict = Depends(require_member))
             status_code=409,
             detail="allocation is locked while this cycle's basket is executing — try again once it completes",
         )
+    if body.type == "dollar":
+        # Soft over-commit cap: the club can only deploy what the account
+        # actually holds. Fails OPEN when the balance is unreadable (not
+        # connected / broker hiccup) — the executor-side capacity clamp is
+        # the real guarantee; this is just the cheap front-door check.
+        try:
+            bal = alloc.member_balance(member["id"])
+        except Exception:  # noqa: BLE001
+            bal = None
+        tv = (bal or {}).get("total_value")
+        if tv is not None and body.value > tv + 5.0:
+            raise HTTPException(
+                status_code=422,
+                detail="that's more than this account holds — the club can only deploy what's actually there",
+            )
     with db() as conn:
         conn.execute(
             # intent = the same pair, but NEVER rewritten by the executor's
@@ -568,6 +583,16 @@ def delete_account(body: DeleteAccountBody, member: dict = Depends(require_sessi
     if member.get("role") == "owner":
         raise HTTPException(status_code=403,
                             detail="the owner account can't delete itself — transfer ownership first")
+    # Mid-execution freeze (same predicate as /me/allocation): between close
+    # and execute the member's frozen vote weight is being turned into real
+    # orders on every account — deleting mid-window would defect from a basket
+    # they shaped and fund none of it.
+    from ..services import voting as _voting
+    if _voting.member_in_closed_unexecuted_session(member["id"]):
+        raise HTTPException(
+            status_code=409,
+            detail="this cycle's basket is executing — deletion unlocks after today's run completes",
+        )
     mid = member["id"]
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -581,7 +606,7 @@ def delete_account(body: DeleteAccountBody, member: dict = Depends(require_sessi
             # run, so zeroing only the derived column left the components intact
             # and the next score_cycle recomputed the deleted member's
             # reputation straight back out of them.
-            conn.execute("UPDATE member_settings SET opted_in=0, buying_power_pct=0, "
+            conn.execute("UPDATE member_settings SET opted_in=0, "
                          "daily_cap_usd=0, voting_power=0, voting_power_share=0, "
                          "last_capital_usd=0, alloc_type='percent', alloc_value=0, "
                          "accuracy=0, accuracy_short=0, accuracy_long=0, "

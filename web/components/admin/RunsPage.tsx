@@ -4,6 +4,7 @@
 // runs included: a missing record is itself a finding), newest first, with
 // "load more" paging on a before=<id> cursor. Clicking a row expands the
 // run's full summary — per-member order tables, the skip-reason breakdown,
+// the commitment write-downs and carry drains the order table has no row for,
 // the verification report, and the raw JSON — so execution forensics never
 // need ssh + journalctl again (the 08/19 deferred-buys incident was debugged
 // exactly that way).
@@ -115,10 +116,51 @@ function memberRows(members: AdminRunMember[]): {
   return rows;
 }
 
+/** Cents matter for carry and for a clamped commitment — util's `money` rounds
+ *  them off, so these figures get their own formatter. */
+function usd(n: number): string {
+  return n.toLocaleString(undefined, {
+    style: "currency", currency: "USD",
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  });
+}
+
+/** Commitment write-downs and carry drains are MEMBER-level, so they have no
+ *  row in the order table and used to be visible only in the raw JSON. Both are
+ *  the member's real money moving: the clamp reduces what the club may deploy
+ *  for them from here on, the drain redeploys dollars an earlier cycle missed. */
+function moneyNotes(members: AdminRunMember[]): { name: string; kind: "clamp" | "drain"; text: string }[] {
+  const out: { name: string; kind: "clamp" | "drain"; text: string }[] = [];
+  for (const m of members) {
+    const name = m.name || (m.member_id != null ? `member ${m.member_id}` : "—");
+    const c = m.commit_clamped;
+    if (c && typeof c === "object") {
+      // Figures come off the wire: the type is a claim, Number.isFinite is proof.
+      const from = Number(c.from);
+      const to = Number(c.to);
+      if (Number.isFinite(from) && Number.isFinite(to)) {
+        out.push({
+          name, kind: "clamp",
+          text: `committed stake written down ${usd(from)} → ${usd(to)} — the account's deployable capacity`,
+        });
+      }
+    }
+    const d = Number(m.carry_drained);
+    if (Number.isFinite(d) && d > 0) {
+      out.push({
+        name, kind: "drain",
+        text: `${usd(d)} an earlier cycle could not deploy redeployed into this slice`,
+      });
+    }
+  }
+  return out;
+}
+
 function RunSummaryBody({ det }: { det: AdminRunDetail }) {
   const s: AdminRunSummary | null = det.summary;
   if (!s) return <div className="text-[12px] text-subtle">no summary recorded for this run</div>;
   const rows = memberRows(s.members ?? []);
+  const notes = moneyNotes(s.members ?? []);
   const skips = Object.entries(s.skipped ?? {});
   const v = s.verification;
 
@@ -150,6 +192,24 @@ function RunSummaryBody({ det }: { det: AdminRunDetail }) {
               <Pill key={reason} tone="warn">{reason} <b>{n}</b></Pill>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* commitment write-downs + carry drains */}
+      {notes.length > 0 && (
+        <div>
+          <SectionLabel>Commitment &amp; carry</SectionLabel>
+          <ul className="space-y-0.5 text-[11.5px]">
+            {notes.map((n, i) => (
+              <li key={i}>
+                <span className="text-muted">{n.name}</span>
+                <span className="ml-2"><Pill tone={n.kind === "clamp" ? "warn" : "neutral"}>
+                  {n.kind === "clamp" ? "clamped" : "carry drained"}
+                </Pill></span>
+                <span className="ml-2 text-subtle">{n.text}</span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

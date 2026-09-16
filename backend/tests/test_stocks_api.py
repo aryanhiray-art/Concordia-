@@ -44,9 +44,17 @@ _ip_counter = [0]
 def setup_module(_):
     init_db()
     with db() as conn:
+        # Upsert, not INSERT OR IGNORE: the DB is shared process-wide, and other
+        # modules seed placeholder universe rows whose name is just the symbol
+        # (test_vote_reminders._seed_universe). OR IGNORE would leave that
+        # placeholder in place and the name assertions below would read 'AAPL'
+        # instead of 'Apple Inc.' whenever that module imported first. This
+        # mirrors app.seed.seed_universe, which upserts for the same reason.
         conn.execute(
-            "INSERT OR IGNORE INTO universe(symbol,name,active,sort_order) "
-            "VALUES('AAPL','Apple Inc.',1,1),('AMD','Advanced Micro Devices',1,2)"
+            "INSERT INTO universe(symbol,name,active,sort_order) "
+            "VALUES('AAPL','Apple Inc.',1,1),('AMD','Advanced Micro Devices',1,2) "
+            "ON CONFLICT(symbol) DO UPDATE SET name=excluded.name,"
+            "active=excluded.active,sort_order=excluded.sort_order"
         )
 
 

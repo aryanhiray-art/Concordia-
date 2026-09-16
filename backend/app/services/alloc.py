@@ -225,7 +225,11 @@ def compound_budget(alloc_value: float | None, alloc_applied: float | None,
     sit as cash, the next mark cannot see them, and they leave the slice
     forever. It is recomputed fresh each buy leg (never accumulated) and is
     always club money we ourselves declined to spend — never the member's
-    personal cash, so a market LOSS is still never topped up.
+    personal cash, so a market LOSS is still never topped up. A NEGATIVE
+    carry is the crumb repair's debit: the $1 top-ups are club money fronted
+    from account cash and absorbed into the club slice at the next valuation,
+    so netting the spend back out keeps the committed stake flat. The sum
+    still floors at zero.
 
     An empty slice (< $1 held) bootstraps from the full stake — first joiners,
     liquidated accounts, and pre-feature members (alloc_applied NULL) all start
@@ -233,7 +237,7 @@ def compound_budget(alloc_value: float | None, alloc_applied: float | None,
     MAX_NOTIONAL_PER_MEMBER, and the member's own daily cap.
     """
     v = alloc_value or 0.0
-    cv = (club_value or 0.0) + max(0.0, slice_carry or 0.0)
+    cv = max(0.0, (club_value or 0.0) + (slice_carry or 0.0))
     if cv < 1.00:
         target = v
     else:

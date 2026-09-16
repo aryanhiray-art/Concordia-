@@ -242,6 +242,27 @@ def corporate_action_shares(member_id: int) -> dict[str, float]:
     return out
 
 
+def trueup_shares(member_id: int) -> dict[str, float]:
+    """Share deltas from ledger_trueup corrective rows ($0 executions tagged
+    'ledger_trueup'). The derived position must fold these exactly like
+    corporate-action rows: without them the same phantom re-detects every >48h
+    forever, and each duplicate over-subtracts from the ledger (observed: 3x
+    TRUEUP rows driving 17 member/symbol nets negative)."""
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT symbol, side, place_json FROM executions "
+            "WHERE member_id=? AND status='placed' AND place_json LIKE '%ledger_trueup%'",
+            (member_id,)).fetchall()
+    out: dict[str, float] = {}
+    for r in rows:
+        q = _filled_qty(r["place_json"])
+        if not q:
+            continue
+        sign = -1.0 if r["side"] == "sell" else 1.0
+        out[r["symbol"]] = out.get(r["symbol"], 0.0) + sign * q
+    return out
+
+
 def club_shares_derived(member_id: int, *, client=None,
                         account_number: str | None = None) -> dict[str, float]:
     """Feed-derived club position (>1e-9 only), keys ∩ club-ever-traded symbols.
@@ -267,6 +288,11 @@ def club_shares_derived(member_id: int, *, client=None,
             folded[renames.get(sym, sym)] = folded.get(renames.get(sym, sym), 0.0) + q
         net = folded
     for sym, q in corporate_action_shares(member_id).items():
+        net[sym] = net.get(sym, 0.0) + q
+    # Trueup corrections fold the same way: a TRUEUP row is a $0 SELL carrying
+    # the phantom quantity, so folding it SUBTRACTS the phantom from the derived
+    # net and re-detection stops (compensating repair buys add back).
+    for sym, q in trueup_shares(member_id).items():
         net[sym] = net.get(sym, 0.0) + q
     club_syms = _club_traded_symbols(member_id)
     out: dict[str, float] = {}

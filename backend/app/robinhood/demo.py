@@ -185,7 +185,7 @@ class DemoClient:
                 # the first cycle decided AFTER the stake was committed is the
                 # buy-in; no such session yet -> still all cash
                 decided = c.execute(
-                    "SELECT 1 FROM vote_sessions WHERE status IN ('closed','executed') "
+                    "SELECT 1 FROM vote_sessions WHERE status IN ('closed','executed','lapsed') "
                     "AND COALESCE(closed_at, opened_at, 0) > ? LIMIT 1",
                     (int(r["updated_at"] or 0),)).fetchone()
             if not decided:

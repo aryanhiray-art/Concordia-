@@ -64,6 +64,13 @@ def next_trading_day(d: _dt.date | None = None) -> _dt.date:
     return d
 
 
+def prev_trading_day(d: _dt.date | None = None) -> _dt.date:
+    d = (d or today_et()) - _dt.timedelta(days=1)
+    while not is_trading_day(d):
+        d -= _dt.timedelta(days=1)
+    return d
+
+
 def at_et(d: _dt.date, hhmm: str) -> _dt.datetime:
     """Combine a date with an `HH:MM` Eastern wall-clock time → aware datetime."""
     h, m = (int(x) for x in hhmm.split(":"))

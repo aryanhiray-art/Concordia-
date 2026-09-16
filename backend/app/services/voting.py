@@ -395,11 +395,19 @@ def member_has_live_ballot(member_id: int) -> bool:
     voting_power, not opted_in), but executor._opted_members funds only
     opted_in=1 members. Opting out mid-ballot therefore let a member choose the
     basket and pay for none of it — the cost landing on whoever stayed in.
+
+    Bounded to sessions that can still execute: session ids are AUTOINCREMENT
+    in trade-date order, so a session older than the newest executed one can
+    never execute — its freeze protects nothing (session 29 locked the owner
+    out for 9 days). Terminal states ('executed', 'lapsed') are excluded by
+    the predicate itself, not only by the id-bound.
     """
     with db() as conn:
         row = conn.execute(
             "SELECT 1 FROM votes v JOIN vote_sessions s ON s.id = v.session_id "
-            "WHERE v.member_id=? AND s.status != 'executed' LIMIT 1",
+            "WHERE v.member_id=? AND s.status NOT IN ('executed','lapsed') "
+            "AND s.id > (SELECT COALESCE(MAX(id),0) FROM vote_sessions "
+            "WHERE status='executed') LIMIT 1",
             (member_id,)).fetchone()
     return row is not None
 
@@ -411,11 +419,16 @@ def member_in_closed_unexecuted_session(member_id: int) -> bool:
     basket but the money hasn't been deployed — so their allocation must not be
     editable, else they could inflate power at close and withdraw stake before
     execute (free-rider, finding #9).
+
+    Same id-bound as member_has_live_ballot: a 'closed' session older than the
+    newest executed one can never execute, so it must not hold the lock.
     """
     with db() as conn:
         row = conn.execute(
             "SELECT 1 FROM vote_sessions vs JOIN votes v ON v.session_id=vs.id "
-            "WHERE vs.status='closed' AND v.member_id=? LIMIT 1",
+            "WHERE vs.status='closed' AND v.member_id=? "
+            "AND vs.id > (SELECT COALESCE(MAX(id),0) FROM vote_sessions "
+            "WHERE status='executed') LIMIT 1",
             (member_id,),
         ).fetchone()
     return row is not None
@@ -506,7 +519,7 @@ def _latest_decided_session_id() -> int | None:
     """
     with db() as conn:
         row = conn.execute(
-            "SELECT id FROM vote_sessions WHERE status IN ('closed','executed') "
+            "SELECT id FROM vote_sessions WHERE status IN ('closed','executed','lapsed') "
             "ORDER BY trade_date DESC LIMIT 1"
         ).fetchone()
     return row["id"] if row else None
@@ -521,11 +534,17 @@ def _status_display(session, latest_decided_id: int | None) -> str:
     status = session["status"]
     if status == "closed" and session["id"] != latest_decided_id:
         return "executed"
+    if status == "lapsed":
+        # A retired stuck cycle. It decided a basket and may have traded part of
+        # it, so to a member it reads exactly like any other past cycle — the
+        # word 'lapsed' is internal bookkeeping the product has never used, and
+        # the app's status union does not carry it.
+        return "executed"
     return status
 
 
 def club_history(limit: int = 30) -> list[dict]:
-    """The club's shared record: DECIDED sessions (closed/executed), newest first.
+    """The club's shared record: DECIDED sessions (closed/executed/lapsed), newest first.
 
     The fund's history is not unique per person — every member sees the same
     record, so nothing here may identify a member (no emails, names, ids, or
@@ -538,7 +557,7 @@ def club_history(limit: int = 30) -> list[dict]:
     limit = max(1, min(int(limit), 60))
     with db() as conn:
         rows = conn.execute(
-            "SELECT * FROM vote_sessions WHERE status IN ('closed','executed') "
+            "SELECT * FROM vote_sessions WHERE status IN ('closed','executed','lapsed') "
             "ORDER BY trade_date DESC LIMIT ?",
             (limit,),
         ).fetchall()
@@ -575,7 +594,7 @@ def member_vote_history(member_id: int, limit: int = 30) -> list[dict]:
         mine = member_picks(s["id"], member_id)
         # Belt-and-braces: gate on status, not just picks_json presence — an
         # open session must never show a basket, whatever the row contains.
-        decided = s["status"] in ("closed", "executed")
+        decided = s["status"] in ("closed", "executed", "lapsed")
         basket = [p["symbol"] for p in session_picks(dict(s))] if decided else []
         chosen = set(basket)
         out.append({

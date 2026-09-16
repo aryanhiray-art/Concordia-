@@ -87,9 +87,12 @@ def plan(member_id: int, symbol: str) -> dict:
             for h in positions.holdings_with_value(member_id)}
     live_qty = live.get(symbol, 0.0)
 
-    qty = min(club_qty, live_qty)
+    # Floor, never round: round(qty, 6) rounds UP on a 7th-decimal digit ≥ 5,
+    # so a >6dp live balance could plan one microshare MORE than the account
+    # holds — rescue_sell's own floor_qty6 then becomes an exact no-op.
+    qty = executor.floor_qty6(min(club_qty, live_qty))
     out.update({"club_qty": round(club_qty, 6), "account_qty": round(live_qty, 6),
-                "sell_qty": round(qty, 6), "in_basket": False,
+                "sell_qty": qty, "in_basket": False,
                 "armed": is_armed(), "is_live": settings.is_live,
                 "halted": kv_get("halt") == "1"})
     if club_qty <= 1e-9:

@@ -37,6 +37,19 @@ from . import alloc, membership, positions, reconcile, runreports, voting
 # is stuck, not pending.
 STALE_BASKET_DAYS = 5
 
+
+def _cycle_gap_days() -> int:
+    """Calendar days between consecutive cycle sessions under the live cadence.
+
+    The crash-continuation branch looks at the session BEFORE this one, so a
+    fixed bound silently becomes dead code whenever the cadence is slower than
+    it: on the weekly cadence consecutive sessions are 7 days apart, and a
+    5-day window never opens. Values are generous — they span the weekend and a
+    holiday that pushes the next cycle day out.
+    """
+    return {"daily": 4, "alternate": 5, "mwf": 5, "weekly": 10}.get(
+        settings.cycle_cadence, 10)
+
 # Both-day buying-power poll: how long the buy leg will wait for Robinhood to
 # credit the morning's sale proceeds (fill + ledger lag measured >8s on 08/19),
 # and how often it looks.
@@ -60,8 +73,9 @@ BP_POLL_FLAT_POLLS = 3
 # A position more than this fraction below its target, whose top-up would be
 # under the broker's $1 minimum order, is exited and re-bought at the right
 # size. Small enough to keep a small stake tracking the basket, large enough
-# that cent-level drift does not churn a round trip every cycle.
-_RESIZE_MIN_FRAC = 0.05
+# that cent-level drift does not churn a round trip every cycle. 0.05 was not:
+# near-daily ~5% drift round-tripped a full position to close <$1 of drift.
+_RESIZE_MIN_FRAC = 0.15
 
 
 def _session_age_days(session: dict) -> int | None:
@@ -149,7 +163,9 @@ def _opted_members() -> list[dict]:
             # deliberately leaves their brokerage connection alone (it is their
             # account), so opted_in alone does not exclude them — without this
             # they would lose their vote and keep getting real orders placed.
-            f"WHERE s.opted_in=1 AND {membership.active_clause('m')}"
+            # Bots have no brokerage and never will — excluding them here keeps
+            # the run report to the humans instead of 20 not_connected rows.
+            f"WHERE s.opted_in=1 AND m.is_bot=0 AND {membership.active_clause('m')}"
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -205,31 +221,143 @@ def already_placed_rows(session_id: int) -> bool:
 
 
 def _clear_replanable(session_id: int) -> None:
-    """Drop prior non-final rows so a re-run is clean; never touch 'placed'."""
+    """Drop prior non-final rows so a re-run is clean; never touch 'placed' —
+    and never 'error': errored-order evidence survives until positively
+    resolved (reconcile promotion, supersession, or session abandonment), so
+    a re-run can never blindly re-place an order the broker may have taken.
+    'superseded' rows are terminal leftovers and may be garbage-collected."""
     with db() as conn:
         conn.execute(
             "DELETE FROM executions WHERE session_id=? AND status IN "
-            "('planned','reviewed','skipped','error')",
+            "('planned','reviewed','skipped','superseded')",
             (session_id,),
         )
 
 
+def _supersede_error(session_id: int, member_id: int, symbol: str, side: str) -> None:
+    """Flip surviving 'error' rows for this key to terminal 'superseded'.
+
+    Called ONLY where a new broker order is actually about to be placed (or where
+    the old order has been positively resolved): the stale row must not survive to
+    be fuzzy-matched against the NEW order and promoted, double-counting the
+    ledger. A review-only path — a dry run, a blocked alert, a review that raised —
+    places nothing, so it must leave the evidence alone; the row is the only proof
+    that an order the broker may have accepted exists.
+    """
+    with db() as conn:
+        conn.execute(
+            "UPDATE executions SET status='superseded' WHERE session_id=? AND "
+            "member_id=? AND symbol=? AND side=? AND status='error'",
+            (session_id, member_id, symbol, side))
+
+
+def _hold_strand(session_id: int, member_id: int, will_place: bool) -> None:
+    """Record that this member was stranded mid-pass with orders in flight.
+
+    The hold has to outlive the RUN: a terminal auth failure marks the
+    connection 'error', so on the next run the member is skipped at the very
+    top and that run's summary shows no strand at all. Scanning only the
+    current summary would flip the session to 'executed' there, and the sold
+    proceeds could never be redeployed. GC'd with the other per-session memos.
+    """
+    if not will_place:
+        return
+    with db() as conn:
+        conn.execute("INSERT INTO kv(key,value) VALUES(?,'1') "
+                     "ON CONFLICT(key) DO UPDATE SET value='1'",
+                     (f"strand_hold:{session_id}:{member_id}",))
+
+
+def _clear_strand(session_id: int, member_id: int) -> None:
+    """Release the hold once this member's pass completes normally."""
+    with db() as conn:
+        conn.execute("DELETE FROM kv WHERE key=?",
+                     (f"strand_hold:{session_id}:{member_id}",))
+
+
+def _stranded_members(session_id: int) -> list[int]:
+    """Members still holding this session open after a mid-pass strand."""
+    with db() as conn:
+        rows = conn.execute("SELECT key FROM kv WHERE key LIKE ?",
+                            (f"strand_hold:{session_id}:%",)).fetchall()
+    out: list[int] = []
+    for r in rows:
+        try:
+            out.append(int(str(r["key"]).rsplit(":", 1)[1]))
+        except (IndexError, ValueError):
+            continue
+    return out
+
+
+def _retire_stale_sessions(current_sid: int | None = None) -> None:
+    """Terminal-age stuck sessions: a 'closed' session older than STALE_BASKET_DAYS
+    can never trade (the buy leg refuses it), so it must stop freezing its voters and
+    stop feeding error rows to every reconcile pass. Flips remaining 'error' rows to
+    'abandoned' (text preserved) and the session to 'lapsed'. Deliberately does
+    NOT return an abandoned buy's dollars to the slice: only reconcile reads the
+    broker, so only reconcile can prove an order never landed, and crediting one
+    that DID land would put the same money in the slice twice. An unreachable
+    member's dollars therefore stay out — the conservative direction.
+    Also GCs cycle_budget stamps of long-dead sessions. `current_sid` is never retired — a manual run of an
+    old session must not lapse the very cycle it is executing. Best-effort, never raises.
+    """
+    try:
+        with db() as conn:
+            rows = conn.execute(
+                "SELECT id, trade_date FROM vote_sessions WHERE status='closed'"
+            ).fetchall()
+        for r in rows:
+            if current_sid is not None and r["id"] == current_sid:
+                continue
+            age = _session_age_days({"trade_date": r["trade_date"]})
+            if age is None or age <= STALE_BASKET_DAYS:
+                continue
+            with db() as conn:
+                cur = conn.execute(
+                    "UPDATE executions SET status='abandoned' "
+                    "WHERE session_id=? AND status='error'", (r["id"],))
+                conn.execute(
+                    "UPDATE vote_sessions SET status='lapsed' "
+                    "WHERE id=? AND status='closed'", (r["id"],))
+            audit("system", "session_lapsed", str(r["id"]),
+                  {"trade_date": r["trade_date"], "abandoned_errors": cur.rowcount})
+        # Stamp GC: cycle_budget:{sid}:{mid} keys are write-once per session and
+        # only ever reread within the cycle — anything 10+ sessions back is dead.
+        with db() as conn:
+            max_sid = conn.execute(
+                "SELECT COALESCE(MAX(id),0) FROM vote_sessions").fetchone()[0]
+            keys = [r["key"] for r in conn.execute(
+                "SELECT key FROM kv WHERE key LIKE 'cycle_budget:%' "
+                "OR key LIKE 'carry_drained:%' OR key LIKE 'repair_spend:%' "
+                "OR key LIKE 'strand_hold:%'").fetchall()]
+            for k in keys:
+                try:
+                    k_sid = int(k.split(":")[1])
+                except (IndexError, ValueError):
+                    continue
+                if k_sid < max_sid - 10:
+                    conn.execute("DELETE FROM kv WHERE key=?", (k,))
+    except Exception:  # noqa: BLE001 — retirement is bookkeeping, never blocks a run
+        pass
+
+
 # ─── duplicate-buy recovery (A4) ─────────────────────────────────────────────
-# A live buy that raises AFTER the broker accepted it is recorded status='error';
-# _clear_replanable then deletes that row and a re-run would re-place full size.
-# So: capture the errored buy keys BEFORE the clear, and before re-placing any
-# of them verify against the broker's own recent orders. Never re-place blind.
+# A live buy that raises AFTER the broker accepted it is recorded status='error'.
+# The row survives every clear (see _clear_replanable) until positively resolved:
+# before re-placing any of them verify against the broker's own recent orders,
+# and supersede the stale row first. Never re-place blind.
 
 def _error_buy_rows(session_id: int) -> dict[tuple[int, str], dict]:
-    """(member_id, symbol) → {created_at, dollar_amount} for this session's
-    errored BUY rows. Must run BEFORE _clear_replanable deletes them."""
+    """(member_id, symbol) → {id, ref_id, created_at, dollar_amount} for this
+    session's errored BUY rows."""
     with db() as conn:
         rows = conn.execute(
-            "SELECT member_id, symbol, dollar_amount, created_at FROM executions "
+            "SELECT id, ref_id, member_id, symbol, dollar_amount, created_at FROM executions "
             "WHERE session_id=? AND side='buy' AND status='error'",
             (session_id,),
         ).fetchall()
-    return {(r["member_id"], r["symbol"]): {"created_at": r["created_at"],
+    return {(r["member_id"], r["symbol"]): {"id": r["id"], "ref_id": r["ref_id"],
+                                            "created_at": r["created_at"],
                                             "dollar_amount": _num(r["dollar_amount"])}
             for r in rows}
 
@@ -396,11 +524,18 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
     # real fills so club_shares is fill-based (the "not all shares sold" fix), and
     # demotes broker-rejected 'placed' rows. Best-effort; never blocks a run.
     try:
-        reconcile.reconcile_all()
+        reconcile.reconcile_all(dry_run=not will_place)
     except Exception:  # noqa: BLE001
         pass
-    # A4: remember which buys ERRORED in a prior run of this session — the broker
-    # may have accepted them — before _clear_replanable deletes the evidence.
+    # Retire stuck sessions only AFTER reconcile has had its last-chance
+    # promotion pass over their error rows, and only on a run that is allowed to
+    # move real state — an inspection dry run must not lapse sessions, abandon
+    # rows or GC stamps. Best-effort, never raises.
+    if will_place:
+        _retire_stale_sessions(current_sid=sid)
+    # A4: remember which buys ERRORED in a prior run of this session — the
+    # broker may have accepted them. The rows survive _clear_replanable; they
+    # are resolved below by verification (promote/supersede), never deleted.
     prior_error_buys = _error_buy_rows(sid)
     # A dry run over a cycle that ALREADY PLACED is an inspection, not a
     # re-plan: clearing there overwrote the live run's skipped/reviewed rows
@@ -408,7 +543,9 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
     # actually deferred (observed 2026-08-24 — a verification dry-run erased
     # why two members' buys did not place; 'placed' rows survived, so only the
     # explanation was lost). A dry run over a cycle that has placed nothing
-    # still re-plans freely, which is what planning a cycle needs.
+    # still re-plans freely, which is what planning a cycle needs. 'error'
+    # rows are never in the delete list, so no inspection can destroy the
+    # recovery evidence either way.
     if will_place or not already_placed_rows(sid):
         _clear_replanable(sid)
     already = _placed_keys(sid)
@@ -440,18 +577,51 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
               {"member_id": msum_["member_id"], "reason": reason})
 
     # Opted-OUT humans get a summary row too (bots excluded) — visibility only,
-    # they are never processed.
+    # they are never processed. Active members only: a departed/anonymized
+    # member must not appear as an eternal "opted out" row in every report.
     with db() as conn:
         opted_out = conn.execute(
             "SELECT m.id AS member_id, m.display_name FROM members m "
             "LEFT JOIN member_settings s ON s.member_id=m.id "
-            "WHERE m.is_bot=0 AND COALESCE(s.opted_in,0)=0 ORDER BY m.id"
+            f"WHERE m.is_bot=0 AND COALESCE(s.opted_in,0)=0 "
+            f"AND {membership.active_clause('m')} ORDER BY m.id"
         ).fetchall()
     for r in opted_out:
         _skip_member({"member_id": r["member_id"], "name": r["display_name"],
                       "orders": [], "note": "opted out"}, "opted_out")
 
     from ..db import kv_get, kv_set
+
+    def _mature_clamp(msum_: dict, mid_: int, ride: float, eff: float, tol: float) -> float:
+        """Over-commitment auto-clamp with maturation: a commitment above the
+        account's deployable capacity (club slice + cash) would defer/carry the
+        excess every cycle forever. One low reading must not shrink a
+        commitment (a transient BP dip or bad read), so the write-down matures
+        only on the 2nd consecutive materially-clamped CYCLE — the stored
+        session id is what makes it cycles rather than runs, since a split
+        cadence and same-day re-runs both re-enter this for one cycle.
+        Persisted only on live runs. Returns the commitment figure the
+        write-back should honor (never the daily-capped budget: a daily cap
+        limits deployment, it never rewrites the commitment)."""
+        key = f"clamp_pending:{mid_}"
+        try:
+            prev = json.loads(kv_get(key) or "{}")
+            count, last_sid = int(prev.get("n") or 0), prev.get("sid")
+        except (TypeError, ValueError):
+            count, last_sid = 0, None
+        if ride - eff > tol:
+            if last_sid != sid:
+                count += 1
+            if will_place:
+                kv_set(key, json.dumps({"n": count, "sid": sid}))
+            if count >= 2:
+                msum_["commit_clamped"] = {"from": round(ride, 2), "to": round(eff, 2)}
+                return round(eff, 2)
+            return round(ride, 2)
+        if will_place:
+            kv_set(key, json.dumps({"n": 0, "sid": sid}))
+        return round(ride, 2)
+
     members = _opted_members()
     for m_idx, m in enumerate(members):
         if kv_get("halt") == "1":
@@ -503,8 +673,12 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         pdata = port.get("data", port) if isinstance(port, dict) else {}
         bp = pdata.get("buying_power") or (pdata.get("buying_power") or {})
         buying_power = _num(bp.get("buying_power") if isinstance(bp, dict) else bp) or 0.0
-        total_value = (_num(pdata.get("total_value")) or _num(pdata.get("equity_value"))
-                       or buying_power)
+        # STRICT account value — never fall back to buying_power: a malformed
+        # payload collapsing capacity to residual cash would size a near-zero
+        # budget and liquidate the member's slice. Unreadable → skip (below).
+        tv_raw = _num(pdata.get("total_value"))
+        if tv_raw is None:
+            tv_raw = _num(pdata.get("equity_value"))
 
         # What the CLUB holds for this member — the sell candidate set + upper bound.
         # "derived" reconstructs it from the broker's agentic order feed (drift-proof,
@@ -535,6 +709,34 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         # holding (valuation + sells).
         prices = _quotes(client, list(set(picks) | set(held)))
 
+        # Mark the CLUB slice from live positions × quotes — feeds the capacity
+        # clamp in BOTH budget branches and the account-value cross-check below.
+        # A missing quote UNDERVALUES the slice → the shortfall would read as
+        # "over target" and trim real positions. Fail closed.
+        club_value = 0.0
+        unpriced = []
+        for _sym, _qty in held.items():
+            _q = min(_qty, live.get(_sym, 0.0))
+            if _q <= 0:
+                continue
+            _p = prices.get(_sym)
+            if _p is None:
+                unpriced.append(_sym)
+            else:
+                club_value += _q * _p
+        if unpriced:
+            _skip_member(msum, "unquotable_holding",
+                         f"no quote for club valuation ({','.join(unpriced[:3])}) — skipping this run")
+            continue
+        # Fail closed on the account value: an account cannot be worth
+        # materially less than the club positions inside it — a violation is an
+        # inconsistent read. Must happen BEFORE any budget stamp is written.
+        total_value = tv_raw
+        if total_value is None or total_value < club_value - max(0.05 * club_value, 5.0):
+            _skip_member(msum, "transient_rh_error",
+                         "unreadable/inconsistent account value — skipping this run")
+            continue
+
         # ── budget ──────────────────────────────────────────────────────────
         # COMPOUNDING (default): a dollar stake rides its own P&L in both
         # directions — budget = mark-to-market club value, adjusted by any
@@ -557,6 +759,11 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         rides = compounding and m["alloc_type"] == "dollar"
         budget_stamp = f"cycle_budget:{sid}:{mid}"
         stamped_stake = None
+        # The commitment figure the write-back should persist. Derived from the
+        # UNCAPPED ride vs deployable capacity (never from the daily-capped
+        # budget — a daily cap limits deployment, it never rewrites the
+        # commitment); None → the write-back falls back to the budget.
+        commit_target: float | None = None
         if rides:
             _stamped = kv_get(budget_stamp)
             if _stamped:
@@ -569,6 +776,8 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                     _st = json.loads(_stamped)
                     budget = float(_st["budget"])
                     stamped_stake = float(_st["stake"])
+                    _cm = _st.get("commit")
+                    commit_target = float(_cm) if _cm is not None else None
                 except (TypeError, ValueError, KeyError):
                     # Fail CLOSED like every other unreadable input here: a
                     # coerced 0 budget would liquidate the member's whole slice.
@@ -576,42 +785,132 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                                  "unreadable cycle budget stamp — skipping this run")
                     continue
             else:
-                club_value = 0.0
-                unpriced = []
-                for _sym, _qty in held.items():
-                    _q = min(_qty, live.get(_sym, 0.0))
-                    if _q <= 0:
-                        continue
-                    _p = prices.get(_sym)
-                    if _p is None:
-                        unpriced.append(_sym)
-                    else:
-                        club_value += _q * _p
-                if unpriced:
-                    # A missing quote UNDERVALUES the slice → the shortfall would
-                    # read as "over target" and trim real positions. Fail closed.
-                    _skip_member(msum, "transient_rh_error",
-                                 f"no quote for club valuation ({','.join(unpriced[:3])}) — skipping this run")
-                    continue
-                # The committed figure in DOLLARS. A percent stake is a way of
-                # SPECIFYING the amount; once deployed it compounds like any
-                # other, so the percentage is resolved against the account only
-                # while the slice is still empty.
-                stake_usd = float(m["alloc_value"] or 0.0)
-                budget = alloc.compound_budget(stake_usd, m.get("alloc_applied"),
-                                               club_value, total_value,
-                                               daily_cap_usd=m.get("daily_cap_usd"),
-                                               slice_carry=m.get("slice_carry"))
-                # Stamp the stake the budget EMBODIES alongside it: the buy-day
-                # write-back must credit that figure, not whatever the member
-                # has since changed it to (a non-voting member can edit their
-                # stake mid-cycle — the vote-based freeze doesn't cover them).
-                stamped_stake = float(stake_usd or 0.0)
-                kv_set(budget_stamp, json.dumps({"budget": round(budget, 2),
-                                                 "stake": stamped_stake}))
+                budget = None
+                # Crash continuation: a 'both' day that placed its SELLS and
+                # then died before any buy leaves the proceeds as cash the
+                # fresh positions-only mark below cannot see — the slice would
+                # silently shrink by the sold notional. If the immediately
+                # previous session left a stamp, never executed, sold for this
+                # member and bought nothing, this run IS that interrupted
+                # cycle's buy leg: reuse its stamp verbatim (re-clamped), and
+                # retire the old stamp so it can never fold forward twice.
+                with db() as conn:
+                    _prev = conn.execute(
+                        "SELECT id, status, trade_date FROM vote_sessions "
+                        "WHERE id < ? ORDER BY id DESC LIMIT 1", (sid,)).fetchone()
+                if _prev is not None and _prev["status"] != "executed":
+                    _prev_key = f"cycle_budget:{_prev['id']}:{mid}"
+                    _prev_stamp = kv_get(_prev_key)
+                    _prev_age = _session_age_days(dict(_prev))
+                    if (_prev_stamp and _prev_age is not None
+                            and _prev_age <= max(STALE_BASKET_DAYS, _cycle_gap_days())):
+                        with db() as conn:
+                            _sold = conn.execute(
+                                "SELECT COUNT(*) FROM executions WHERE session_id=? "
+                                "AND member_id=? AND side='sell' AND status='placed'",
+                                (_prev["id"], mid)).fetchone()[0]
+                            _bought = conn.execute(
+                                "SELECT COUNT(*) FROM executions WHERE session_id=? "
+                                "AND member_id=? AND side='buy' AND status='placed'",
+                                (_prev["id"], mid)).fetchone()[0]
+                        if _sold > 0 and _bought == 0:
+                            try:
+                                _pst = json.loads(_prev_stamp)
+                                _pb = float(_pst["budget"])
+                                _ps = float(_pst["stake"])
+                                _pc = _pst.get("commit")
+                            except (TypeError, ValueError, KeyError):
+                                pass
+                            else:
+                                _pb = min(_pb, total_value, settings.max_notional_per_member)
+                                _pcap = m.get("daily_cap_usd")
+                                if _pcap is not None and _pcap > 0:
+                                    _pb = min(_pb, _pcap)
+                                budget = round(max(0.0, _pb), 2)
+                                stamped_stake = _ps
+                                commit_target = float(_pc) if _pc is not None else None
+                                if will_place:
+                                    kv_set(budget_stamp, json.dumps(
+                                        {"budget": budget, "stake": stamped_stake,
+                                         "commit": commit_target}))
+                                    with db() as conn:
+                                        # The adopted budget was sized before
+                                        # any credit that cycle drained, so the
+                                        # drain must ride forward with it or the
+                                        # write-back overwrites those dollars
+                                        # out of existence.
+                                        _pdk = f"carry_drained:{_prev['id']}:{mid}"
+                                        _pd = (conn.execute(
+                                            "SELECT value FROM kv WHERE key=?",
+                                            (_pdk,)).fetchone() or {"value": None})["value"]
+                                        if _pd:
+                                            conn.execute(
+                                                "INSERT INTO kv(key,value) VALUES(?,?) "
+                                                "ON CONFLICT(key) DO UPDATE SET "
+                                                "value=excluded.value",
+                                                (f"carry_drained:{sid}:{mid}", _pd))
+                                            conn.execute("DELETE FROM kv WHERE key=?", (_pdk,))
+                                        conn.execute("DELETE FROM kv WHERE key=?",
+                                                     (_prev_key,))
+                                        # This budget re-deploys what the
+                                        # interrupted cycle could not, so its
+                                        # errored buys must not ALSO be credited
+                                        # back to the slice later — that would
+                                        # spend the same dollars twice.
+                                        conn.execute(
+                                            "UPDATE executions SET status='superseded' "
+                                            "WHERE session_id=? AND member_id=? AND side='buy' "
+                                            "AND status='error'", (_prev["id"], mid))
+                                    audit("system", "budget_carried_forward", str(sid),
+                                          {"member_id": mid, "from_session": _prev["id"],
+                                           "budget": budget})
+                if budget is None:
+                    # The committed figure in DOLLARS. A percent stake is a way of
+                    # SPECIFYING the amount; once deployed it compounds like any
+                    # other, so the percentage is resolved against the account only
+                    # while the slice is still empty.
+                    stake_usd = float(m["alloc_value"] or 0.0)
+                    carry = m.get("slice_carry")
+                    ride = alloc.compound_budget(stake_usd, m.get("alloc_applied"),
+                                                 club_value, total_value,
+                                                 daily_cap_usd=None, slice_carry=carry)
+                    # Deployable capacity = the marked slice (incl. carry) plus
+                    # spendable cash — a commitment above it can never fully
+                    # deploy and would defer/carry the excess forever.
+                    cv_marked = max(0.0, club_value + (carry or 0.0))
+                    capacity = cv_marked + deployable(buying_power)
+                    eff = min(ride, capacity)
+                    cap = m.get("daily_cap_usd")
+                    budget = round(max(0.0, min(eff, cap)
+                                       if (cap is not None and cap > 0) else eff), 2)
+                    commit_target = _mature_clamp(msum, mid, ride, eff,
+                                                  max(5.0, 0.02 * stake_usd))
+                    # Stamp the stake the budget EMBODIES alongside it: the buy-day
+                    # write-back must credit that figure, not whatever the member
+                    # has since changed it to (a non-voting member can edit their
+                    # stake mid-cycle — the vote-based freeze doesn't cover them).
+                    stamped_stake = float(stake_usd or 0.0)
+                    # Stamp only live-armed runs: dry/blocked runs recompute
+                    # fresh each time and must leave no live-sizing side effects.
+                    if will_place:
+                        kv_set(budget_stamp, json.dumps({"budget": round(budget, 2),
+                                                         "stake": stamped_stake,
+                                                         "commit": commit_target}))
         else:
-            budget = alloc.rebalance_budget(m["alloc_type"], m["alloc_value"], total_value,
-                                            buying_power, daily_cap_usd=m.get("daily_cap_usd"))
+            ride = alloc.rebalance_budget(m["alloc_type"], m["alloc_value"], total_value,
+                                          buying_power, daily_cap_usd=None)
+            capacity = club_value + deployable(buying_power)
+            eff = min(ride, capacity)
+            cap = m.get("daily_cap_usd")
+            budget = round(max(0.0, min(eff, cap)
+                               if (cap is not None and cap > 0) else eff), 2)
+            # Only a COMPOUNDING member's commitment is ever rewritten (the
+            # write-back is compounding-gated), so only they can mature a
+            # clamp — announcing a write-down to a pinned member would promise
+            # an adjustment that never happens. Their budget is still capped to
+            # capacity above; it simply doesn't touch the committed figure.
+            commit_target = (_mature_clamp(msum, mid, ride, eff, max(5.0, 0.02 * ride))
+                             if compounding else None)
             # The resolved dollars are what a compounding member is converted to
             # once this cycle deploys.
             stamped_stake = float(budget)
@@ -627,7 +926,20 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         # Broker minimum is $1/order, so we can hold at most floor(budget) names at
         # equal weight. With a small stake the member holds the TOP names only.
         n_eff = max(1, min(len(picks), int(budget // 1.00)))
-        basket = picks[:n_eff]
+        if n_eff < len(picks):
+            # Rank hysteresis: daily re-ranking crossing the n_eff boundary
+            # forced full sell/re-buy round trips of still-in-basket names
+            # almost every cycle for a small stake. A held name keeps its slot
+            # while it stays within n_eff+H club-wide; free slots fill by rank.
+            _H = 4        # rank band a held name may slip within before rotating out
+            _band = picks[:min(len(picks), n_eff + _H)]
+            keepers = [s for s in _band
+                       if min(held.get(s, 0.0), live.get(s, 0.0)) > 0][:n_eff]
+            fills = [s for s in picks if s not in keepers][:max(0, n_eff - len(keepers))]
+            _rank = {s: i for i, s in enumerate(picks)}
+            basket = sorted(keepers + fills, key=_rank.__getitem__)
+        else:
+            basket = picks[:n_eff]
         per_pick = math.floor((budget / n_eff) * 100) / 100.0
         want = set(basket)
         # Per-name dollar targets that SUM to the budget (water-fill): a name
@@ -677,25 +989,46 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         # weight target is trimmed back to target, so the proceeds redistribute
         # into the rest of the new basket.
         placed_sell_usd = 0.0   # ≈ proceeds in flight; the both-day BP poll's early-exit target
-        # Names repaired by a crumb top-up THIS session (DUSTFIX ref, placed):
-        # a same-day RE-RUN of this session (reboot catch-up, Execute-now)
-        # must not sell what the morning's repair just bought — that is the
-        # PDT day trade the repair design exists to avoid. Next session's ref
-        # differs, so tomorrow's exit fires normally.
-        repaired_today: set[str] = set()
-        if held:
-            _fix_refs = {ref_id_for(sid, mid, f"DUSTFIX:{s}"): s for s in held}
-            with db() as conn:
-                _marks = ",".join("?" * len(_fix_refs))
-                repaired_today = {
-                    _fix_refs[r["ref_id"]] for r in conn.execute(
-                        f"SELECT ref_id FROM executions WHERE status='placed' "
-                        f"AND ref_id IN ({_marks})", tuple(_fix_refs)).fetchall()
-                }
+        unpriced_sell_placed = False   # a placed sell with no quote → its proceeds are untracked
+        # PDT guard, keyed on TIME, not session: anything this member BOUGHT
+        # since the previous trading day's close (16:00 ET) must not be sold
+        # today — a same-day round trip is a FINRA day trade. Covers same-day
+        # re-runs selling the morning's buys, evening admin repairs filling at
+        # the open, and DUSTFIX crumb repairs (they are placed buy rows) —
+        # across ALL sessions. 'error' buys included conservatively (the
+        # broker may have accepted them).
+        from ..calendar_us import at_et, prev_trading_day
+        _pdt_cutoff = int(at_et(prev_trading_day(_today_et()), "16:00").timestamp())
+        with db() as conn:
+            bought_today = {r["symbol"] for r in conn.execute(
+                "SELECT DISTINCT symbol FROM executions WHERE member_id=? AND side='buy' "
+                "AND status IN ('placed','error') AND created_at >= ?",
+                (mid, _pdt_cutoff)).fetchall()}
+        # One member-scoped token refresh: a pass can outlive the access token
+        # (throttle retries + the 120s BP poll), and a mid-pass expiry must not
+        # spray per-order error rows. `op` re-reads `client`, so the single
+        # retry runs against the refreshed one with the same ref_id.
+        auth_retried = False
+        auth_stranded = False
+
+        def _broker(op):
+            nonlocal auth_retried, client
+            try:
+                return op()
+            except RHAuthError:
+                if auth_retried:
+                    raise
+                auth_retried = True
+                client = vault.ensure_client(mid)   # re-grab refreshes an expired token
+                return op()
         for symbol, qty in (sorted(held.items()) if phase in ("sell", "both") else []):
-            if symbol in repaired_today:
+            if auth_stranded:
                 msum["orders"].append({"symbol": symbol, "side": "sell", "status": "skipped",
-                                       "note": "repaired today — exits next session"})
+                                       "note": "auth expired mid-pass"})
+                continue
+            if symbol in bought_today:
+                msum["orders"].append({"symbol": symbol, "side": "sell", "status": "skipped",
+                                       "note": "bought today — PDT guard, exits next session"})
                 continue
             price = prices.get(symbol)
             # Reconcile the club ledger to the LIVE account BEFORE sizing. club_shares
@@ -710,20 +1043,28 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                 continue
             if symbol in want:
                 if price is None:
-                    continue                          # can't size a trim without a price
+                    # can't size a trim without a price — on the record, so a
+                    # dead quote on an in-basket name is not silent
+                    _record(sid, mid, symbol, None, ref_id_for(sid, mid, f"SELL:{symbol}"),
+                            "skipped", error="no quote for trim sizing", side="sell")
+                    msum["orders"].append({"symbol": symbol, "side": "sell",
+                                           "status": "skipped", "note": "no quote for trim sizing"})
+                    continue
                 _tgt = targets.get(symbol, per_pick)
                 excess = held_qty - (_tgt / price)    # shares above this name's water-fill target
                 short = -excess * price               # $ BELOW target (negative excess)
                 if excess * price >= 1.00:
                     sell_qty, why = excess, "trim to target"
-                elif (short >= _RESIZE_MIN_FRAC * _tgt and short < 1.00
-                      and held_qty * price >= 1.00):
+                elif short >= _RESIZE_MIN_FRAC * _tgt and short < 1.00:
                     # Materially under target, but the top-up ($<1) is smaller
                     # than Robinhood's minimum order — so it can never be closed
                     # by buying more. Exit the position fully and let the buy leg
                     # re-enter at the correct size (owner call 2026-08-24). This
                     # is the only way a small stake can rebalance at all: with a
                     # ~$1.30 per-name target, almost every drift is unplaceable.
+                    # Also absorbs in-basket positions drifted below $1 —
+                    # previously unreachable by any convergence path;
+                    # basket_targets guarantees the re-entry is ≥ $1.
                     sell_qty, why = held_qty, "resize · rebuy at target"
                     resized.add(symbol)
                 else:
@@ -745,15 +1086,19 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                 continue
             ref_id = ref_id_for(sid, mid, f"SELL:{symbol}")
             sell_qty = min(sell_qty, live.get(symbol, 0.0))   # cap to shares actually held
-            # A7: on a FULL exit, sweep a DUST residual (≤0.001sh or ≤$1) up to the
-            # live quantity so the position closes cleanly — but NEVER sweep a real
-            # personal position (a ≥$1 residual), so a member's own shares are safe.
+            # A7: on a FULL exit, sweep a DUST residual up to the live quantity so
+            # the position closes cleanly — but ONLY at drift scale: est-vs-fill
+            # residue is a fraction of a percent of the position, so the 2%
+            # relative cap keeps every legitimate sweep while a member's own
+            # sub-$1 personal stake (large relative to a ~$1.30 club slice)
+            # stays untouched.
             sweep = False
             if why == "exited basket":
                 live_qty = live.get(symbol, 0.0)
                 residual = live_qty - sell_qty
-                if residual > 0 and (residual <= 0.001
-                                     or (price is not None and residual * price <= 1.00)):
+                if residual > 0 and (residual < MIN_SELL_QTY
+                                     or (price is not None and residual * price <= 1.00
+                                         and residual <= 0.02 * sell_qty)):
                     sell_qty, sweep = live_qty, True
                     why = "exited basket · dust swept"
             # Robinhood REJECTS a fractional order quantity that carries any non-zero
@@ -779,10 +1124,32 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                 continue
             qstr = f"{qfloor:.6f}"
             try:
-                review = client.review_market_sell(m["account_number"], symbol, qstr)
+                review = _broker(lambda: client.review_market_sell(m["account_number"], symbol, qstr))
+            except RHAuthError as e:
+                # token refresh + retry both failed — strand the member's pass
+                _record(sid, mid, symbol, None, ref_id, "skipped",
+                        error=f"sell review failed: {e}", side="sell")
+                msum["orders"].append({"symbol": symbol, "side": "sell", "status": "skipped",
+                                       "note": "auth expired mid-pass"})
+                msum["note"] = "auth expired mid-pass — remaining legs deferred"
+                # Deliberately NOT a member skip_reason: that gates off the
+                # write-back, and the buy leg below still accrues every
+                # un-bought name into slice_carry. Discarding it would lose the
+                # sold proceeds from the slice for good. Only a pass that
+                # already PLACED something leaves the cycle unfinished, so only
+                # that holds the executed flip.
+                if sell_count:
+                    msum["auth_stranded"] = True
+                    _hold_strand(sid, mid, will_place)
+                auth_stranded = True
+                continue
             except Exception as e:  # noqa: BLE001
-                _record(sid, mid, symbol, None, ref_id, "error", error=f"sell review: {e}", side="sell")
-                msum["orders"].append({"symbol": symbol, "side": "sell", "status": "error", "note": str(e)})
+                # 'skipped', not 'error': nothing reached the broker, so there
+                # is no fill to recover and no reason to hold the session's
+                # executed-flip open — the name is retried next session.
+                _record(sid, mid, symbol, None, ref_id, "skipped",
+                        error=f"sell review failed: {e}", side="sell")
+                msum["orders"].append({"symbol": symbol, "side": "sell", "status": "skipped", "note": str(e)})
                 continue
             blocked, alerts = has_blocking_alerts(review)
             if blocked:
@@ -793,9 +1160,20 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
             if not will_place:
                 _record(sid, mid, symbol, None, ref_id, "reviewed", review=review, side="sell")
                 msum["orders"].append({"symbol": symbol, "side": "sell", "status": "reviewed", "qty": qstr, "note": why})
+                if symbol in resized:
+                    # mirror the placed branch: without this a dry-run preview
+                    # shows "sell reviewed + buy at-target" where a live run
+                    # would sell AND rebuy.
+                    live[symbol] = 0.0
+                    held[symbol] = 0.0
                 continue
             try:
-                place = client.place_market_sell(m["account_number"], symbol, qstr, ref_id=ref_id)
+                # NOTE: the prior errored sell row is deliberately left standing.
+                # It may represent a PARTIAL fill, and it is the only record of
+                # those shares; reconcile resolves it against the broker (an
+                # order-id bind, or a same-date 1:1 match that 'placed' rows
+                # claim first), which is what keeps it off this new order.
+                place = _broker(lambda: client.place_market_sell(m["account_number"], symbol, qstr, ref_id=ref_id))
                 if isinstance(place, dict):
                     place["_concord_est_qty"] = qfloor   # shares sold (broker fill is async)
                 _record(sid, mid, symbol, None, ref_id, "placed", review=review, place=place, side="sell")
@@ -808,6 +1186,17 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                     held[symbol] = 0.0
                 sell_count += 1
                 placed_sell_usd += (price or 0.0) * qfloor
+                if price is None:
+                    unpriced_sell_placed = True   # proceeds pending but untracked
+            except RHAuthError as e:
+                # place-stage: the broker may have accepted it — keep 'error'
+                # so A4/reconcile can verify, then strand the rest of the pass.
+                _record(sid, mid, symbol, None, ref_id, "error", review=review, error=f"sell: {e}", side="sell")
+                msum["orders"].append({"symbol": symbol, "side": "sell", "status": "error", "note": str(e)})
+                msum["note"] = "auth expired mid-pass — remaining legs deferred"
+                msum["auth_stranded"] = True     # this sell reached the broker
+                _hold_strand(sid, mid, will_place)
+                auth_stranded = True
             except Exception as e:  # noqa: BLE001
                 _record(sid, mid, symbol, None, ref_id, "error", review=review, error=f"sell: {e}", side="sell")
                 msum["orders"].append({"symbol": symbol, "side": "sell", "status": "error", "note": str(e)})
@@ -820,40 +1209,50 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         # after ~4s and STILL deferred everything on 08/19's second both-day:
         # Robinhood credits buying power only after the market sells FILL and
         # its ledger catches up, which takes well over 8 seconds at 9:31. So:
-        # poll buying power for up to BP_POLL_MAX_S, exiting early once ~80%
+        # poll buying power for up to BP_POLL_MAX_S, exiting early once ~98%
         # of the placed sells' value shows up (or once the number rises and
         # stops rising — credit landed). Cash accounts report settled-only
         # buying power that never moves same-day, so they keep a single quick
-        # look; on any fetch error we keep the stale number and the buys defer
-        # to the next buy day exactly as before.
-        sells_placed = any(o.get("side") == "sell" and o.get("status") == "placed"
-                           for o in msum["orders"])
+        # look. A fetch error is a flat poll, not an abort (one transient 5xx
+        # must not defer the whole buy leg a day); ~5 consecutive failures is
+        # a hard outage and gives up. EVERY good reading is adopted — lower
+        # too: the last broker figure is the truth, and a stale high number
+        # would size buys beyond real BP.
+        #
         # Hoisted out of the poll below: the BUY loop also needs to know whether
         # this account settles instantly, and it used to be assigned only when a
         # sell had been placed.
         acct_type = (kv_get(f"acct_type:{mid}") or "").strip().lower()
         settles_instantly = acct_type != "cash"
-        if phase == "both" and sells_placed:
+        if phase == "both" and sell_count > 0 and not auth_stranded:
             deadline_s = 0 if settles_instantly is False else BP_POLL_MAX_S
             bp_start = buying_power
             target = bp_start + BP_POLL_TARGET_FRAC * placed_sell_usd
             waited = 0
             flat = 0
+            fetch_errs = 0
             while True:
                 try:
                     port2 = client.get_portfolio(m["account_number"])
                     p2 = port2.get("data", port2) if isinstance(port2, dict) else {}
                     b2 = p2.get("buying_power") or {}
                     bp_new = _num(b2.get("buying_power") if isinstance(b2, dict) else b2)
+                    fetch_errs = 0
                 except Exception:  # noqa: BLE001
-                    break
-                rose = bp_new is not None and bp_new > buying_power
-                if rose:
+                    bp_new = None
+                    fetch_errs += 1
+                    if fetch_errs >= 5:
+                        break
+                if bp_new is not None:
+                    rose = bp_new > buying_power
                     buying_power = bp_new
-                    flat = 0
+                    flat = 0 if rose else flat + 1
                 else:
                     flat += 1
-                if placed_sell_usd > 0 and buying_power >= target:
+                # An unpriced placed sell has proceeds the target can't count —
+                # rely on the plateau/deadline alone in that case.
+                if (placed_sell_usd > 0 and not unpriced_sell_placed
+                        and buying_power >= target):
                     break                    # proceeds essentially all credited
                 if buying_power > bp_start and flat >= BP_POLL_FLAT_POLLS:
                     break                    # credit landed and has stopped growing
@@ -862,13 +1261,30 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                 time.sleep(BP_POLL_EVERY_S)
                 waited += BP_POLL_EVERY_S
 
+        # Reserve funding for this member's crumb repairs BEFORE the buy leg
+        # can spend buying power to ~$0: the sweep runs post-buy-leg (fills
+        # mint crumbs during the day), so its budget must be reserved, not
+        # left over — or the repair provably never fires for exactly the
+        # fully-deployed accounts crumbs accumulate on.
+        repair_reserve = 0.0
+        if phase in ("buy", "both"):
+            with db() as conn:
+                _club_syms = {r["symbol"] for r in conn.execute(
+                    "SELECT DISTINCT symbol FROM executions WHERE member_id=? AND status='placed'",
+                    (mid,)).fetchall()}
+            _crumbs = [s for s, q in live.items()
+                       if s in _club_syms and s not in want and q < 0.01
+                       and 0 < floor_qty6(q) < MIN_SELL_QTY]
+            if _crumbs:
+                repair_reserve = (min(len(_crumbs), _REPAIR_MAX_PER_RUN) * _REPAIR_BUY_USD
+                                  + (_REPAIR_MIN_BP - _REPAIR_BUY_USD))
         # Only deploy what's actually SETTLED-spendable — any buy beyond buying
         # power is deferred (it fills next buy day, once this cycle's sells
         # settle), so we never trip EQUITY_NOT_ENOUGH_BP. Hold back the small
         # cash reserve (finding #28 — deployable() was defined but never used)
         # so a sequence of dollar market orders doesn't exhaust buying power on
         # the last leg.
-        bp_left = deployable(buying_power)
+        bp_left = max(0.0, deployable(buying_power) - repair_reserve)
         # A4: lazy one-shot fetch of the member's recent broker orders, only when a
         # prior run left an errored buy whose true fate is unknown.
         recent_orders: list[dict] | None = None
@@ -877,6 +1293,27 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         # need = target − current club value, so names already held aren't re-bought
         # and the proceeds from the sells above fund the newly-added names.
         for symbol in (basket if phase in ("buy", "both") else []):
+            if auth_stranded:
+                # The pass is over, but the dollars are not gone: carry every
+                # name the leg never reached, or a mid-pass token expiry would
+                # silently shrink a compounding slice by the undeployed rest.
+                # Two names are NOT ours to carry — one already placed this
+                # session, and one whose errored row is still unresolved, whose
+                # dollars reconcile credits once it can prove their fate.
+                if (mid, symbol, "buy") in already:
+                    msum["orders"].append({"symbol": symbol, "side": "buy", "status": "placed",
+                                           "note": "already placed"})
+                    continue
+                if (mid, symbol) in prior_error_buys:
+                    msum["orders"].append({"symbol": symbol, "side": "buy", "status": "skipped",
+                                           "note": "unresolved prior error — left for reconcile"})
+                    continue
+                _hv = (live.get(symbol, 0.0) if settings.buy_sizing_account
+                       else held.get(symbol, 0.0)) * (prices.get(symbol) or 0.0)
+                unplaced_usd += max(0.0, targets.get(symbol, per_pick) - _hv)
+                msum["orders"].append({"symbol": symbol, "side": "buy", "status": "skipped",
+                                       "note": "auth expired mid-pass · tops up next cycle"})
+                continue
             if (mid, symbol, "buy") in already:
                 msum["orders"].append({"symbol": symbol, "side": "buy", "status": "placed",
                                        "note": "already placed"})
@@ -894,8 +1331,9 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                     except Exception:  # noqa: BLE001
                         recent_orders = None
                 if recent_orders is None:
-                    _record(sid, mid, symbol, prior.get("dollar_amount"), ref_id, "skipped",
-                            error="unverifiable prior error — manual check")
+                    # Leave the surviving error row alone — no shadow row. It
+                    # retries next run, and its original created_at keeps the
+                    # match window honest.
                     msum["orders"].append({"symbol": symbol, "side": "buy", "status": "skipped",
                                            "note": "unverifiable prior error — manual check"})
                     continue
@@ -908,17 +1346,30 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                                                  window_start, prior.get("dollar_amount"),
                                                  window_end=window_end)
                 if matched is not None:
+                    # Promote the ORIGINAL row in place rather than superseding
+                    # it and inserting a new one: its created_at is when the
+                    # order actually went to the broker, which is what the PDT
+                    # guard and reconcile's date-bound matching key off.
                     place = {"_concord_recovered": True, "data": {"order": matched}}
                     px, amt = prices.get(symbol), prior.get("dollar_amount")
                     if px and amt:
                         place["_concord_est_qty"] = round(amt / px, 6)  # est shares (async fill)
-                    _record(sid, mid, symbol, amt, ref_id, "placed", place=place)
+                    with db() as conn:
+                        conn.execute(
+                            "UPDATE executions SET status='placed', place_json=? "
+                            "WHERE id=? AND status='error'",
+                            (json.dumps(place), prior["id"]))
                     msum["orders"].append({"symbol": symbol, "side": "buy", "status": "placed",
                                            "note": "recovered — prior errored place found at broker"})
                     order_count += 1
                     continue
-                # verified absent at the broker → the prior place never landed;
-                # fall through to the normal (re-)placement path.
+                # Verified ABSENT at the broker — the prior place never landed.
+                # Retire the row here, on the proof itself: from this point the
+                # dollars belong to this run (it either re-places them or
+                # carries them into slice_carry), so a row left standing would
+                # let reconcile credit the same dollars a second time.
+                if will_place:
+                    _supersede_error(sid, mid, symbol, "buy")
             price = prices.get(symbol)
             if price is None:
                 # can't value an existing holding or estimate filled shares → skip,
@@ -926,6 +1377,14 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                 _record(sid, mid, symbol, None, ref_id_for(sid, mid, symbol), "skipped",
                         error="no quote for sizing")
                 msum["orders"].append({"symbol": symbol, "side": "buy", "status": "skipped", "note": "no quote"})
+                # Carry the undeployed target so the dollars retry next cycle —
+                # but only when nothing of the name is held: a held name with no
+                # quote accrues 0 (over-crediting risk; the hoisted valuation
+                # already fail-closes most of these).
+                held_any = (live.get(symbol, 0.0) if settings.buy_sizing_account
+                            else held.get(symbol, 0.0)) > 0
+                if not held_any:
+                    unplaced_usd += targets.get(symbol, per_pick)
                 continue
             # How much of this name is ALREADY held — read from the live account
             # (buy_sizing_account) so a drifted/stale ledger or a manual sale can't
@@ -988,6 +1447,12 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                 # Floor to cents so the order can never exceed what is actually
                 # there, and only if the remainder clears Robinhood's $1
                 # minimum — below that no order is placeable at all.
+                #
+                # The settles_instantly gate is DELIBERATE: a cash account's
+                # reported buying power may include unsettled proceeds, and a
+                # partial bought with them risks a good-faith violation —
+                # whole-name deferral is the conservative choice (see
+                # test_both_day_cash_account_keeps_single_quick_look).
                 afford = math.floor(bp_left * 100) / 100.0
                 if settles_instantly and afford >= 1.00:
                     msum.setdefault("partials", []).append(
@@ -1005,62 +1470,195 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                     msum["orders"].append({"symbol": symbol, "side": "buy", "status": "skipped",
                                            "note": f"short ${need - bp_left:.2f} · tops up next cycle"})
                     continue
-            bp_left -= need
-            if order_count >= member_max_orders:
-                unplaced_usd += need
-                _record(sid, mid, symbol, need, ref_id_for(sid, mid, symbol), "skipped",
-                        error="max_orders cap reached")
-                msum["orders"].append({"symbol": symbol, "side": "buy", "status": "skipped", "note": "max_orders cap"})
-                continue
             ref_id = ref_id_for(sid, mid, symbol)
             amt = f"{need:.2f}"
             try:
-                review = client.review_market_buy(m["account_number"], symbol, amt)
+                review = _broker(lambda: client.review_market_buy(m["account_number"], symbol, amt))
+            except RHAuthError as e:
+                # Nothing reached the broker — carry the dollars and strand the
+                # rest of the pass. Deliberately NOT a member skip_reason: this
+                # leg already placed orders, and the write-back is what records
+                # the carry that funds the un-bought names next cycle. The
+                # member is stranded at the TOP of the next run instead (vault's
+                # refresh failure already marked the connection).
+                unplaced_usd += need
+                _record(sid, mid, symbol, need, ref_id, "skipped", error=f"review failed: {e}")
+                msum["orders"].append({"symbol": symbol, "side": "buy", "status": "skipped",
+                                       "note": "auth expired mid-pass · tops up next cycle"})
+                if sell_count or order_count:
+                    msum["auth_stranded"] = True
+                    _hold_strand(sid, mid, will_place)
+                auth_stranded = True
+                continue
             except Exception as e:  # noqa: BLE001
-                _record(sid, mid, symbol, need, ref_id, "error", error=f"review: {e}")
-                msum["orders"].append({"symbol": symbol, "side": "buy", "status": "error", "note": str(e)})
+                # 'skipped', not 'error': nothing reached the broker, so the
+                # dollars retry next cycle via slice_carry instead of holding
+                # the session's executed-flip open.
+                unplaced_usd += need
+                _record(sid, mid, symbol, need, ref_id, "skipped", error=f"review failed: {e}")
+                msum["orders"].append({"symbol": symbol, "side": "buy", "status": "skipped", "note": str(e)})
                 continue
             blocked, alerts = has_blocking_alerts(review)
             if blocked:
+                unplaced_usd += need   # nothing placed — the dollars carry
                 _record(sid, mid, symbol, need, ref_id, "skipped", review=review,
                         error="blocking pre-trade alert")
                 msum["orders"].append({"symbol": symbol, "side": "buy", "status": "skipped", "alerts": alerts})
                 continue
+            # Consume headroom only once the order is reviewed clean and
+            # unblocked — cap/blocked/review-failure paths above no longer
+            # deplete it. NO refund on a place exception (the broker may have
+            # accepted the order; A4 verifies).
+            bp_left -= need
             if not will_place:
                 _record(sid, mid, symbol, need, ref_id, "reviewed", review=review)
                 msum["orders"].append({"symbol": symbol, "side": "buy", "status": "reviewed", "amount": amt,
                                        **({"note": f"partial · ${partial_of:.2f} wanted"} if partial_of else {})})
                 continue
             try:
-                place = client.place_market_buy(m["account_number"], symbol, amt, ref_id=ref_id)
+                place = _broker(lambda: client.place_market_buy(m["account_number"], symbol, amt, ref_id=ref_id))
                 if isinstance(place, dict):
                     place["_concord_est_qty"] = round(need / price, 6)  # est shares (async fill)
                 _record(sid, mid, symbol, need, ref_id, "placed", review=review, place=place)
                 msum["orders"].append({"symbol": symbol, "side": "buy", "status": "placed", "amount": amt,
                                        **({"note": f"partial · ${partial_of:.2f} wanted"} if partial_of else {})})
                 order_count += 1
+            except RHAuthError as e:
+                # place-stage: 'error' stays (the broker may have accepted it —
+                # A4 verifies; no carry accrual for the same reason). Not a
+                # member skip: the write-back must still record the carry the
+                # stranded remainder of the leg accrues.
+                _record(sid, mid, symbol, need, ref_id, "error", review=review, error=f"place: {e}")
+                msum["orders"].append({"symbol": symbol, "side": "buy", "status": "error", "note": str(e)})
+                msum["auth_stranded"] = True
+                auth_stranded = True
             except Exception as e:  # noqa: BLE001
                 _record(sid, mid, symbol, need, ref_id, "error", review=review, error=f"place: {e}")
                 msum["orders"].append({"symbol": symbol, "side": "buy", "status": "error", "note": str(e)})
+        # A4 leftovers: verify this member's NON-BASKET errored buys (DUSTFIX
+        # repairs, n_eff-dropped names). No plan row exists to re-place them,
+        # so the row is promoted in place when the broker shows the order, or
+        # retired 'superseded' when verified absent — never re-placed.
+        for (pmid, psym), prior in (list(prior_error_buys.items()) if will_place else []):
+            if pmid != mid or psym in set(basket):
+                continue
+            if not orders_fetched:
+                orders_fetched = True
+                try:
+                    recent_orders = _fetch_recent_orders(client, m["account_number"])
+                except Exception:  # noqa: BLE001
+                    recent_orders = None
+            if recent_orders is None:
+                break               # unverifiable — leave the rows for the next run
+            _w_start = session.get("opened_at") or ((prior.get("created_at") or 0) - 3600)
+            matched = _match_recovered_order(recent_orders, prior["ref_id"], psym, "buy",
+                                             _w_start, prior.get("dollar_amount"),
+                                             window_end=(prior.get("created_at") or 0) + 300)
+            with db() as conn:
+                if matched is not None:
+                    # promote the row in place — the buy landed; ledger must count it
+                    pj = {"_concord_recovered": True, "data": {"order": matched}}
+                    px = prices.get(psym)
+                    amt = prior.get("dollar_amount")
+                    if px and amt:
+                        pj["_concord_est_qty"] = round(amt / px, 6)
+                    conn.execute("UPDATE executions SET status='placed', place_json=? "
+                                 "WHERE id=? AND status='error'",
+                                 (json.dumps(pj), prior["id"]))
+                else:
+                    # verified absent — never re-place a non-basket buy; retire
+                    # the evidence
+                    conn.execute("UPDATE executions SET status='superseded' "
+                                 "WHERE id=? AND status='error'", (prior["id"],))
         # Compounding bookkeeping: once the BUY leg has run for this member,
         # the current stake figure has been honored — record it so the next
         # cycle's budget applies only future stake CHANGES as deltas. Only on
         # a completed (non-skipped) buy/both pass, and never touching
         # updated_at (the stake-freeze / demo clock).
-        if (compounding and will_place and phase in ("buy", "both")
-                and not msum.get("skip_reason") and stamped_stake is not None):
+        wrote_back = (compounding and will_place and phase in ("buy", "both")
+                      and not msum.get("skip_reason") and stamped_stake is not None)
+        if wrote_back:
             with db() as conn:
-                # The commitment RIDES: after a deployed cycle the member's
-                # committed figure becomes what is actually deployed, so a $100
-                # stake that grew to $105 reads "$105 committed" — and a percent
-                # stake converts to the dollars it resolved to, which is what it
-                # has meant since the first deployment. alloc_applied tracks it
-                # so only future EDITS move the budget.
-                conn.execute("UPDATE member_settings SET alloc_type='dollar', "
-                             "alloc_value=?, alloc_applied=?, slice_carry=? "
-                             "WHERE member_id=?",
-                             (round(budget, 2), round(budget, 2),
-                              round(unplaced_usd, 2), mid))
+                # One transaction: the drain reads carry_pending and zeroes it,
+                # and a credit landing between those two statements would
+                # otherwise be zeroed without ever being counted.
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    # The commitment RIDES: after a deployed cycle the member's
+                    # committed figure becomes what is actually deployed (or the
+                    # matured capacity-clamped figure), so a $100 stake that grew
+                    # to $105 reads "$105 committed" — and a percent stake converts
+                    # to the dollars it resolved to. alloc_applied tracks the
+                    # honored (daily-capped) budget so only future EDITS move it.
+                    #
+                    # The commitment UPDATE is a compare-and-swap: a mid-cycle
+                    # stake edit (allowed for members who did not vote in the
+                    # closed session) must survive. On a CAS miss only
+                    # alloc_applied/slice_carry move, and the next cycle's
+                    # compound_budget deploys cv + (edited_value − alloc_applied) —
+                    # the member's edited absolute figure exactly.
+                    value_target = commit_target if commit_target is not None else round(budget, 2)
+                    if rides:
+                        guard_type, guard_val = "dollar", stamped_stake
+                    else:           # percent-bootstrap conversion: guard on run-start values
+                        guard_type, guard_val = m["alloc_type"], float(m["alloc_value"] or 0.0)
+                    conn.execute(
+                        "UPDATE member_settings SET alloc_type='dollar', alloc_value=? "
+                        "WHERE member_id=? AND alloc_type=? AND ABS(COALESCE(alloc_value,0)-?)<0.005",
+                        (round(value_target, 2), mid, guard_type, guard_val))
+                    # slice_carry is this cycle's OWN undeployed dollars, recomputed
+                    # from scratch every buy leg — WRITTEN, never added to, so a
+                    # second run of the same session cannot accumulate it.
+                    # Dollars an EARLIER cycle failed to deploy arrive asynchronously
+                    # (reconcile proving an errored order absent or dead at the
+                    # broker) and wait in carry_pending. Draining them into a column
+                    # the next run overwrites would DESTROY them, so the drain is
+                    # remembered per session: every run of this cycle rebuilds the
+                    # same figure, and a credit that lands between two runs simply
+                    # adds to it.
+                    _pending = _num((conn.execute(
+                        "SELECT COALESCE(carry_pending,0) AS c FROM member_settings "
+                        "WHERE member_id=?", (mid,)).fetchone() or {"c": 0})["c"]) or 0.0
+                    _dkey = f"carry_drained:{sid}:{mid}"
+                    _prev_drained = _num((conn.execute(
+                        "SELECT value FROM kv WHERE key=?", (_dkey,)).fetchone()
+                        or {"value": 0})["value"]) or 0.0
+                    _drained = round(_prev_drained + _pending, 2)
+                    # Crumb repairs spend account cash outside the commitment and are
+                    # absorbed into the slice at the next valuation; the debit that
+                    # nets them out is likewise session-scoped, or a re-run's
+                    # overwrite would quietly capitalise the member's own dollars.
+                    _rspent = _num((conn.execute(
+                        "SELECT value FROM kv WHERE key=?", (f"repair_spend:{sid}:{mid}",)).fetchone()
+                        or {"value": 0})["value"]) or 0.0
+                    conn.execute(
+                        "UPDATE member_settings SET alloc_applied=?, slice_carry=?, "
+                        "carry_pending=0 WHERE member_id=?",
+                        (round(budget, 2),
+                         round(unplaced_usd + _drained - _rspent, 2), mid))
+                    conn.execute(
+                        "INSERT INTO kv(key,value) VALUES(?,?) "
+                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                        (_dkey, str(_drained)))
+                    conn.execute("COMMIT")
+                except BaseException:
+                    conn.execute("ROLLBACK")
+                    raise
+                if _drained:
+                    msum["carry_drained"] = _drained
+            if not auth_stranded:
+                _clear_strand(sid, mid)
+        elif (will_place and phase in ("buy", "both")
+              and not msum.get("skip_reason")):
+            # A PINNED stake never rides carry — its budget is the committed
+            # figure outright — so carry has no cycle to fund. Clear BOTH
+            # columns: the compounding write-back is the only other writer of
+            # slice_carry, so a figure left frozen here would be redeployed in
+            # full the day the member switches compounding back on, long after
+            # the pinned cycles already covered it.
+            with db() as conn:
+                conn.execute("UPDATE member_settings SET carry_pending=0, slice_carry=0 "
+                             "WHERE member_id=?", (mid,))
         # Sweep this member's sub-$1 crumbs while we are here. dust_cleanup is
         # the same review→place pipeline with its own DUST: ref_ids, so it is
         # idempotent and honours every gate run() just honoured; dry runs
@@ -1068,11 +1666,42 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         # admin button, which is why Neil's 0.000001-share MSFT and Charlie's
         # ALL sat in their accounts for days — nothing ever called it. Wrapped:
         # cosmetic cleanup must never take down a trading run.
-        if phase in ("buy", "both") and not msum.get("skip_reason"):
+        if phase in ("buy", "both") and not msum.get("skip_reason") and not auth_stranded:
             try:
-                dust = dust_cleanup(mid, dry_run=not will_place)
+                dust = dust_cleanup(mid, dry_run=not will_place, session_id=sid)
                 if dust.get("orders"):
                     msum["dust"] = dust["orders"]
+                # Charge repairs to the club slice: the $1 top-ups spend
+                # account cash outside the commitment and are absorbed into
+                # the club slice at the next valuation — the negative carry
+                # nets them out so the committed stake stays flat
+                # (alloc.compound_budget clamps the SUM at zero).
+                if will_place and compounding:
+                    _spent = sum(_REPAIR_BUY_USD for o in dust.get("orders", [])
+                                 if o.get("side") == "buy" and o.get("status") == "placed")
+                    if _spent:
+                        # Recorded per session as well as applied: the debit
+                        # lands AFTER the write-back, so a re-run of this cycle
+                        # would otherwise overwrite it away and quietly
+                        # capitalise the member's own repair dollars.
+                        _rkey = f"repair_spend:{sid}:{mid}"
+                        with db() as conn:
+                            conn.execute("BEGIN IMMEDIATE")
+                            try:
+                                _tot = _num((conn.execute(
+                                    "SELECT value FROM kv WHERE key=?", (_rkey,)).fetchone()
+                                    or {"value": 0})["value"]) or 0.0
+                                conn.execute(
+                                    "INSERT INTO kv(key,value) VALUES(?,?) "
+                                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                                    (_rkey, str(round(_tot + _spent, 2))))
+                                conn.execute("UPDATE member_settings SET slice_carry="
+                                             "COALESCE(slice_carry,0) - ? WHERE member_id=?",
+                                             (_spent, mid))
+                                conn.execute("COMMIT")
+                            except BaseException:
+                                conn.execute("ROLLBACK")
+                                raise
             except Exception as e:  # noqa: BLE001
                 msum["dust_error"] = f"{type(e).__name__}: {e}"
         summary["members"].append(msum)
@@ -1090,8 +1719,29 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
             err = conn.execute(
                 "SELECT COUNT(*) FROM executions WHERE session_id=? AND status='error'", (sid,)
             ).fetchone()[0]
-            if err == 0:
-                conn.execute("UPDATE vote_sessions SET status='executed' WHERE id=?", (sid,))
+            # A member stranded MID-PASS (token died between orders) leaves the
+            # cycle genuinely unfinished — its sells placed and its buys did
+            # not. Flipping there would hide the session from the next run's
+            # crash-continuation, which is what redeploys those proceeds. A
+            # member skipped BEFORE placing anything is not this case and must
+            # never hold the flip (that is how sessions used to wedge); the
+            # retirement sweep bounds the deferral either way.
+            stranded = _stranded_members(sid)
+            if err == 0 and not stranded and not summary.get("halted"):
+                conn.execute("UPDATE vote_sessions SET status='executed' "
+                             "WHERE id=? AND status='closed'", (sid,))
+            elif summary.get("halted"):
+                # The kill switch cut the loop short: the members it skipped
+                # never had their half of the cycle. Flipping would hide the
+                # session from the buy leg, leaving no way to finish it once
+                # the operator lifts the halt.
+                summary["executed_deferred"] = (
+                    "halted mid-run — session kept open so the remaining members "
+                    "can be executed once the halt is lifted")
+            elif stranded:
+                summary["executed_deferred"] = (
+                    f"{len(stranded)} member(s) stranded mid-pass — session kept open "
+                    f"so the next run can finish the cycle")
             else:
                 summary["executed_deferred"] = f"{err} error row(s) — session kept open for fill recovery"
     # Cumulative truth for the session — a re-run places 0 NEW orders even though
@@ -1154,10 +1804,14 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
 #     0.0039896 still floors to 0.003989.
 #   * MIN_SELL_QTY: a residue below this is left in place, recorded as
 #     skipped, and never sent to the broker — a rejected order helps nobody
-#     and pings the member's phone. 1e-5 sh clears every truncation residue
-#     (those are ≤1e-6 by construction) while real dust (≥0.0001 sh) stays
-#     sweepable.
-MIN_SELL_QTY = 0.00001
+#     and pings the member's phone. Broker rejections were observed from
+#     1e-6 up to 8e-6 sh; the smallest proven fill is 3.33e-4 sh; and the
+#     rejection surfaces only at place time (review returned {} on a
+#     rejected 1e-6 order), so the true boundary cannot be probed via
+#     review. 1e-4 gives ~12x margin over the largest observed rejection,
+#     forfeits nothing ever proven to fill, and everything in [1e-5,1e-4)
+#     now routes to the $1 crumb repair instead of a doomed order.
+MIN_SELL_QTY = 0.0001
 
 # Crumb REPAIR (owner ask, 2026-09-11): an unsellable residue is topped up
 # with the broker-minimum buy so it becomes an ordinary position; the NEXT
@@ -1185,17 +1839,25 @@ def floor_qty6(qty: float) -> float:
     return float(Decimal(str(qty)).quantize(Decimal("0.000001"), rounding=ROUND_FLOOR))
 
 
-def dust_cleanup(member_id: int, dry_run: bool = True) -> dict:
+def dust_cleanup(member_id: int, dry_run: bool = True,
+                 session_id: int | None = None) -> dict:
     """Sweep sub-$1 crumb positions left on club-traded names (est-vs-fill drift).
 
     Candidates = live long positions whose symbol appears in the member's club
     execution history (placed orders) AND live value ≤ $1.00 AND quantity < 0.01
-    shares — sizes only ever produced by fill drift, never by a real personal
-    holding. Each candidate runs the same review→place→record pipeline as run(),
-    with a deterministic ref_id keyed 'DUST:{symbol}'. dry_run=True (default)
-    reviews and returns the preview WITHOUT recording or placing; a real place
-    additionally requires execution_mode=live + ARMED, exactly like run().
+    shares. NOTE these sizes are ALSO produced by full-target positions of
+    small-stake members on high-priced names — which makes the in-basket guard
+    on the sell path load-bearing, not cosmetic. Each candidate runs the same
+    review→place→record pipeline as run(), with a deterministic ref_id keyed
+    'DUST:{symbol}' under `session_id` — run() passes its executing session so
+    every ref, guard and record keys to the session that actually trades; the
+    admin route leaves it None and the sweep anchors to the newest DECIDED
+    session (never an open ballot, whose refs/basket would disagree with
+    run()'s). dry_run=True (default) reviews and returns the preview WITHOUT
+    recording or placing; a real place additionally requires
+    execution_mode=live + ARMED, exactly like run().
     """
+    from ..calendar_us import at_et, is_trading_day, now_et, prev_trading_day, today_et
     with db() as conn:
         row = conn.execute(
             "SELECT account_number, status FROM rh_accounts WHERE member_id=?", (member_id,)
@@ -1204,23 +1866,54 @@ def dust_cleanup(member_id: int, dry_run: bool = True) -> dict:
             "SELECT DISTINCT symbol FROM executions WHERE member_id=? AND status='placed'",
             (member_id,)
         ).fetchall()}
-        latest_sid = conn.execute("SELECT COALESCE(MAX(id),0) FROM vote_sessions").fetchone()[0]
+        if session_id is not None:
+            latest_sid = session_id
+        else:
+            latest_sid = conn.execute(
+                "SELECT COALESCE(MAX(id),0) FROM vote_sessions "
+                "WHERE status IN ('closed','executed','lapsed')").fetchone()[0]
         _picks_row = conn.execute(
             "SELECT picks_json FROM vote_sessions WHERE id=?", (latest_sid,)
         ).fetchone()
     # The CURRENT basket: a crumb on an in-basket name needs no repair — the
-    # buy leg's next top-up absorbs it into a normal position; repair targets
-    # only names the club has exited, whose top-up would otherwise never come.
+    # resize/top-up path owns it; repair targets only names the club has
+    # exited, whose top-up would otherwise never come. Distinguish UNKNOWN
+    # (NULL/unparseable picks → conservative: no repairs at all) from a
+    # genuinely empty basket.
+    latest_basket: set[str] | None = None
     try:
-        latest_basket = ({p["symbol"] for p in json.loads(_picks_row["picks_json"] or "[]")}
-                         if _picks_row else set())
+        if _picks_row and _picks_row["picks_json"]:
+            latest_basket = {p["symbol"] for p in json.loads(_picks_row["picks_json"])}
     except Exception:  # noqa: BLE001 — malformed picks_json must not kill the sweep
+        latest_basket = None
+    if latest_basket is None:
+        with db() as conn:
+            _fb = conn.execute(
+                "SELECT picks_json FROM vote_sessions WHERE picks_json IS NOT NULL "
+                "ORDER BY id DESC LIMIT 1").fetchone()
+        try:
+            if _fb:
+                latest_basket = {p["symbol"] for p in json.loads(_fb["picks_json"])}
+        except Exception:  # noqa: BLE001
+            latest_basket = None
+    basket_known = latest_basket is not None
+    if latest_basket is None:
         latest_basket = set()
     if not row or not row["account_number"] or row["status"] != "connected":
         return {"ok": False, "error": "no connected Robinhood account",
                 "member_id": member_id, "orders": []}
     acct = row["account_number"]
     will_place = settings.is_live and is_armed() and not dry_run
+    # Standalone (admin-route) live sweeps run only during market hours: an
+    # off-hours repair queues at the open and can fill into a PDT day trade.
+    if session_id is None and not dry_run:
+        _now = now_et()
+        if not (is_trading_day()
+                and at_et(today_et(), "09:30") <= _now <= at_et(today_et(), "16:00")):
+            return {"ok": False, "error": ("market closed — repairs queue at the open and "
+                                           "can fill into a PDT day trade; run during "
+                                           "market hours"),
+                    "member_id": member_id, "orders": []}
     try:
         client = vault.ensure_client(member_id)
     except Exception as e:  # noqa: BLE001
@@ -1230,6 +1923,9 @@ def dust_cleanup(member_id: int, dry_run: bool = True) -> dict:
     prices = _quotes(client, [p["symbol"] for p in live])
     out = {"ok": True, "member_id": member_id, "dry_run": dry_run,
            "will_place": will_place, "orders": []}
+    # Anything bought since the previous trading day's close must not be sold
+    # today (same cutoff as run()'s sell-leg PDT guard).
+    _pdt_cutoff = int(at_et(prev_trading_day(today_et()), "16:00").timestamp())
     repairs = 0                 # crumb top-ups placed/reviewed this run (bounded)
     repair_bp: float | None = None   # lazily fetched — most sweeps repair nothing
     for p in live:
@@ -1237,16 +1933,24 @@ def dust_cleanup(member_id: int, dry_run: bool = True) -> dict:
         if symbol not in club_syms or qty >= 0.01:
             continue
         price = prices.get(symbol)
-        if price is None or qty * price > 1.00:
-            continue                                   # can't verify it's dust → leave it
+        if price is None:
+            # can't verify it's dust → leave it, on the report: a permanently
+            # quoteless (delisted) crumb must not be invisible forever
+            out["orders"].append({"symbol": symbol, "side": "sell", "status": "skipped",
+                                  "note": "no quote — cannot verify dust"})
+            continue
+        if qty * price > 1.00:
+            continue                       # a real position, not dust — silent
         ref_id = ref_id_for(latest_sid, member_id, f"DUST:{symbol}")
         # 6dp, not the old 8dp: Robinhood's quantity format is six decimals
         # (the sell path's comment has said so all along — this path sent
         # "0.00000100" anyway), and anything below MIN_SELL_QTY is the
-        # unsellable-residue case: skip it silently rather than hand the
-        # broker an order it will reject onto the member's phone.
+        # unsellable-residue case: never hand the broker an order it will
+        # reject onto the member's phone.
         qfloor = floor_qty6(qty)
         if qfloor <= 0:
+            out["orders"].append({"symbol": symbol, "side": "sell", "status": "skipped",
+                                  "note": "sub-1e-6 residue — below quantity floor"})
             continue
         if qfloor < MIN_SELL_QTY:
             # Unsellable on its own — REPAIR by topping up with the minimum
@@ -1257,17 +1961,45 @@ def dust_cleanup(member_id: int, dry_run: bool = True) -> dict:
             entry = {"symbol": symbol, "side": "buy", "amount": f"{_REPAIR_BUY_USD:.2f}",
                      "note": "crumb repair — top up, next cycle exits the whole position"}
             fix_ref = ref_id_for(latest_sid, member_id, f"DUSTFIX:{symbol}")
-            if symbol in latest_basket:
-                # the buy leg's own top-up will absorb this crumb — no repair
-                entry.update(status="skipped", note="crumb on a basket name — the buy leg absorbs it")
+            if not basket_known:
+                # basket unknown → cannot tell a voted hold from an exited
+                # crumb; defer every repair rather than risk topping up a name
+                # the cycle owns
+                entry.update(status="skipped", note="basket unknown — repair deferred")
                 out["orders"].append(entry)
                 continue
+            if symbol in latest_basket:
+                # Skip only when THIS member's buy leg actually reached the
+                # name — a small-stake member whose picks[:n_eff] slice never
+                # touches it would otherwise wait forever for an absorb that
+                # never comes.
+                # Any own-buy row counts, whatever its status: an errored or
+                # deferred basket buy is still the buy leg's name to finish. A
+                # repair there would supersede that row and mint a 'placed' buy
+                # key that suppresses the real buy on the next run.
+                with db() as conn:
+                    _own_buy = conn.execute(
+                        "SELECT 1 FROM executions WHERE ref_id=?",
+                        (ref_id_for(latest_sid, member_id, symbol),)).fetchone()
+                if _own_buy:
+                    entry.update(status="skipped",
+                                 note="crumb on a basket name — the buy leg absorbs it")
+                    out["orders"].append(entry)
+                    continue
             with db() as conn:
-                if conn.execute("SELECT 1 FROM executions WHERE ref_id=?", (fix_ref,)).fetchone():
+                # placed/reviewed/error only: a recorded SKIP must not block a
+                # later same-session retry
+                if conn.execute(
+                    "SELECT 1 FROM executions WHERE ref_id=? "
+                    "AND status IN ('placed','reviewed','error')", (fix_ref,)
+                ).fetchone():
                     entry.update(status="skipped", note="repair already attempted this session")
                     out["orders"].append(entry)
                     continue
             if repairs >= _REPAIR_MAX_PER_RUN:
+                if not dry_run:
+                    _record(latest_sid, member_id, symbol, _REPAIR_BUY_USD, fix_ref, "skipped",
+                            error="repair budget for this run used up")
                 entry.update(status="skipped", note="repair budget for this run used up")
                 out["orders"].append(entry)
                 continue
@@ -1280,6 +2012,9 @@ def dust_cleanup(member_id: int, dry_run: bool = True) -> dict:
                 except Exception:  # noqa: BLE001
                     repair_bp = 0.0
             if repair_bp < _REPAIR_MIN_BP:
+                if not dry_run:
+                    _record(latest_sid, member_id, symbol, _REPAIR_BUY_USD, fix_ref, "skipped",
+                            error="buying power too low to repair")
                 entry.update(status="skipped", note="buying power too low to repair")
                 out["orders"].append(entry)
                 continue
@@ -1329,6 +2064,23 @@ def dust_cleanup(member_id: int, dry_run: bool = True) -> dict:
                 entry.update(status="error", note=str(e))
             out["orders"].append(entry)
             continue
+        # An in-basket sub-$1 slice of a high-priced name is a voted hold,
+        # not dust — the cycle's resize/top-up owns it.
+        if symbol in latest_basket:
+            out["orders"].append({"symbol": symbol, "side": "sell", "status": "skipped",
+                                  "note": "in-basket position — the cycle owns it"})
+            continue
+        # Bought since the previous close (any session, any ref — plain buys,
+        # repairs, recovered errors)? Selling it today is a PDT day trade.
+        with db() as conn:
+            _recent_buy = conn.execute(
+                "SELECT 1 FROM executions WHERE member_id=? AND symbol=? AND side='buy' "
+                "AND status IN ('placed','error') AND created_at >= ? LIMIT 1",
+                (member_id, symbol, _pdt_cutoff)).fetchone()
+        if _recent_buy:
+            out["orders"].append({"symbol": symbol, "side": "sell", "status": "skipped",
+                                  "note": "bought today — PDT guard"})
+            continue
         # Repaired THIS session? Then this position was bought minutes-to-
         # hours ago by the crumb top-up — selling it now is the same-day
         # round trip (a PDT day trade) the repair design forbids. It exits
@@ -1336,6 +2088,8 @@ def dust_cleanup(member_id: int, dry_run: bool = True) -> dict:
         # SELL leg is already exiting the name, a second dust sell of the
         # same shares would only bounce off the broker as insufficient —
         # skip that too (a pre-existing wart the repair tests surfaced).
+        # A pending DUST sell of our own is skipped for the same reason: the
+        # first place is still filling and a re-run must not double-sell.
         with db() as conn:
             if conn.execute(
                 "SELECT 1 FROM executions WHERE status='placed' AND ref_id=?",
@@ -1351,16 +2105,27 @@ def dust_cleanup(member_id: int, dry_run: bool = True) -> dict:
                 out["orders"].append({"symbol": symbol, "side": "sell", "status": "skipped",
                                       "note": "already exiting this session"})
                 continue
+            if conn.execute(
+                "SELECT 1 FROM executions WHERE status='placed' AND ref_id=?",
+                (ref_id,),
+            ).fetchone():
+                out["orders"].append({"symbol": symbol, "side": "sell", "status": "skipped",
+                                      "note": "dust sell already placed this session "
+                                              "— awaiting fill"})
+                continue
         qstr = f"{qfloor:.6f}"
         entry = {"symbol": symbol, "side": "sell", "qty": qstr,
                  "value": round(qty * price, 4), "ref_id": ref_id}
         try:
             review = client.review_market_sell(acct, symbol, qstr)
         except Exception as e:  # noqa: BLE001
+            # 'skipped', not 'error': nothing reached the broker, and an error
+            # row would hold the session's executed-flip open (same rule the
+            # repair branch and both run() legs follow).
             if not dry_run:
-                _record(latest_sid, member_id, symbol, None, ref_id, "error",
-                        error=f"dust review: {e}", side="sell")
-            entry.update(status="error", note=str(e))
+                _record(latest_sid, member_id, symbol, None, ref_id, "skipped",
+                        error=f"dust review failed: {e}", side="sell")
+            entry.update(status="skipped", note=str(e))
             out["orders"].append(entry)
             continue
         blocked, alerts = has_blocking_alerts(review)

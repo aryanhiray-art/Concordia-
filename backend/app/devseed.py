@@ -59,10 +59,10 @@ def main() -> None:
 
         # Opted in, committed, and with a voting power the header can print.
         conn.execute(
-            "INSERT INTO member_settings(member_id, opted_in, buying_power_pct, voting_power, "
+            "INSERT INTO member_settings(member_id, opted_in, voting_power, "
             "alloc_type, alloc_value, accuracy, cycles_participated, updated_at) "
-            "VALUES(?,1,25,486.20,'fixed',500,0.5,6,?) "
-            "ON CONFLICT(member_id) DO UPDATE SET opted_in=1, buying_power_pct=25, "
+            "VALUES(?,1,486.20,'fixed',500,0.5,6,?) "
+            "ON CONFLICT(member_id) DO UPDATE SET opted_in=1, "
             "voting_power=486.20, alloc_type='fixed', alloc_value=500, updated_at=excluded.updated_at",
             (mid, now))
 

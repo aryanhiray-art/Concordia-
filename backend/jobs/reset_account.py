@@ -6,7 +6,6 @@ the bot test from a clean cash base. Guarded by a kv flag so it runs exactly onc
 ("after tmrw ignore"); the systemd one-shot timer fires it just after the open.
 Market-hours gated — does nothing on a non-trading day.
 """
-import math
 import sys
 import uuid
 from pathlib import Path
@@ -17,6 +16,7 @@ from app.calendar_us import is_trading_day, today_et  # noqa: E402
 from app.db import audit, db, init_db, kv_get, kv_set  # noqa: E402
 from app.robinhood import vault  # noqa: E402
 from app.services import positions  # noqa: E402
+from app.services.executor import MIN_SELL_QTY, floor_qty6  # noqa: E402
 
 _DONE = "reset_account_done"
 
@@ -57,7 +57,13 @@ def main() -> int:
     sold = []
     for p in pos:
         sym, qty = p["symbol"], p["quantity"]
-        qstr = f"{math.floor(qty * 1e6) / 1e6:.6f}"   # never request more than held
+        qf = floor_qty6(qty)                 # float-safe 6dp floor, never above held
+        if qf <= 0:
+            continue
+        if qf < MIN_SELL_QTY:
+            print(f"[reset_account] {sym}: residue below broker sell minimum — left in place")
+            continue
+        qstr = f"{qf:.6f}"
         ref = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"reset:{mid}:{sym}"))
         try:
             client.place_market_sell(acct, sym, qstr, ref_id=ref)

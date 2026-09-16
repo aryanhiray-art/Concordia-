@@ -41,9 +41,9 @@ CREATE TABLE IF NOT EXISTS members (
 CREATE TABLE IF NOT EXISTS member_settings (
     member_id        INTEGER PRIMARY KEY REFERENCES members(id) ON DELETE CASCADE,
     opted_in         INTEGER NOT NULL DEFAULT 0,
-    buying_power_pct REAL NOT NULL DEFAULT 0,
-    daily_cap_usd    REAL NOT NULL DEFAULT 0,
-    max_orders       INTEGER NOT NULL DEFAULT 25,
+    buying_power_pct REAL NOT NULL DEFAULT 0,         -- deprecated, unread
+    daily_cap_usd    REAL NOT NULL DEFAULT 0,         -- 0 = uncapped (see alloc >0 convention)
+    max_orders       INTEGER NOT NULL DEFAULT 25,     -- 0 = global default (settings.max_orders)
     voting_power     REAL NOT NULL DEFAULT 0,         -- current weight (blended when POWER_MODEL=blend)
     alloc_type       TEXT NOT NULL DEFAULT 'percent', -- 'percent' | 'dollar'
     alloc_value      REAL NOT NULL DEFAULT 0,         -- pct of buying power, or fixed USD
@@ -136,7 +136,7 @@ CREATE TABLE IF NOT EXISTS universe (
 CREATE TABLE IF NOT EXISTS vote_sessions (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     trade_date TEXT UNIQUE NOT NULL,                  -- YYYY-MM-DD (ET)
-    status     TEXT NOT NULL DEFAULT 'open',          -- open|closed|executed
+    status     TEXT NOT NULL DEFAULT 'open',          -- open|closed|executed|lapsed
     opened_at  INTEGER,
     closes_at  INTEGER,                               -- epoch of the lock time
     closed_at  INTEGER,
@@ -211,13 +211,16 @@ CREATE TABLE IF NOT EXISTS executions (
     type          TEXT NOT NULL DEFAULT 'market',
     dollar_amount REAL,
     ref_id        TEXT,
-    status        TEXT NOT NULL,    -- planned|reviewed|placed|skipped|error
+    status        TEXT NOT NULL,    -- planned|reviewed|placed|skipped|error|
+                                    -- superseded|abandoned (both terminal)
     review_json   TEXT,
     place_json    TEXT,
     error         TEXT,
     created_at    INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_exec_session ON executions(session_id);
+CREATE INDEX IF NOT EXISTS ix_exec_member ON executions(member_id);
+CREATE INDEX IF NOT EXISTS ix_exec_ref ON executions(ref_id);
 
 -- One row per EXECUTOR INVOCATION — idle/no-op runs included (phase may be
 -- NULL/'none'; the absence of a record is itself a gap). Execution forensics
@@ -634,6 +637,25 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # cannot silently leave the slice; recomputed fresh each buy leg.
     if "slice_carry" not in s:
         conn.execute("ALTER TABLE member_settings ADD COLUMN slice_carry REAL NOT NULL DEFAULT 0")
+    # Club dollars proven (at the broker) never to have been deployed by an
+    # EARLIER cycle — an errored order reconcile has since verified absent or
+    # dead. They arrive asynchronously, so they cannot live in slice_carry,
+    # which the buy leg's write-back overwrites wholesale every cycle; they
+    # accumulate here and the next write-back drains them into the slice in one
+    # transaction. reconcile is the only writer, the write-back is the only
+    # drainer, and every credit is marked on its execution row — so a dollar can
+    # be credited once and deployed once.
+    if "carry_pending" not in s:
+        try:
+            conn.execute("ALTER TABLE member_settings ADD COLUMN carry_pending REAL NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError as e:  # noqa: PERF203
+            # Deploy day restarts the API while a timer unit may be starting its
+            # own job: both read the PRAGMA before either ALTERs, and the loser
+            # would crash on boot. Only a column being added for the FIRST time
+            # can race — every older column already exists in prod, so its
+            # branch never runs.
+            if "duplicate column" not in str(e).lower():
+                raise
     # The CLUB SLICE's value, recorded alongside total account value from
     # 2026-08-24. The club's track record must measure the money the club
     # actually manages: total_value also carries personal positions, idle cash

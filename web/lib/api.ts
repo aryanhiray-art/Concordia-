@@ -273,6 +273,12 @@ export type AdminRunOrder = {
 export type AdminRunMember = {
   member_id?: number; name?: string; skip_reason?: string | null;
   note?: string | null; orders?: AdminRunOrder[];
+  // Money the member moved that no order row carries: the commitment written
+  // down to what the account can deploy, and the earlier cycle's undeployed
+  // dollars folded back into this slice. Declared (not left to the index
+  // signature) because the Runs page renders both.
+  commit_clamped?: { from?: number; to?: number } | null;
+  carry_drained?: number | null;
   [k: string]: unknown;
 };
 export type AdminReference = {

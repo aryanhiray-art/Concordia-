@@ -179,6 +179,15 @@ def callback(request: Request):
 
 @router.post("/api/oauth/robinhood/disconnect")
 def disconnect(member: dict = Depends(require_member)):
+    # Mid-execution freeze (same gate as account deletion): between close and
+    # execute the member's frozen vote weight is being turned into real orders —
+    # disconnecting mid-window would defund a basket they shaped.
+    from ..services import voting as _voting
+    if _voting.member_in_closed_unexecuted_session(member["id"]):
+        raise HTTPException(
+            status_code=409,
+            detail="this cycle's basket is executing — disconnect unlocks after today's run completes",
+        )
     with db() as conn:
         # Disconnecting removes the committed capital, and the tally reads
         # member_settings.voting_power directly between snapshots — so the

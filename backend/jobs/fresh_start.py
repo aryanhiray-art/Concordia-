@@ -9,7 +9,6 @@ Guarded: runs exactly once (kv flag), honors the halt kill switch, market-gated.
 systemd: a dated one-shot concord-fresh-start.timer fires it just after the open.
 """
 import json
-import math
 import os
 import sys
 import uuid
@@ -21,7 +20,7 @@ from app.calendar_us import is_trading_day, today_et  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.db import audit, db, init_db, is_armed, kv_get, kv_set  # noqa: E402
 from app.robinhood import vault  # noqa: E402
-from app.services import positions  # noqa: E402
+from app.services import executor, positions  # noqa: E402
 
 _DONE = "fresh_start_done"
 
@@ -67,9 +66,10 @@ def main() -> int:
         acct = vault.account_number_for(mid)
         if not acct:
             continue
-        # Live account holdings — we sell the FULL live quantity of each name so
-        # nothing fractional is left behind (a 6dp floor of a drifted ledger
-        # estimate strands crumbs). scope='all' liquidates every long position;
+        # Live account holdings — we sell each name's live quantity floored to
+        # the broker's 6dp: flooring the LIVE broker quantity (not a drifted
+        # ledger estimate) leaves at most a ≤1e-6 crumb, and the executor's
+        # crumb repair is the backstop. scope='all' liquidates every long position;
         # 'club' liquidates only names the club bought (never personal symbols),
         # but sells the entire live quantity OF those names so the position closes.
         live = {p["symbol"]: p["quantity"] for p in positions.live_positions(mid)}
@@ -83,11 +83,17 @@ def main() -> int:
         client = vault.ensure_client(mid)
         sold = []
         for sym in names:
-            q = live.get(sym, 0.0)                # the ENTIRE live position → no residue
-            qfloor = math.floor(q * 1e8) / 1e8   # broker precision (8dp), never above held
+            q = live.get(sym, 0.0)
+            qfloor = executor.floor_qty6(q)      # float-safe 6dp floor, never above held
             if qfloor <= 0:
                 continue
-            qstr = f"{qfloor:.8f}"
+            if qfloor < executor.MIN_SELL_QTY:
+                print(f"[fresh_start] {m['display_name']}: {sym} residue {qfloor:.6f} "
+                      "below broker sell minimum — left in place")
+                sold.append({"symbol": sym, "qty": f"{qfloor:.6f}",
+                             "skipped": "below broker sell minimum"})
+                continue
+            qstr = f"{qfloor:.6f}"
             ref = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"freshstart:{mid}:{sym}"))
             try:
                 place = client.place_market_sell(acct, sym, qstr, ref_id=ref)

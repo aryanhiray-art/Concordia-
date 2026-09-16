@@ -9,6 +9,12 @@ taxable-events note when sells went out. A member whose Robinhood connection is
 stranded gets the reconnect call-to-action instead. A member with nothing to
 report gets nothing.
 
+A commitment write-down (the executor's `commit_clamped`) is the one thing here
+that is not an order, and it is the member's own committed figure changing —
+so it earns a receipt on its own, orders or not. The carry drain
+(`carry_drained`) rides with the buys it funded. Both are read from the
+member's OWN summary row: a receipt never carries another member's figures.
+
 Constitutionally incapable of hurting a run: executor.run calls this AFTER the
 run report is persisted, from a fully fenced call site; the entry point here
 swallows everything again, and each member's email is fenced on its own — one
@@ -95,10 +101,52 @@ def _deferred_usd(sid: int | None, member_id) -> float | None:
         return None
 
 
+def _clamp_line(m: dict) -> str | None:
+    """The commitment write-down in plain English, from THIS member's summary
+    row only — a receipt carries nobody else's figures.
+
+    The executor writes commit_clamped={"from":…,"to":…} when a committed stake
+    above what the account can actually deploy is written down to capacity. It
+    is the member's own money figure changing, so it is stated outright rather
+    than left to be discovered on the Account page."""
+    c = m.get("commit_clamped")
+    if not isinstance(c, dict):
+        return None
+    try:
+        frm, to = float(c["from"]), float(c["to"])
+    except (KeyError, TypeError, ValueError):   # a malformed row says nothing
+        return None
+    return (f"Your committed amount is now ${to:,.2f}, reduced from ${frm:,.2f}. "
+            "That is what your Robinhood account can actually deploy — the rest "
+            "had no cash behind it and would have waited undeployed every cycle. "
+            "Nothing left your account, and you can raise it again from your "
+            "Account page whenever the cash is there.")
+
+
+def _drain_line(m: dict, *, bought: bool) -> str | None:
+    """Dollars an EARLIER cycle could not deploy, folded back into this one.
+
+    The drain funds the slice, not any particular order — so with every buy
+    deferred or errored it says the slice grew, never that dollars went into
+    buys this run did not place."""
+    try:
+        usd = float(m.get("carry_drained") or 0)
+    except (TypeError, ValueError):
+        return None
+    if usd <= 0:
+        return None
+    if not bought:
+        return (f"${usd:,.2f} an earlier cycle couldn't deploy went back into "
+                "this cycle's budget.")
+    return (f"${usd:,.2f} an earlier cycle couldn't deploy went back to work in "
+            "these buys.")
+
+
 def _notify_member(m: dict, trade_date: str, sid: int | None, out: dict) -> None:
     orders = m.get("orders") or []
     stranded = m.get("skip_reason") == "rh_error_stranded"
-    if not orders and not stranded:
+    clamp = _clamp_line(m)
+    if not orders and not stranded and not clamp:
         return                                  # untouched member → no email
     row = _member_row(m.get("member_id"))
     if row is None:
@@ -118,11 +166,14 @@ def _notify_member(m: dict, trade_date: str, sid: int | None, out: dict) -> None
     errors = [o for o in orders if o.get("status") == "error"]
     deferred = [o for o in orders if o.get("side") == "buy" and o.get("status") == "skipped"
                 and "defer" in str(o.get("note") or "")]
-    if not (buys or sells or errors or deferred):
+    traded = bool(buys or sells or errors or deferred)
+    if not traded and not clamp:
         return                                  # nothing happened worth a receipt
 
-    lines: list[str] = [f"Hi {row['display_name']},", "",
-                        f"Here's what Concordia did in your account on {trade_date}:", ""]
+    lines: list[str] = [f"Hi {row['display_name']},", ""]
+    if traded:
+        lines.append(f"Here's what Concordia did in your account on {trade_date}:")
+        lines.append("")
     for o in buys:
         amt = o.get("amount")
         lines.append(f"  BUY   {o.get('symbol')}"
@@ -135,6 +186,11 @@ def _notify_member(m: dict, trade_date: str, sid: int | None, out: dict) -> None
                      + (f"  ({note})" if note else ""))
     if buys or sells:
         lines.append("")
+    # The drain describes where some of the dollars above came from, so it rides
+    # with the trades and is never a receipt of its own.
+    drain = _drain_line(m, bought=bool(buys)) if traded else None
+    if drain:
+        lines.append(drain)
     if deferred:
         usd = _deferred_usd(sid, m.get("member_id"))
         if usd is not None:
@@ -146,12 +202,20 @@ def _notify_member(m: dict, trade_date: str, sid: int | None, out: dict) -> None
     if errors:
         lines.append(f"{len(errors)} order(s) hit an error — we retry "
                      "automatically next run.")
+    if clamp:
+        if lines[-1] != "":
+            lines.append("")
+        lines.append(clamp)
     if sells:
         lines.append("")
         lines.append("One note: sells can create taxable events in a brokerage "
                      "account.")
     body = "\n".join(lines) + "\n"
-    _deliver(row["email"], f"Concordia traded for you — {trade_date}", body, out)
+    # A clamp with no orders is still a change to the member's money: it gets a
+    # subject that says so rather than one claiming a trade that never happened.
+    subject = (f"Concordia traded for you — {trade_date}" if traded
+               else f"Concordia reduced your committed amount — {trade_date}")
+    _deliver(row["email"], subject, body, out)
 
 
 def _deliver(to: str, subject: str, body: str, out: dict) -> None:

@@ -131,6 +131,14 @@ def setup_module(_):
                 "dollar_amount,status,created_at) VALUES(?,?,?,'buy','market',?,?,?)",
                 (sid, ALICE, "AAPL", amt, status, _et(2020, 5, 5, 9, 31)))
 
+        # Every other figure here is date-bounded, so this module's far-past
+        # fixture dates keep it insulated from the process-wide DB. waitlist_count
+        # is the exception — an unbounded COUNT(*) of the live table — so the
+        # "seeds no rows" assertion below only holds if we make it hold.
+        # test_public's POST /api/public/waitlist tests leave ~10 rows behind, and
+        # only alphabetical collection order (metrics < public) hid that.
+        conn.execute("DELETE FROM waitlist")
+
 
 # ─── aggregation correctness ─────────────────────────────────────────────────
 
