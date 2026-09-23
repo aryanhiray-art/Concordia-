@@ -1,5 +1,5 @@
 [Unit]
-Description=Concord — execute at the open (09:31 ET, weekdays); job is holiday-gated
+Description=Concord — execute after the open (10:15 ET, weekdays); job is holiday- and cadence-gated
 
 [Timer]
 OnCalendar=Mon-Fri 10:15 America/New_York

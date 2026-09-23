@@ -1,0 +1,23 @@
+[Unit]
+Description=Concord DEMO member app (Next.js :3003)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=concord-web-demo
+Group=concord-web-demo
+WorkingDirectory=/opt/concord-web-demo
+Environment=NODE_ENV=production
+Environment=FORGE_BACKEND=http://127.0.0.1:8781
+ExecStart=/opt/concord-web-demo/node_modules/.bin/next start -p 3003
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/concord-web-demo
+
+[Install]
+WantedBy=multi-user.target

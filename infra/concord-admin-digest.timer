@@ -1,5 +1,5 @@
 [Unit]
-Description=Concord — admin morning digest every weekday (08:00 ET, before the 08:30 close / 09:31 execute)
+Description=Concord — admin morning digest every weekday (08:00 ET, before the 09:15 close / 10:15 execute)
 
 [Timer]
 OnCalendar=Mon..Fri *-*-* 08:00 America/New_York

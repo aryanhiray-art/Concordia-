@@ -2,11 +2,11 @@
 
 > A Concordia-style trading club. Members each connect **their own** Robinhood
 > account. Every trading day, members **search the S&P 500 and add up to 20
-> picks**. The **top-20 consensus basket** executes **on each member's own
-> account independently**, deploying **all of that member's available buying
-> power** split evenly across the basket. A single on/off switch governs each
-> member's participation (off ⇒ no voting). The owner watches everything from a
-> Forge dashboard tab.
+> picks**. The **top-20 consensus basket** (`TOP_N=20`) executes **on each
+> member's own account independently**, deploying that member's **committed
+> dollar stake** — which rides its own P&L cycle to cycle — water-filled across
+> the basket. A single on/off switch governs each member's participation
+> (off ⇒ no voting). The owner watches everything from a Forge dashboard tab.
 
 This document is the **canonical contract**. Backend, frontend, and infra all
 conform to what is written here.
@@ -72,8 +72,10 @@ Reuses the mechanics proven in `forge-dashboard/jobs/robinhood_refresh/`.
   Robinhood's "Agentic" account). We resolve it via `get_accounts`.
 - **Dollar-denominated sizing ⇒ `dollar_amount`, which requires `type=market` +
   `market_hours=regular_hours`.** Dollar/fractional orders only fill in regular
-  hours. Therefore **execution runs at market open, not pre-open.** Each
-  member's per-pick amount = (all buying power − small reserve) ÷ basket size.
+  hours. Therefore **execution runs after the bell, not pre-open** (10:15 ET).
+  Each member's per-name amount is a water-filled dollar target derived from
+  their committed stake — see "Sizing" in §3, not a plain division of buying
+  power.
 
 ---
 
@@ -81,13 +83,69 @@ Reuses the mechanics proven in `forge-dashboard/jobs/robinhood_refresh/`.
 
 | Time (ET) | Job | Action |
 |-----------|-----|--------|
-| 18:00 (prev day) | `open_vote` | open the next trading day's session; ballot = 20-symbol universe |
-| 09:25 | `close_vote` | lock votes; tally; select **top-N** consensus picks |
-| 09:31 | `execute`  | per opted-in member: size = `bp% / N` per pick; `review` → `place` market buys (regular hours) |
+| 18:00 (prev day) | `open_vote` | open the next trading day's session; ballot = the S&P 500 universe |
+| 09:15 | `close_vote` | lock votes; tally; select **top-N** consensus picks (`TOP_N`, **20** live) |
+| 10:15 | `execute`  | per opted-in member: derive the cycle budget, water-fill per-name dollar targets, `review` → `place` market sells + buys (regular hours) |
 
-Each job is **market-calendar gated** (skips weekends/holidays). Voting is
-"due before market open"; the basket executes at the bell. `N` (default 5) and
-the open/close times are config.
+Each job is **market-calendar gated** (skips weekends/holidays), and on top of
+that `calendar_us.cycle_phase()` decides whether the date is a cycle day at all
+— on a non-cycle day it returns `None` and the job idles. `CYCLE_CADENCE`
+(`daily` live) drives that. The unit times above are fixed; the cadence chooses
+the days.
+
+### Sizing — how a member's dollars reach the basket
+
+**This is no longer "`bp% / N` per pick".** A member commits a **dollar stake**
+(a percent setting is just a way of specifying that dollar figure; it converts to
+dollars on the first deployed cycle). Each cycle, for a compounding member
+(`services/executor.py`, `services/alloc.py`):
+
+1. **`alloc.compound_budget`** derives the cycle's target. The slice **rides its
+   own P&L in both directions** from the committed base — grown to $110 → deploy
+   $110, fallen to $90 → deploy $90, never topped up from fresh cash — adjusted
+   by any stake *change* (`budget = club_value + (alloc_value − alloc_applied)`)
+   and by **`slice_carry`**, the club dollars the last cycle meant to deploy but
+   could not. An empty slice (< $1 held) bootstraps from the full stake. The
+   function itself clamps to total account value and `MAX_NOTIONAL_PER_MEMBER`.
+   *(A pinned, non-compounding stake uses `alloc.rebalance_budget` instead: the
+   committed figure outright, same hard caps. It never rides carry.)*
+2. **Clamped to deployable capacity, then to the daily cap** — in that order, in
+   the executor, not inside the budget function (which is called with
+   `daily_cap_usd=None` precisely so these two stay distinguishable).
+   `capacity = (club slice + slice_carry) + deployable(buying_power)`, where
+   `deployable` subtracts `CASH_BUFFER_PCT`. A commitment above capacity can
+   never fully deploy, so the budget is capped at it — and a *persistently*
+   over-committed stake is written down by the over-commitment clamp (see the
+   glossary below). The member's `daily_cap_usd` is applied last, to the budget
+   only; it never feeds the clamp, because a daily cap limits deployment rather
+   than restating what the member has committed.
+3. **`n_eff` caps how many names the budget can hold.**
+   `n_eff = max(1, min(len(picks), int(budget // 1.00)))` — the broker's $1
+   order minimum means a budget of $7 can hold at most 7 names, so a small stake
+   holds the **top** names only. Rank hysteresis (band `H=4`) lets a held name
+   keep its slot while it stays within `n_eff+H`, so daily re-ranking does not
+   force a full sell/re-buy round trip every cycle.
+4. **`alloc.basket_targets` water-fills the per-name dollar targets** so they
+   **sum to the budget**. A name that has grown past its fair share but by less
+   than $1 (the minimum placeable trim) keeps its value and the rest absorb the
+   difference — winners ride, entries shrink, the total adds up. A name more than
+   $1 over fair share is targeted *at* fair share and the sell leg trims it.
+
+So the per-name amount is a **water-filled dollar target against the cycle
+budget**, not an equal `budget / N` slice, and `N` is `n_eff`, not a fixed 5.
+
+### Operator vocabulary
+
+Terms you will meet in run reports, the admin panel and `member_settings`.
+
+| term | what it is |
+|---|---|
+| **`slice_carry`** | Club dollars **this** cycle's buy leg intended to deploy but could not (a buy deferred for settled cash, an order-cap skip). Column on `member_settings`. **Written, never added to** — the buy-leg write-back recomputes it from scratch each cycle, so a re-run of the same session cannot accumulate it. It is added back into the next `compound_budget`, so undeployed club money cannot silently leak out of the slice. Can go **negative**: a crumb-repair's $1 top-ups are club money fronted from account cash, and netting that spend back out keeps the committed stake flat. The sum still floors at zero. |
+| **`carry_pending`** | Club dollars an **earlier** cycle is now *proven* (at the broker) never to have deployed — an errored order that `reconcile` has since verified absent or dead. These arrive **asynchronously**, so they cannot live in `slice_carry`, which the next write-back overwrites wholesale; they accumulate here instead. **`reconcile` is the only writer.** |
+| **the drain** | The buy-leg write-back reads `carry_pending`, adds it to the cycle's own undeployed figure, writes the sum to `slice_carry`, and zeroes `carry_pending` — **all in one transaction**, so a credit landing mid-write cannot be zeroed uncounted. The drain is remembered per session (`carry_drained:{sid}:{mid}`), so re-running a cycle rebuilds the same figure rather than destroying it. Net effect: a dollar is credited once and deployed once. A **pinned** (non-compounding) member's buy leg clears both columns instead — a pinned budget is the committed figure outright and has no cycle to fund. |
+| **`n_eff`** | The effective basket size for this member: `max(1, min(len(picks), int(budget // 1.00)))`. The broker's $1 minimum order means a small stake simply cannot hold 20 names, so it holds the top `n_eff` (with `H=4` rank hysteresis on names already held). |
+| **`commit_clamped`** | The **over-commitment auto-clamp**. When a member's committed figure sits above their deployable capacity, the excess would defer and carry every cycle forever. The executor writes the commitment *down* to the capacity figure — but **only after the 2nd consecutive materially-clamped CYCLE** (tracked by stored session id, so same-day re-runs and a split cadence each count once). One low reading — a transient buying-power dip or a bad read — must never shrink someone's commitment. Appears in the run summary as `{"from": …, "to": …}` and triggers a member notification. Only a **compounding** member's commitment is ever rewritten. The daily cap is deliberately *not* what gets honored here: a daily cap limits deployment, it never rewrites the commitment. |
+| **session status `'lapsed'`** | A terminal state, not an error. A `'closed'` session older than `STALE_BASKET_DAYS` (**5**) can never trade — the buy leg refuses it — so `_retire_stale_sessions` flips it to `'lapsed'` and its leftover `'error'` execution rows to `'abandoned'` (error text preserved). This unfreezes its voters and stops it feeding error rows to every reconcile pass. **It deliberately does NOT return an abandoned buy's dollars to the slice:** only `reconcile` reads the broker, so only `reconcile` can prove an order never landed; crediting one that *did* land would put the same money in the slice twice. Those dollars stay out — the conservative direction. The session currently executing is never lapsed. |
 
 ---
 
@@ -98,7 +156,16 @@ members(id, email, display_name, role['owner'|'member'], invite_code_used,
         created_at, session_version)
 
 member_settings(member_id PK→members, opted_in[bool], buying_power_pct[float],
-                daily_cap_usd[float], max_orders[int], updated_at)
+                daily_cap_usd[float], max_orders[int], updated_at,
+                -- the stake (see §3 "Sizing")
+                alloc_type['percent'|'dollar'], alloc_value[float],
+                compound[bool], alloc_applied[float|null],
+                slice_carry[float], carry_pending[float],
+                alloc_intent_type, alloc_intent_value,
+                -- voting power / accuracy (see RUNBOOK §8)
+                voting_power, voting_power_share, last_capital_usd,
+                accuracy, accuracy_short, accuracy_long, cycles_participated,
+                email_reminders[bool])
 
 rh_accounts(member_id PK→members, account_number, agentic_allowed[bool],
             enc_tokens[blob],          -- Fernet(access+refresh+client_id+meta)
@@ -106,7 +173,8 @@ rh_accounts(member_id PK→members, account_number, agentic_allowed[bool],
 
 universe(symbol PK, name, sort_order, active[bool])
 
-vote_sessions(id, trade_date[YYYY-MM-DD] UNIQUE, status['open'|'closed'|'executed'],
+vote_sessions(id, trade_date[YYYY-MM-DD] UNIQUE,
+              status['open'|'closed'|'executed'|'lapsed'],   -- 'lapsed': see §3 glossary
               opened_at, closes_at, closed_at, top_n, picks_json[null until closed])
 
 votes(session_id→vote_sessions, member_id→members, symbol→universe, created_at,
@@ -165,12 +233,13 @@ Member chose **live real orders**. Guardrails regardless:
   only** — never `place_equity_order`.
 - Master **`ARMED`** switch (DB flag, default **false**). `live` + `ARMED`
   required for any real order. Surfaced loudly in the dashboard.
-- Per-member **`max_orders`** cap, plus a global **`MAX_NOTIONAL_PER_MEMBER`**
-  ceiling (config, default $2,000) enforced in `alloc.rebalance_budget` — the
-  single sizing function behind both the executor's per-member budget and the
-  voting-power snapshot. Per-member **`daily_cap_usd`** is stored in
-  `member_settings` but **not yet enforced** (the executor call site does not
-  pass it through yet).
+- Per-member **`max_orders`** cap (each leg has its own budget), plus a global
+  **`MAX_NOTIONAL_PER_MEMBER`** ceiling (config, default $2,000) enforced inside
+  **both** budget functions — `alloc.rebalance_budget` (pinned stakes, and the
+  voting-power snapshot) and `alloc.compound_budget` (compounding stakes).
+  Per-member **`daily_cap_usd`** **is enforced**: the executor selects it in
+  `_opted_members()` and clamps the budget with it (0/NULL = no cap). It limits
+  *deployment* only — it never rewrites the member's committed stake.
 - Bot containment: per-bot voting power is clamped to **`BOT_POWER_CAP`**
   (default $300) at the weekly reweight, and the tally scales all bot vote
   contributions down whenever their aggregate share of total weight would

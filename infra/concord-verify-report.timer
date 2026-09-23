@@ -1,5 +1,5 @@
 [Unit]
-Description=Concord verify-report — a few minutes after each execute (Mon-Fri)
+Description=Concord verify-report — 09:50 ET Mon-Fri; NOTE this now fires BEFORE the 10:15 execute, not after it (unit is disabled on the live box)
 
 [Timer]
 OnCalendar=Mon-Fri 09:50 America/New_York

@@ -244,7 +244,13 @@ def test_misconfigured_cutoff_cannot_block_the_on_time_run(monkeypatch):
     """EXECUTE_CATCHUP_UNTIL at/before execute_at would otherwise stand down
     the NORMAL scheduled fire every cycle day — silently skipping the week's
     trade. The guard must give the on-time fire a 30-minute grace instead."""
-    object.__setattr__(settings, "execute_catchup_until", "09:00")  # < execute_at 09:31
+    # Derive both instants from execute_at rather than hardcoding a clock: this
+    # test pinned 09:31 and silently stopped testing the grace boundary the day
+    # the scheduled time moved to 10:15.
+    _eh, _em = (int(x) for x in settings.execute_at.split(":"))
+    _exec_min = _eh * 60 + _em
+    object.__setattr__(settings, "execute_catchup_until",
+                       f"{(_exec_min - 31) // 60:02d}:{(_exec_min - 31) % 60:02d}")
     monkeypatch.setattr(cal, "cycle_phase", lambda *_a, **_k: "both")
     fake_sess = {"id": 424244, "status": "closed",
                  "trade_date": cal.today_et().isoformat()}
@@ -253,11 +259,13 @@ def test_misconfigured_cutoff_cannot_block_the_on_time_run(monkeypatch):
     monkeypatch.setattr(executor, "run",
                         lambda session, **kw: called.update(session=session)
                         or {"ok": True, "note": "ran", "orders": []})
-    _pin_now(monkeypatch, 9, 32)               # the on-time fire (execute_at 09:31)
+    _on_time = _exec_min + 1                   # the on-time fire, one minute late
+    _pin_now(monkeypatch, _on_time // 60, _on_time % 60)
     out = executor._run_today_locked(force_dry_run=True, trigger="schedule")
     assert out["note"] == "ran" and called["session"] is fake_sess
     # ...and once the grace lapses the stand-down still protects the close
-    _pin_now(monkeypatch, 10, 30)              # > 09:31 + 30 min grace
+    _past = _exec_min + 31                     # > execute_at + the 30 min grace
+    _pin_now(monkeypatch, _past // 60, _past % 60)
     monkeypatch.setattr(executor, "run", lambda *a, **k: (_ for _ in ()).throw(
         AssertionError("must stand down past the grace")))
     out = executor._run_today_locked(force_dry_run=True, trigger="schedule")

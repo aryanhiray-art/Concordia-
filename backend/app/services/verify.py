@@ -15,6 +15,8 @@ via OpenClaw) — that runs as root; this module never depends on it.
 """
 from __future__ import annotations
 
+import math
+
 import time
 
 from ..db import db
@@ -34,7 +36,13 @@ def _quotes(client, syms: list[str]) -> dict[str, float]:
             for e in res:
                 q = e.get("quote") or {}
                 if q.get("symbol"):
-                    out[q["symbol"]] = positions._num(q.get("last_trade_price"))
+                    _px = positions._num(q.get("last_trade_price"))
+                    # Store None unless the price is usable. A NaN would read as
+                    # priced=True below while every value test against it reads
+                    # False — so a real club holding would be waved through as
+                    # "no leftovers" on the expect_flat check, the exact false
+                    # PASS this verification exists to catch.
+                    out[q["symbol"]] = _px if _px is not None and math.isfinite(_px) else None
         except Exception:  # noqa: BLE001
             pass
     return out

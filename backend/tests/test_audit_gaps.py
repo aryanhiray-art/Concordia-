@@ -19,6 +19,12 @@ BUDGET — a strict total_value read is its own guard. The club-value consistenc
     payload reads as a real, tiny account.
 STRAND — a member stranded before placing anything must NOT hold the executed
     flip; sessions used to wedge exactly that way.
+FEED — A4 read only PAGE ONE of the broker's order feed and treated "not found"
+    as proof the order never landed. The feed is fetched from inside the buy
+    loop, after the sell leg and this run's earlier buys, so the run's own
+    orders crowd page one ahead of the older row being verified.
+NaN — a non-finite quote is truthy and is not None, so it slipped through both
+    quote filters and then walked past the fail-closed valuation guard.
 
 Run from backend/:  python -m pytest tests/test_audit_gaps.py -q
 (throwaway temp DB; the Robinhood client + vault are mocked — no network, and
@@ -88,11 +94,12 @@ class FakeClient:
     """Scripted broker double; records every call."""
 
     def __init__(self, *, quotes=None, positions=None, orders=None,
-                 buying_power=1000.0, total_value=1000.0, portfolio=None):
+                 buying_power=1000.0, total_value=1000.0, portfolio=None, pages=None):
         self.calls: list[tuple] = []
         self.quotes_map = quotes or {}
         self.positions_list = positions or []
         self.orders_list = orders or []
+        self.pages = pages              # None = one page (the pre-fix behaviour)
         self.buying_power = buying_power
         self.total_value = total_value
         self.portfolio = portfolio          # raw override for payload-shape tests
@@ -116,8 +123,15 @@ class FakeClient:
             for s in symbols if s in self.quotes_map]}}
 
     def get_equity_orders(self, acct, cursor=None, placed_agent=None):
-        self.calls.append(("get_equity_orders", acct, placed_agent))
-        return {"data": {"orders": list(self.orders_list), "next": None}}
+        self.calls.append(("get_equity_orders", acct, placed_agent, cursor))
+        if self.pages is None:
+            return {"data": {"orders": list(self.orders_list), "next": None}}
+        # scripted pagination: pages[i] is one page; the cursor IS the index
+        idx = 0 if cursor is None else int(cursor)
+        page = self.pages[idx] if idx < len(self.pages) else []
+        nxt = (f"https://api.example/orders?cursor={idx + 1}"
+               if idx + 1 < len(self.pages) else None)
+        return {"data": {"orders": list(page), "next": nxt}}
 
     def review_market_buy(self, acct, symbol, amt):
         self.calls.append(("review_buy", acct, symbol, amt))
@@ -349,3 +363,130 @@ def test_auth_strand_before_any_order_does_not_hold_the_flip(monkeypatch):
     with db() as conn:
         assert conn.execute("SELECT COUNT(*) FROM kv WHERE key LIKE ?",
                             (f"strand_hold:{sid}:%",)).fetchone()[0] == 0
+
+
+# ─── FEED: absence is only proof when the feed provably reaches back ────────
+
+def test_a4_finds_a_landed_order_on_page_two(monkeypatch):
+    """The bug this file exists to prevent recurring.
+
+    A4 asks the broker "did my errored buy actually land?" and reads the answer
+    from the order feed. It used to read only PAGE ONE. The feed is fetched from
+    inside the buy loop — after the sell leg and after this run's earlier buys —
+    so the run's own fresh orders crowd page one ahead of the older row being
+    verified, and the real fill sits on page two. Reading "not found" there and
+    acting on it re-places a buy the broker already executed.
+    """
+    mid = _member("gap-feed-page2@x.com", alloc_value=20.0)
+    closed = _closed_session(datetime.date(2031, 5, 1), mid, ["AAPL"])
+    sid = closed["id"]
+    executor._record(sid, mid, "AAPL", 20.0, executor.ref_id_for(sid, mid, "AAPL"),
+                     "error", error="place: read timeout")
+    landed = {"symbol": "AAPL", "side": "buy", "state": "filled", "dollar_amount": "20.00",
+              "placed_agent": "agentic", "created_at": int(time.time()),
+              "cumulative_quantity": "0.2", "id": "ord-real"}
+    noise = [{"symbol": "KO", "side": "buy", "state": "filled", "dollar_amount": "1.00",
+              "placed_agent": "agentic", "created_at": int(time.time()),
+              "cumulative_quantity": "0.01", "id": f"noise-{i}"} for i in range(3)]
+    client = FakeClient(quotes={"AAPL": 100.0}, buying_power=100.0, total_value=500.0,
+                        pages=[noise, [landed]])          # the match is on page 2
+    _use(monkeypatch, client)
+    monkeypatch.setattr(executor.reconcile, "reconcile_all", lambda dry_run=False: None)
+
+    with _armed():
+        executor.run(closed, force_dry_run=False, phase="buy")
+
+    assert len(client.trades_for("get_equity_orders", f"ACC{mid}")) >= 2, "page 2 was never read"
+    rows = _rows(sid, mid, "AAPL")
+    assert [r["status"] for r in rows] == ["placed"], rows
+    assert client.trades_for("place_buy", f"ACC{mid}", "AAPL") == [], "never bought twice"
+
+
+def test_unproven_absence_does_not_retire_a_non_basket_row(monkeypatch):
+    """'superseded' is terminal in both directions — club_shares counts only
+    'placed', and reconcile drops the row from its candidate set — so retiring a
+    row on an absence the feed never actually proved makes a REAL fill
+    permanently invisible. When the feed stops before reaching the row's own
+    timestamp, the row stays 'error' and reconcile's age-out is the backstop."""
+    mid = _member("gap-feed-unproven@x.com", alloc_value=20.0)
+    closed = _closed_session(datetime.date(2031, 5, 2), mid, ["AAPL"])
+    sid = closed["id"]
+    # an OLD errored buy of a name that is NOT in today's basket
+    executor._record(sid, mid, "ZTS", 9.0, executor.ref_id_for(sid, mid, "ZTS"),
+                     "error", error="place: read timeout")
+    with db() as conn:
+        conn.execute("UPDATE executions SET created_at=? WHERE member_id=? AND symbol='ZTS'",
+                     (int(time.time()) - 6 * 86400, mid))
+    # a feed that is all RECENT orders and still has more pages: it never reaches
+    # back to the row, so it proves nothing either way
+    recent = [{"symbol": "KO", "side": "buy", "state": "filled", "dollar_amount": "1.00",
+               "placed_agent": "agentic", "created_at": int(time.time()),
+               "cumulative_quantity": "0.01", "id": f"r-{i}"} for i in range(4)]
+    client = FakeClient(quotes={"AAPL": 100.0, "ZTS": 180.0}, buying_power=100.0,
+                        total_value=500.0,
+                        pages=[recent] * (executor._A4_MAX_ORDER_PAGES + 2))
+    _use(monkeypatch, client)
+    monkeypatch.setattr(executor.reconcile, "reconcile_all", lambda dry_run=False: None)
+
+    with _armed():
+        executor.run(closed, force_dry_run=False, phase="buy")
+
+    row = _rows(sid, mid, "ZTS")[0]
+    assert row["status"] == "error", "an unproven absence must not retire the evidence"
+    assert row["error"] == "place: read timeout", "and must not rewrite it"
+    # the page cap is respected — it does not read forever
+    assert len(client.trades_for("get_equity_orders", f"ACC{mid}")) == executor._A4_MAX_ORDER_PAGES
+
+
+def test_exhausted_feed_does_retire_a_non_basket_row(monkeypatch):
+    """The other half: when the broker hands over the WHOLE feed and the order
+    is not in it, absence is real and the row is retired as before."""
+    mid = _member("gap-feed-proven@x.com", alloc_value=20.0)
+    closed = _closed_session(datetime.date(2031, 5, 3), mid, ["AAPL"])
+    sid = closed["id"]
+    executor._record(sid, mid, "ZTS", 9.0, executor.ref_id_for(sid, mid, "ZTS"),
+                     "error", error="place: read timeout")
+    client = FakeClient(quotes={"AAPL": 100.0, "ZTS": 180.0}, buying_power=100.0,
+                        total_value=500.0, orders=[])      # one page, and it is empty
+    _use(monkeypatch, client)
+    monkeypatch.setattr(executor.reconcile, "reconcile_all", lambda dry_run=False: None)
+
+    with _armed():
+        executor.run(closed, force_dry_run=False, phase="buy")
+
+    assert _rows(sid, mid, "ZTS")[0]["status"] == "superseded"
+
+
+# ─── NaN: an unusable quote is a MISSING quote, not a zero ─────────────────
+
+def test_a_nan_quote_is_treated_as_missing_not_as_a_price(monkeypatch):
+    """json.loads accepts a bare NaN, and a NaN is truthy AND is not None — so
+    it passed the quote filter and then walked straight past the fail-closed
+    `if price is None` valuation guard, poisoning club_value. Every later test
+    against it reads False (nan < 1.00, nan > 0), which is silently the opposite
+    of what the guard was written to do."""
+    mid = _member("gap-nan@x.com", alloc_value=50.0)
+    executor._record(90840, mid, "MSFT", 25.0, "gap-nan-ref", "placed",
+                     place={"_concord_est_qty": 0.25})
+    with db() as conn:
+        conn.execute("UPDATE executions SET created_at=? WHERE member_id=? AND symbol='MSFT'",
+                     (int(time.time()) - 9 * 86400, mid))
+    closed = _closed_session(datetime.date(2031, 5, 4), mid, ["AAPL", "MSFT"])
+
+    class NaNQuotes(FakeClient):
+        def get_quotes(self, symbols):
+            self.calls.append(("get_quotes", tuple(symbols)))
+            return {"data": {"results": [
+                {"quote": {"symbol": s,
+                           "last_trade_price": ("NaN" if s == "MSFT" else str(self.quotes_map[s]))}}
+                for s in symbols if s in self.quotes_map or s == "MSFT"]}}
+
+    client = NaNQuotes(quotes={"AAPL": 100.0}, positions=[("MSFT", "0.25")],
+                       buying_power=100.0, total_value=500.0)
+    _use(monkeypatch, client)
+
+    summary = executor.run(closed, force_dry_run=True, phase="both")
+
+    row = next(r for r in summary["members"] if r["member_id"] == mid)
+    assert row.get("skip_reason") == "unquotable_holding", row
+    assert client.trades_for("review_sell", f"ACC{mid}") == [], "nothing sized off a NaN"

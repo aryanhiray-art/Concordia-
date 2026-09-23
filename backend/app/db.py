@@ -133,10 +133,33 @@ CREATE TABLE IF NOT EXISTS universe (
     active     INTEGER NOT NULL DEFAULT 1
 );
 
+-- ── vote_sessions.status — the cycle's own state machine ────────────────────
+-- open      voting.open_session INSERTs it. Members may vote until closes_at.
+--           An 'open' row whose closes_at is more than STALE_OPEN_AFTER_SECS
+--           (1 day) past was ABANDONED mid-cycle — voting.is_abandoned_open is
+--           the single source of that rule, and the views present such a row as
+--           'expired'. It is cruft, not a live ballot, and is never mutated.
+-- closed    voting.close_session: votes locked, picks_json + cycle_prices
+--           written. The executor's buy leg only ever processes the LATEST
+--           closed session, so an older row stuck here can never trade again.
+-- executed  executor, after the BUY phase completes — and ONLY when zero 'error'
+--           executions remain, no member was stranded mid-pass, and the run was
+--           not halted. Flipping early would hide the session from the next
+--           run's reconcile/A4 pass. Terminal.
+-- lapsed    executor._retire_stale_sessions: a 'closed' session older than
+--           STALE_BASKET_DAYS (5) that the buy leg now refuses. Its remaining
+--           'error' executions become 'abandoned' in the same sweep. Terminal.
+--           Internal bookkeeping only — members see it as an ordinary past cycle.
+--
+-- TERMINAL: executed, lapsed — and reconcile._session_retired treats exactly
+-- those two (or a trade_date more than 5 days old) as "this session can no
+-- longer re-place anything", which is the gate on returning an errored buy's
+-- dollars to the member's carry.
 CREATE TABLE IF NOT EXISTS vote_sessions (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     trade_date TEXT UNIQUE NOT NULL,                  -- YYYY-MM-DD (ET)
     status     TEXT NOT NULL DEFAULT 'open',          -- open|closed|executed|lapsed
+                                                      -- (state machine above)
     opened_at  INTEGER,
     closes_at  INTEGER,                               -- epoch of the lock time
     closed_at  INTEGER,
@@ -202,6 +225,75 @@ CREATE TABLE IF NOT EXISTS bot_picks (
 );
 CREATE INDEX IF NOT EXISTS ix_botpicks_member ON bot_picks(member_id);
 
+-- ── executions.status — THE STATE MACHINE ───────────────────────────────────
+-- Read this during an incident BEFORE touching a row by hand. Two facts drive
+-- every decision below:
+--   • positions.club_shares counts 'placed' AND NOTHING ELSE. A row in any other
+--     status contributes zero shares to the club ledger.
+--   • reconcile.reconcile_member's candidate set is 'placed' + 'error' + a
+--     'skipped' row whose place_json carries _concord_awaiting_credit (a parked
+--     carry claim). Rows with _concord_aged_out set are never re-scanned.
+-- So "will the next reconcile pass still look at this row?" and "does this row
+-- own shares?" are two different questions with two different answers.
+--
+-- planned   VESTIGIAL. Declared here, but NO code path writes it — verified
+--           across backend/ (2026-09-23). It survives only as a DELETE target in
+--           executor._clear_replanable. Treat a 'planned' row in prod as data
+--           from a dead code path, not as a live state.
+-- reviewed  executor._record on a review-only pass: the pre-trade review came
+--           back clean but will_place was False (dry run / not armed). NOTHING
+--           reached the broker. Non-terminal: _clear_replanable DELETES it on the
+--           next run of the same session. Not counted, not a reconcile candidate.
+-- placed    The broker accepted an order. Written by executor._record after a
+--           successful place, by rescue.py (operator rescue sell), by renames.py
+--           (synthetic CORPACT row, no broker order behind it) and by reconcile
+--           when it promotes an 'error' row it proved filled. The ONLY counted
+--           status, and _clear_replanable never deletes it (_placed_keys also
+--           blocks re-placing the same member/symbol/side).
+--           NOT STRICTLY TERMINAL — this is the one that surprises operators:
+--           reconcile DEMOTES a 'placed' row to 'skipped' when the broker says
+--           the order was rejected/cancelled with a zero fill, so club_shares
+--           stops claiming shares that never existed.
+-- skipped   Nothing reached the broker, and that is settled: no quote, max_orders
+--           cap, blocking pre-trade alert, review call raised, auth died before
+--           the place, unsellable residue, unknown basket. Also reconcile's
+--           landing state for a demoted 'placed' row and for an aged-out 'error'
+--           row. Not counted. _clear_replanable DELETES it on a re-run, which is
+--           deliberate — deleting the row also discards its parked carry claim,
+--           and the re-run re-places the order instead.
+-- error     The place call itself RAISED, so the broker MAY have accepted the
+--           order. This is evidence, not a failure record. Non-terminal, and it
+--           deliberately SURVIVES _clear_replanable so a re-run can never blindly
+--           re-place an order that may already exist. It also holds the session
+--           open: the flip to vote_sessions.status='executed' requires zero
+--           remaining 'error' rows. Exits only by positive resolution —
+--             → placed      reconcile matched a real fill (promotion)
+--             → skipped     reconcile proved it dead at the broker, or aged it
+--                           out after _ERROR_AGE_OUT_S (3d) when the order feed
+--                           provably reaches back past the row; an aged-out BUY
+--                           credits its dollars to carry_pending exactly once
+--             → superseded  executor is about to re-place this exact key, or has
+--                           carried the budget forward, or verified the order
+--                           absent from the broker's own recent-order feed
+--             → abandoned   the session aged out from under it
+-- superseded TERMINAL. Executor-only: _supersede_error (immediately before a new
+--           order for the same member/symbol/side is placed, so the stale row can
+--           never be fuzzy-matched to the NEW order and double-count the ledger),
+--           the carried-forward-budget path, and the A4 verified-absent
+--           retirement. Not counted, not a reconcile candidate, and
+--           _clear_replanable garbage-collects it. Because it is invisible to
+--           both, retiring on an UNPROVEN absence would make a real fill
+--           permanently invisible — hence the executor only writes it on proof.
+-- abandoned TERMINAL. Written in exactly one place: executor._retire_stale_sessions
+--           flips a stale session's remaining 'error' rows when a 'closed' session
+--           ages past STALE_BASKET_DAYS (5). The error text is preserved. It does
+--           NOT return an abandoned buy's dollars to the member's slice — only
+--           reconcile reads the broker, so only reconcile can prove an order never
+--           landed, and crediting one that DID land would spend it twice. Not
+--           counted, not a reconcile candidate, and never deleted.
+--
+-- TERMINAL: superseded, abandoned. Everything else can still move — including
+-- 'placed', via reconcile's demotion path.
 CREATE TABLE IF NOT EXISTS executions (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id    INTEGER NOT NULL,
@@ -212,7 +304,7 @@ CREATE TABLE IF NOT EXISTS executions (
     dollar_amount REAL,
     ref_id        TEXT,
     status        TEXT NOT NULL,    -- planned|reviewed|placed|skipped|error|
-                                    -- superseded|abandoned (both terminal)
+                                    -- superseded|abandoned — state machine above
     review_json   TEXT,
     place_json    TEXT,
     error         TEXT,

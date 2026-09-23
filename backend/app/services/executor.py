@@ -206,7 +206,15 @@ def _quotes(client, symbols: list[str]) -> dict[str, float]:
         for e in res:
             q = e.get("quote") or {}
             px = _num(q.get("last_trade_price"))
-            if q.get("symbol") and px:
+            # isfinite, not just truthiness: json.loads accepts a bare NaN, and a
+            # NaN price is TRUTHY and is not None — so it would pass this filter
+            # and then walk straight through the fail-closed `if _p is None`
+            # valuation guard below, poisoning club_value. Every later comparison
+            # against it silently reads False (nan < 1.00, nan > 0), which is the
+            # one failure mode that guard exists to prevent. An unusable quote is
+            # a MISSING quote: leaving it out routes the name into the
+            # 'unquotable_holding' skip the code already models.
+            if q.get("symbol") and px and math.isfinite(px):
                 out[q["symbol"]] = px
     return out
 
@@ -362,24 +370,85 @@ def _error_buy_rows(session_id: int) -> dict[tuple[int, str], dict]:
             for r in rows}
 
 
-def _fetch_recent_orders(client, account_number: str) -> list[dict]:
-    """The member's recent AGENTIC equity orders, normalized to a flat list.
+# How deep A4 pages the broker's order feed, and how far back it must reach
+# before "no match" may be read as "the order never landed". A single page was
+# NOT enough: the feed is fetched from inside the buy loop, AFTER the sell leg
+# and after this run's earlier buys, so this cycle's own orders crowd page one
+# ahead of the older row being verified. reconcile pages the same feed 12 deep.
+_A4_MAX_ORDER_PAGES = 12
+
+
+def _fetch_recent_orders(client, account_number: str) -> tuple[list[dict], bool]:
+    """The member's recent AGENTIC equity orders, plus whether the feed was EXHAUSTED.
 
     CRITICAL: request placed_agent='agentic' and drop anything not agentic — the
     club/personal safety boundary (mirrors reconcile._fetch_agentic_orders). A
     member's personal ('user') order must NEVER reach A4 buy-recovery, or a coincidental
     personal buy could be matched into a phantom club holding and later market-sell the
     member's PERSONAL shares. Payload shape handled defensively.
+
+    Returns (orders, exhausted). `exhausted` is True only when the broker said
+    there are no further pages — i.e. absence from this list is real absence.
+    When it is False the list was cut short by the page cap, and "not found"
+    means "not found YET": a caller must not treat that as proof. Deliberately
+    uncached — the executor has to see orders placed seconds ago.
     """
-    payload = client.get_equity_orders(account_number, placed_agent="agentic")
-    data = payload.get("data", payload) if isinstance(payload, dict) else payload
-    if isinstance(data, dict):
-        orders = data.get("orders") or data.get("results") or []
-    elif isinstance(data, list):
-        orders = data
-    else:
-        orders = []
-    return [o for o in orders if isinstance(o, dict) and o.get("placed_agent") in (None, "agentic")]
+    out: list[dict] = []
+    cursor: str | None = None
+    seen: set[str] = set()
+    exhausted = False
+    for _ in range(_A4_MAX_ORDER_PAGES):
+        payload = client.get_equity_orders(account_number, cursor=cursor,
+                                           placed_agent="agentic")
+        data = payload.get("data", payload) if isinstance(payload, dict) else payload
+        if isinstance(data, dict):
+            orders = data.get("orders") or data.get("results") or []
+            nxt = data.get("next")
+        elif isinstance(data, list):
+            orders, nxt = data, None
+        else:
+            orders, nxt = [], None
+        out += [o for o in orders
+                if isinstance(o, dict) and o.get("placed_agent") in (None, "agentic")]
+        cursor = _cursor_from_next(nxt)
+        if not cursor or not orders:
+            exhausted = True        # the broker itself said that is everything
+            break
+        if cursor in seen:
+            exhausted = True        # a non-advancing cursor is the end of the feed
+            break
+        seen.add(cursor)
+    return out, exhausted
+
+
+def _cursor_from_next(nxt) -> str | None:
+    """The cursor inside a feed's `next` link, or None when there is no page 2."""
+    if not nxt:
+        return None
+    try:
+        from urllib.parse import parse_qs, urlparse
+        c = parse_qs(urlparse(str(nxt)).query).get("cursor")
+        return c[0] if c else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _feed_covers(orders: list[dict], exhausted: bool, created_at) -> bool:
+    """Can absence from `orders` be read as proof this order never landed?
+
+    Only when the feed provably spans the moment we tried to place it: either
+    the broker handed us every page, or the oldest page we did read predates the
+    row. Without that, "not in the list" only means the list stopped too early —
+    and acting on it would retire a real fill (or re-place a real buy).
+    """
+    if exhausted:
+        return True
+    ts = _num(created_at)
+    if ts is None:
+        return False
+    oldest = min((t for t in (_order_ts(o) for o in orders) if t is not None),
+                 default=None)
+    return oldest is not None and oldest < ts
 
 
 def _order_ts(order: dict) -> float | None:
@@ -1288,6 +1357,7 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         # A4: lazy one-shot fetch of the member's recent broker orders, only when a
         # prior run left an errored buy whose true fate is unknown.
         recent_orders: list[dict] | None = None
+        orders_exhausted = False        # did the broker hand us the WHOLE feed?
         orders_fetched = False
         # ── BUY phase: top each basket name up to its equal-weight target ──
         # need = target − current club value, so names already held aren't re-bought
@@ -1327,7 +1397,8 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                 if not orders_fetched:
                     orders_fetched = True
                     try:
-                        recent_orders = _fetch_recent_orders(client, m["account_number"])
+                        recent_orders, orders_exhausted = _fetch_recent_orders(
+                            client, m["account_number"])
                     except Exception:  # noqa: BLE001
                         recent_orders = None
                 if recent_orders is None:
@@ -1545,7 +1616,8 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
             if not orders_fetched:
                 orders_fetched = True
                 try:
-                    recent_orders = _fetch_recent_orders(client, m["account_number"])
+                    recent_orders, orders_exhausted = _fetch_recent_orders(
+                        client, m["account_number"])
                 except Exception:  # noqa: BLE001
                     recent_orders = None
             if recent_orders is None:
@@ -1565,11 +1637,18 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                     conn.execute("UPDATE executions SET status='placed', place_json=? "
                                  "WHERE id=? AND status='error'",
                                  (json.dumps(pj), prior["id"]))
-                else:
+                elif _feed_covers(recent_orders, orders_exhausted, prior.get("created_at")):
                     # verified absent — never re-place a non-basket buy; retire
                     # the evidence
                     conn.execute("UPDATE executions SET status='superseded' "
                                  "WHERE id=? AND status='error'", (prior["id"],))
+                # Otherwise the feed simply did not reach back far enough to
+                # prove anything. 'superseded' is terminal — club_shares counts
+                # only 'placed' and reconcile drops the row from its candidates —
+                # so retiring on an unproven absence would make a REAL fill
+                # permanently invisible. Leave the row 'error': that is the same
+                # state the unreadable-feed branch above leaves it in, and
+                # reconcile's age-out is the backstop.
         # Compounding bookkeeping: once the BUY leg has run for this member,
         # the current stake figure has been honored — record it so the next
         # cycle's budget applies only future stake CHANGES as deltas. Only on

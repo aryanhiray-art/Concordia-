@@ -111,8 +111,14 @@ class Settings:
     top_n: int = _int("TOP_N", 20)            # consensus basket size
     max_picks: int = _int("MAX_PICKS", 20)    # most a member may add to their ballot
     vote_open_at: str = os.environ.get("VOTE_OPEN_AT", "18:00")
-    vote_close_at: str = os.environ.get("VOTE_CLOSE_AT", "08:30")   # 1h before the 09:30 open
-    execute_at: str = os.environ.get("EXECUTE_AT", "09:31")
+    # DEFAULTS MUST MATCH THE SHIPPED TIMERS. These are only reached when the key
+    # is absent from .env, i.e. on a fresh deployment — exactly when nobody is
+    # watching. They read as the ballot countdown, the watchdog's missed-window
+    # cutoff and /api/admin/schedule, so a stale default tells an operator the
+    # club trades at a time it does not. Keep in step with
+    # infra/concord-close-vote.timer and infra/concord-execute.timer.
+    vote_close_at: str = os.environ.get("VOTE_CLOSE_AT", "09:15")   # 15min before the open
+    execute_at: str = os.environ.get("EXECUTE_AT", "10:15")         # after the open, not at it
     # Voting power re-allocates weekly (Sunday). Power = account equity ($),
     # snapshotted on connect + every Sunday; votes are weighted by it.
     weekly_power_at: str = os.environ.get("WEEKLY_POWER_AT", "08:00")  # Sunday ET

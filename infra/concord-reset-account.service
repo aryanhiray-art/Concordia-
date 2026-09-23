@@ -1,4 +1,11 @@
 [Unit]
+# NO .timer SHIPS FOR THIS UNIT, DELIBERATELY. It used to have one, dated
+# 2026-06 with Persistent=true — and setup-host.sh globs infra/concord-*.timer
+# onto the box, so rebuilding the host would have installed a past-dated
+# catch-up trigger for a liquidation. Catch-up firing is a timer-only
+# property, so removing the timer removes the automatic path entirely.
+# Run it deliberately when it is genuinely wanted:
+#   systemctl start concord-reset-account.service
 Description=Concord — one-shot: liquidate the owner's account to all-cash (the $100 reset)
 
 [Service]

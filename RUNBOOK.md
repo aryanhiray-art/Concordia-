@@ -59,19 +59,38 @@ must be publicly reachable (it is, via nginx) **before** any member connects.
 3. Their Robinhood account must be **Agentic-enabled** (`agentic_allowed=true`).
    If the badge says "connected · not agentic", they must enable Robinhood's
    Agentic account, then reconnect.
-4. In **Your account**, set buying-power %, daily cap, and tick **Participate**.
-   (The daily cap is stored but not yet enforced by the executor — the global
-   `MAX_NOTIONAL_PER_MEMBER` ceiling is what actually caps deployment; see §5.)
+4. In **Your account**, set the committed stake (a dollar amount, or a % of
+   buying power that converts to dollars on the first deployed cycle), the daily
+   cap, and tick **Participate**. Both the daily cap and the global
+   `MAX_NOTIONAL_PER_MEMBER` ceiling clamp what the executor deploys; see §5.
 
 ## 4. Daily flow (automatic, US/Eastern)
 
 | Time | Timer | What happens |
 |------|-------|--------------|
 | 18:00 | `concord-open-vote` | opens the next trading day's ballot |
-| 09:25 | `concord-close-vote` | locks votes, picks the top-N basket |
-| 09:31 | `concord-execute` | reviews + (if armed & live) places per-account buys |
+| 09:15 | `concord-close-vote` | locks votes, picks the top-N basket |
+| 10:15 | `concord-execute` | reviews + (if armed & live) places per-account sells + buys |
 
 All three are holiday/weekend gated in code, so a stray timer fire is a no-op.
+
+**These times are fixed; WHICH DAYS they act on is not.** The units fire on the
+clock above every weekday, but `calendar_us.cycle_phase()` decides whether that
+day is a trading cycle at all — on a non-cycle day it returns `None` and the job
+stands down. That is what `CYCLE_CADENCE` controls (live: `daily`). See §9
+before you reason about "why did nothing run on Tuesday".
+
+**The clock is stated in two places and both must agree.** The systemd
+`OnCalendar=` lines are what actually fires; `VOTE_OPEN_AT` / `VOTE_CLOSE_AT` /
+`EXECUTE_AT` in `.env` are what the app *believes* the schedule is — the ballot
+countdown, the open-vote/close-vote windows, the watchdog's "the run should have
+happened by now" cutoff and `/api/admin/schedule` all read the env values, not
+the units. Changing a timer without changing the env (or the reverse) desyncs
+them silently. Verified in sync on the live box (18:00 / 09:15 / 10:15):
+
+```bash
+ssh root@159.195.19.53 'grep -E "^VOTE_OPEN_AT|^VOTE_CLOSE_AT|^EXECUTE_AT" /opt/concord/.env; systemctl list-timers "concord-close-vote.timer" "concord-execute.timer" --all --no-pager'
+```
 
 ## 5. Going live (the safety gate)
 
@@ -91,13 +110,39 @@ dashboard / `executions` table.
 ```
 
 Caps that always apply (even live + armed): per-member `max_orders`, and the
-global `MAX_NOTIONAL_PER_MEMBER` ceiling (default $2,000 — enforced in
-`alloc.rebalance_budget`, which sizes both the executor's per-member budget and
-the voting-power stake). Bot influence is capped too: `BOT_POWER_CAP` (per-bot
-voting power, default $300) and `BOT_TALLY_SHARE_MAX` (bots' aggregate share of
-the tally, default 0.90). Per-member `daily_cap_usd` is **stored in
-`member_settings` but not yet enforced** — do not rely on it as a live cap.
-Every order has a deterministic `ref_id` (uuid5) so retries never double-fill.
+global `MAX_NOTIONAL_PER_MEMBER` ceiling, default $2,000. That ceiling is
+enforced inside **both** budget functions: `alloc.rebalance_budget` (pinned
+stakes, and the voting-power snapshot) and `alloc.compound_budget` (compounding
+stakes — what the executor uses for the live roster). Bot influence is capped too:
+`BOT_POWER_CAP` (per-bot voting power, default $300) and `BOT_TALLY_SHARE_MAX`
+(bots' aggregate share of the tally, default 0.90). Per-member `daily_cap_usd`
+**is now enforced**: the executor reads it in `_opted_members()` and clamps the
+budget with it (a cap of 0/NULL means no cap). Note it limits *deployment* only
+— it never rewrites the member's committed stake. Every order has a
+deterministic `ref_id` (uuid5) so retries never double-fill.
+
+### `CASH_BUFFER_PCT` — live box disagrees with the intended value
+
+| | value |
+|---|---|
+| code default / owner's stated intent (`config.py`) | **0** |
+| what `/opt/concord/.env` actually holds | **1** |
+
+`deployable(bp) = bp * (1 - CASH_BUFFER_PCT/100)`. The reserve exists so the
+last dollar market order cannot trip a buying-power reject — but at 1% it
+silently strands that fraction of every **fully committed** account: a member
+whose stake is 100% of their cash has 1% less deployable than their budget, so
+the final name defers every cycle (observed live, 08-24). A rejected last order
+is recorded and retried; a permanently undeployable slice is not. That is why
+the owner set the code default to 0.
+
+**The live box has not been changed.** If you are debugging "one name never
+gets bought" or a slice that always carries a few dollars, this is the first
+thing to check:
+
+```bash
+ssh root@159.195.19.53 'grep "^CASH_BUFFER_PCT" /opt/concord/.env'
+```
 
 ## 6. Manual ops
 
@@ -340,12 +385,17 @@ env value. **Two things do NOT follow automatically:**
    It is now Mon–Fri 05:30 / 07:00 / 08:20 ET (same three-pass retry design,
    all before the 09:15 close). Reinstall it when changing cadence.
 
-2. **`MIN_HUMAN_VOTERS=1` now bites every day.** The club will not place orders
-   in a cycle with no human ballot. Weekly, that meant voting once a week;
-   daily, it means **someone has to vote every trading day** or that day simply
-   does not trade (it logs "human quorum not met (0 < 1)" and stands down). That
-   is the intended safety behaviour, not a bug — but it is the difference
-   between a missed week and four missed days out of five.
+2. **`MIN_HUMAN_VOTERS` bites every day, not once a week.** The knob is the
+   human-quorum floor: below it the executor drops to review-only and places no
+   real orders, logging "human quorum not met". Weekly, clearing it meant voting
+   once a week; daily, it would mean **someone has to vote every trading day** or
+   that day simply does not trade — the difference between a missed week and four
+   missed days out of five.
+
+   **The live box runs `MIN_HUMAN_VOTERS=0` (owner, 2026-09-01), so this gate is
+   currently OFF** and a zero-human-turnout day is no longer stood down by it.
+   The thin-basket floor is what protects that day instead — see §10, and read it
+   before you consider raising this back above 0.
 
 ```bash
 ssh root@159.195.19.53 "sed -i 's/^CYCLE_CADENCE=.*/CYCLE_CADENCE=daily/' /opt/concord/.env && systemctl restart concord-api && grep '^CYCLE_CADENCE' /opt/concord/.env"

@@ -1,9 +1,11 @@
 # Concord
 
 A **collective daily-vote trading club**. Members each connect *their own*
-Robinhood account. Every trading day they vote on a 20-stock universe to pick the
-day's buys; the top-N consensus basket executes **on each member's own account**,
-sized as a % of their buying power. Inspired by [DeepMind's Concordia](https://github.com/google-deepmind/concordia)
+Robinhood account. Every trading day they search the S&P 500 to pick the day's
+buys; the top-20 consensus basket executes **on each member's own account**,
+sized from the **dollar stake** that member has committed to the club — a slice
+that rides its own P&L rather than a fixed slice of buying power (see
+`ARCHITECTURE.md` §3 "Sizing"). Inspired by [DeepMind's Concordia](https://github.com/google-deepmind/concordia)
 collective-decision idea, grounded on Robinhood's Agentic Trading API.
 
 ```
@@ -59,7 +61,8 @@ deploy can't clobber secrets or member data.
   with countdown + tally, consensus results + per-account order status, and an
   owner admin strip (mode / arm / kill / manual run). Builds clean, deploys to Vercel.
 - **Infra** (`infra/`): isolated `concord` unix user, systemd timers on US/Eastern
-  (open 18:00 / close 09:25 / execute 09:31), nginx vhost for the public OAuth
+  (open 18:00 / close 09:15 / execute 10:15 — which *days* those act on is set by
+  `CYCLE_CADENCE`, see `RUNBOOK.md` §9), nginx vhost for the public OAuth
   callback + Vercel CORS.
 
 ## Quick start

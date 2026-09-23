@@ -23,8 +23,11 @@ timers (verify-report deliberately disabled).
 3. Drift check (done 2026-07-23 — rerun if cutover slips >1 week).
 4. Run `infra/bootstrap-standalone.sh` (`HOST=… SRC=…`). It installs everything
    and enables **only nginx**. Then:
-   - `systemctl mask concord-fresh-start.timer concord-reset-account.timer` —
-     past-dated Persistent one-shot **liquidation** units; masked forever.
+   - The two one-shot **liquidation** units no longer ship a `.timer` at all
+     (removed 2026-09-23), so there is nothing to mask and nothing for a host
+     rebuild to install. Their `.service` files remain for deliberate manual
+     use. On a box provisioned before that date, verify with
+     `systemctl list-unit-files 'concord-*'` — they should be absent.
    - Fill the API nginx allow-lines for `/api/admin` + `/api/program` with
      `127.0.0.1` **and `5.78.193.177`** (forge dashboard + research voter live there).
    - **Do NOT build the web app yet** (build bakes env; wait for Step 7's .env).
