@@ -204,6 +204,10 @@ def _armed():
         object.__setattr__(settings, "execution_mode", prev)
 
 
+def _mrow(summary: dict, mid: int) -> dict:
+    return next(r for r in summary["members"] if r["member_id"] == mid)
+
+
 def _rows(sid: int, mid: int, symbol: str, side: str = "buy") -> list[dict]:
     with db() as conn:
         return [dict(r) for r in conn.execute(
@@ -490,3 +494,43 @@ def test_a_nan_quote_is_treated_as_missing_not_as_a_price(monkeypatch):
     row = next(r for r in summary["members"] if r["member_id"] == mid)
     assert row.get("skip_reason") == "unquotable_holding", row
     assert client.trades_for("review_sell", f"ACC{mid}") == [], "nothing sized off a NaN"
+
+
+def test_unproven_absence_never_re_places_an_in_basket_buy(monkeypatch):
+    """The worst outcome a shallow feed read can produce, and the last one closed.
+
+    The in-basket path does not merely retire a row on "not found" — it falls
+    through and places a fresh buy. If the feed simply stopped before reaching
+    the errored row, that is a SECOND real-money purchase of a name the broker
+    may already hold, funded from cash beyond the member's commitment. So an
+    unproven absence is treated exactly like an unreadable feed: nothing is
+    placed, the error row stands as evidence, and reconcile — which pages the
+    same feed and can age the row out — is what eventually returns the dollars.
+    Deliberately no carry accrual here: reconcile credits carry_pending when
+    absence becomes provable, and accruing now would return the same dollars twice.
+    """
+    mid = _member("gap-inbasket-unproven@x.com", alloc_value=20.0)
+    closed = _closed_session(datetime.date(2031, 5, 5), mid, ["AAPL"])
+    sid = closed["id"]
+    executor._record(sid, mid, "AAPL", 20.0, executor.ref_id_for(sid, mid, "AAPL"),
+                     "error", error="place: read timeout")
+    with db() as conn:                      # the row is older than anything the feed shows
+        conn.execute("UPDATE executions SET created_at=? WHERE member_id=? AND symbol='AAPL'",
+                     (int(time.time()) - 6 * 86400, mid))
+    recent = [{"symbol": "KO", "side": "buy", "state": "filled", "dollar_amount": "1.00",
+               "placed_agent": "agentic", "created_at": int(time.time()),
+               "cumulative_quantity": "0.01", "id": f"r-{i}"} for i in range(4)]
+    client = FakeClient(quotes={"AAPL": 100.0}, buying_power=100.0, total_value=500.0,
+                        pages=[recent] * (executor._A4_MAX_ORDER_PAGES + 2))
+    _use(monkeypatch, client)
+    monkeypatch.setattr(executor.reconcile, "reconcile_all", lambda dry_run=False: None)
+
+    with _armed():
+        summary = executor.run(closed, force_dry_run=False, phase="buy")
+
+    assert client.trades_for("place_buy", f"ACC{mid}", "AAPL") == [], "never bought twice"
+    row = _rows(sid, mid, "AAPL")[0]
+    assert row["status"] == "error", "the evidence stands until someone can prove otherwise"
+    assert row["error"] == "place: read timeout"
+    order = next(o for o in _mrow(summary, mid)["orders"] if o["symbol"] == "AAPL")
+    assert order["status"] == "skipped" and "unproven" in order["note"], order

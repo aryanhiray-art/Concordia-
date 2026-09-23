@@ -1434,6 +1434,21 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                                            "note": "recovered — prior errored place found at broker"})
                     order_count += 1
                     continue
+                if not _feed_covers(recent_orders, orders_exhausted,
+                                    prior.get("created_at")):
+                    # Not found, but the feed never reached back to the moment we
+                    # tried to place it — so this is "not found YET", not proof.
+                    # Re-placing on that would be the blind re-place this whole
+                    # path exists to prevent, and it buys real money twice. Treat
+                    # it exactly as an unreadable feed: leave the error row
+                    # standing as evidence and let reconcile resolve it, which is
+                    # also what returns the dollars (its age-out credits
+                    # carry_pending once absence IS provable — so nothing is
+                    # accrued here, or the same dollars would come back twice).
+                    msum["orders"].append({"symbol": symbol, "side": "buy", "status": "skipped",
+                                           "note": "prior error unproven — broker feed did not "
+                                                   "reach back; retries next run"})
+                    continue
                 # Verified ABSENT at the broker — the prior place never landed.
                 # Retire the row here, on the proof itself: from this point the
                 # dollars belong to this run (it either re-places them or

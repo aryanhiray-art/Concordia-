@@ -1,8 +1,14 @@
 [Unit]
-Description=Concord verify-report — 09:50 ET Mon-Fri; NOTE this now fires BEFORE the 10:15 execute, not after it (unit is disabled on the live box)
+Description=Concord verify-report — 10:45 ET Mon-Fri, after the 10:15 execute has placed and settled its orders
 
 [Timer]
-OnCalendar=Mon-Fri 09:50 America/New_York
+# MUST stay after concord-execute.timer (10:15 ET). At its previous 09:50 it
+# fired BEFORE the run it was meant to check, so it reported on the PREVIOUS
+# cycle while reading as though it had verified that morning's — a verification
+# that silently answers the wrong question is worse than none. 30 minutes is
+# enough for market orders placed at 10:15 to fill and for the broker's
+# position feed to catch up.
+OnCalendar=Mon-Fri 10:45 America/New_York
 Persistent=false
 
 [Install]
