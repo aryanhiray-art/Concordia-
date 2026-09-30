@@ -83,12 +83,39 @@ class GoogleBody(BaseModel):
 
 
 def _default_settings(member_id: int) -> None:
+    """Give a brand-new member the settings row every other table assumes exists.
+
+    buying_power_pct is dead — nothing reads it — but it MUST still be written
+    here. The deployed table predates the column's DEFAULT: on the live DB it is
+    `REAL NOT NULL` with no default (CREATE TABLE IF NOT EXISTS never alters an
+    existing table, so db.py's `DEFAULT 0` only applies to a fresh database).
+    Dropping it from this column list on 2026-09-16 turned the statement into a
+    NOT NULL violation that `OR IGNORE` then SWALLOWED — signup returned 200 and
+    created no settings row, so the next member to join could not commit money at
+    all: every allocation write is an UPDATE, which matched zero rows and still
+    reported success. Retiring the column for real means rebuilding the live
+    table; until then it gets written.
+
+    The row is verified after the fact because OR IGNORE cannot distinguish "it
+    was already there" from "it could not be inserted" — and a member without
+    settings is a half-created account, which must fail loudly rather than look
+    like a successful signup.
+    """
     with db() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO member_settings(member_id,opted_in,"
-            "daily_cap_usd,max_orders,voting_power,updated_at) VALUES(?,?,?,?,?,?)",
-            (member_id, 0, 0, settings.max_orders, settings.voting_power_base, int(time.time())),
+            "INSERT OR IGNORE INTO member_settings(member_id,opted_in,buying_power_pct,"
+            "daily_cap_usd,max_orders,voting_power,updated_at) VALUES(?,?,?,?,?,?,?)",
+            (member_id, 0, 0, 0, settings.max_orders, settings.voting_power_base,
+             int(time.time())),
         )
+        ok = conn.execute("SELECT 1 FROM member_settings WHERE member_id=?",
+                          (member_id,)).fetchone()
+    if not ok:
+        audit("system", "settings_insert_failed", str(member_id), None)
+        raise HTTPException(
+            status_code=500,
+            detail="could not finish creating your account — nothing was charged or "
+                   "committed; please tell the club owner before trying again")
 
 
 def _log_event(member_id: int, kind: str, request: Request) -> None:

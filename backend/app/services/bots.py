@@ -55,10 +55,13 @@ def seed_bots() -> int:
                 # max_orders seeded at the global default so the stored value
                 # matches effective behavior (a stored 0 silently falls back
                 # to settings.max_orders anyway); bots never trade regardless.
-                "INSERT INTO member_settings(member_id,opted_in,daily_cap_usd,"
-                "max_orders,voting_power,alloc_type,alloc_value,updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?)",
-                (mid, 1, 0, settings.max_orders, settings.bot_start_power, "dollar", 0, now),
+                # buying_power_pct is dead but still written — the live table's
+                # copy is NOT NULL with no default (see auth._default_settings).
+                "INSERT INTO member_settings(member_id,opted_in,buying_power_pct,"
+                "daily_cap_usd,max_orders,voting_power,alloc_type,alloc_value,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (mid, 1, 0, 0, settings.max_orders, settings.bot_start_power,
+                 "dollar", 0, now),
             )
             conn.execute(
                 "INSERT OR IGNORE INTO voting_power_history(member_id,week_start,power,equity,"

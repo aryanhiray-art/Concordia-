@@ -41,7 +41,12 @@ CREATE TABLE IF NOT EXISTS members (
 CREATE TABLE IF NOT EXISTS member_settings (
     member_id        INTEGER PRIMARY KEY REFERENCES members(id) ON DELETE CASCADE,
     opted_in         INTEGER NOT NULL DEFAULT 0,
-    buying_power_pct REAL NOT NULL DEFAULT 0,         -- deprecated, unread
+    -- DEPRECATED and unread — but do not stop WRITING it. The deployed table
+    -- predates this DEFAULT (CREATE TABLE IF NOT EXISTS never alters an existing
+    -- table), so on the live DB this column is NOT NULL with NO default: an
+    -- INSERT that omits it fails, and under OR IGNORE fails SILENTLY. Retiring
+    -- it for real means rebuilding the live table. See auth._default_settings.
+    buying_power_pct REAL NOT NULL DEFAULT 0,
     daily_cap_usd    REAL NOT NULL DEFAULT 0,         -- 0 = uncapped (see alloc >0 convention)
     max_orders       INTEGER NOT NULL DEFAULT 25,     -- 0 = global default (settings.max_orders)
     voting_power     REAL NOT NULL DEFAULT 0,         -- current weight (blended when POWER_MODEL=blend)
