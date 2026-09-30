@@ -499,7 +499,7 @@ def test_daily_cap_limits_deployment_but_never_the_commitment(monkeypatch):
     riding the uncapped slice; only alloc_applied (the honored budget) sees the
     cap, so the next cycle deploys the rest instead of ratcheting the stake down
     to the cap every day."""
-    mid = _member("budget-dailycap@x.com", alloc_value=500.0, alloc_applied=400.0,
+    mid = _member("budget-dailycap@x.com", alloc_value=380.0, alloc_applied=280.0,
                   daily_cap_usd=300.0)
     _hold(mid, "AAPL", 2.8, 280.0)
     closed = _closed_session(datetime.date(2026, 10, 12), mid, ["AAPL"])

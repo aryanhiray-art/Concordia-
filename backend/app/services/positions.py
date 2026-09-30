@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import json
 import time
-from urllib.parse import parse_qs, urlparse
 
 from ..db import audit, db
 from ..robinhood import vault
+from ..robinhood.feed import cursor_from_next, normalize_orders, oldest_ts
 
 
 def _num(v) -> float | None:
@@ -76,7 +76,16 @@ class DerivationIncomplete(RuntimeError):
 
 _FEED_TTL_S = 120                 # collapse the multiple feed reads within one cycle
 _SAFETY_PAGE_CEILING = 500        # bounds a runaway cursor; hitting it == incomplete
+# How much later than the ledger's oldest placed row the feed's oldest order
+# may be and still count as "reaching" it: the ledger stamps its row seconds
+# after the broker creates the order, so the two clocks are never far apart.
+_REACH_SLACK_S = 6 * 3600
 _FEED_CACHE: dict[str, tuple[float, list[dict]]] = {}
+
+# The broker's pagination/envelope conventions live in robinhood.feed; these
+# names are kept so callers and tests keep working.
+_cursor_from_next = cursor_from_next
+_normalize_orders = normalize_orders
 
 
 def invalidate_feed_cache(account_number: str | None = None) -> None:
@@ -87,23 +96,21 @@ def invalidate_feed_cache(account_number: str | None = None) -> None:
         _FEED_CACHE.pop(account_number, None)
 
 
-def _cursor_from_next(nxt) -> str | None:
-    if not nxt:
-        return None
-    try:
-        c = parse_qs(urlparse(str(nxt)).query).get("cursor")
-        return c[0] if c else None
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def _normalize_orders(payload):
-    data = payload.get("data", payload) if isinstance(payload, dict) else payload
-    if isinstance(data, dict):
-        return (data.get("orders") or data.get("results") or []), data.get("next")
-    if isinstance(data, list):
-        return data, None
-    return [], None
+def _check_reach(orders: list[dict], must_reach_ts: float | None, account_number: str) -> None:
+    """A feed that stops short of the ledger's oldest broker order is PARTIAL,
+    whatever the broker said about pages: every club buy older than its first
+    order is invisible, and a position built from it under-counts silently —
+    the 2026-09-24 collapse. Fail closed instead."""
+    if must_reach_ts is None:
+        return
+    oldest = oldest_ts(orders)
+    if oldest is None or oldest > must_reach_ts + _REACH_SLACK_S:
+        audit("system", "derived_feed_short", account_number[-4:] if account_number else None,
+              {"orders": len(orders), "feed_oldest": oldest, "ledger_oldest": must_reach_ts})
+        raise DerivationIncomplete(
+            f"order feed does not reach the ledger's oldest placed order "
+            f"({len(orders)} orders, feed oldest={oldest}, ledger oldest={must_reach_ts}) — "
+            "partial feed; see RUNBOOK §10 'derived_feed_short'")
 
 
 def _order_filled_qty(o: dict) -> float:
@@ -122,13 +129,20 @@ def _order_filled_qty(o: dict) -> float:
     return total if seen else 0.0
 
 
-def _fetch_full_order_feed(client, account_number: str) -> list[dict]:
+def _fetch_full_order_feed(client, account_number: str, *,
+                           must_reach_ts: float | None = None) -> list[dict]:
     """EVERY equity order for the account (NO placed_agent filter — we must SEE 'user'
     orders to exclude them, and must never MISS a club sell that lost its tag), paged
-    to next==null. Raises DerivationIncomplete on any read/pagination failure. Cached."""
+    to next==null. Raises DerivationIncomplete on any read/pagination failure, on a
+    `next` value that cannot be decoded (a page exists that we cannot fetch), and —
+    when `must_reach_ts` is given — on a feed whose oldest order is newer than that
+    moment (the ledger's oldest placed order): the broker's word that the feed ended
+    is not enough, the feed has to provably span the club's own history. Cached only
+    once it passes."""
     now = time.time()
     hit = _FEED_CACHE.get(account_number)
     if hit and now - hit[0] < _FEED_TTL_S:
+        _check_reach(hit[1], must_reach_ts, account_number)
         return hit[1]
     orders: list[dict] = []
     cursor, seen, pages = None, set(), 0
@@ -140,14 +154,20 @@ def _fetch_full_order_feed(client, account_number: str) -> list[dict]:
         except Exception as e:  # noqa: BLE001 — a partial feed is untrustworthy in both directions
             raise DerivationIncomplete(f"order read failed: {type(e).__name__}: {e}") from e
         page, nxt = _normalize_orders(payload)
-        orders.extend(o for o in page if isinstance(o, dict))
+        orders.extend(page)
+        if not nxt:
+            break                               # the broker said: that is everything
         cursor = _cursor_from_next(nxt)
         if cursor is None:
-            break
+            # A next page exists but its cursor is in a shape we do not
+            # understand. Stopping here would be exactly the silent page-1
+            # truncation this module was rebuilt to prevent.
+            raise DerivationIncomplete(f"undecodable feed cursor: {str(nxt)[:40]!r}")
         if cursor in seen:
             raise DerivationIncomplete("cursor did not advance")
         seen.add(cursor)
         pages += 1
+    _check_reach(orders, must_reach_ts, account_number)
     _FEED_CACHE[account_number] = (now, orders)
     return orders
 
@@ -275,7 +295,17 @@ def club_shares_derived(member_id: int, *, client=None,
         return {}
     if client is None:
         client = vault.ensure_client(member_id)
-    orders = _fetch_full_order_feed(client, account_number)   # raises DerivationIncomplete
+    # The feed has to span the club's own history for this member: its oldest
+    # order can be no newer than the ledger's oldest placed BROKER order
+    # (TRUEUP/CORPACT rows are ledger corrections with no order behind them).
+    with db() as conn:
+        _r = conn.execute(
+            "SELECT MIN(created_at) AS t FROM executions WHERE member_id=? AND status='placed' "
+            "AND (ref_id IS NULL OR (ref_id NOT LIKE 'TRUEUP:%' AND ref_id NOT LIKE 'CORPACT:%'))",
+            (member_id,)).fetchone()
+    must_reach = float(_r["t"]) if _r is not None and _r["t"] is not None else None
+    orders = _fetch_full_order_feed(client, account_number,
+                                    must_reach_ts=must_reach)   # raises DerivationIncomplete
     net = club_position_from_orders(orders)
     # Fold renamed tickers FORWARD before the ledger gate, then add the shares a
     # corporate action created (which have no order and so cannot be in the

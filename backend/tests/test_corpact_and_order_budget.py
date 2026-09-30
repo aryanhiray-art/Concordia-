@@ -128,7 +128,7 @@ def test_renamed_holding_is_reachable_in_the_derived_position(monkeypatch):
     audit("admin", "symbol_migrated", "AVB->VMRK", {"execution_rows": 2})
     _placed(mid, "VMRK", qty=0.0, dollars=5.0)                      # the renamed original buy
     _placed(mid, "VMRK", qty=0.048268, corpact="AVB->VMRK", dollars=0.0)
-    monkeypatch.setattr(positions, "_fetch_full_order_feed", lambda c, a: ["feed"])
+    monkeypatch.setattr(positions, "_fetch_full_order_feed", lambda c, a, **kw: ["feed"])
     monkeypatch.setattr(positions, "club_position_from_orders",
                         lambda orders: {"AVB": 0.026932})           # immutable broker history
     got = positions.club_shares_derived(mid, client=object(), account_number="ACC1")
@@ -142,7 +142,7 @@ def test_an_unrenamed_feed_symbol_the_club_never_traded_is_still_dropped(monkeyp
     club ledger is still ignored, so the club can never sell personal shares."""
     mid = _member()
     _placed(mid, "AAPL", qty=1.0)
-    monkeypatch.setattr(positions, "_fetch_full_order_feed", lambda c, a: ["feed"])
+    monkeypatch.setattr(positions, "_fetch_full_order_feed", lambda c, a, **kw: ["feed"])
     monkeypatch.setattr(positions, "club_position_from_orders",
                         lambda orders: {"AAPL": 1.0, "TSLA": 99.0})
     got = positions.club_shares_derived(mid, client=object(), account_number="ACC1")

@@ -445,3 +445,49 @@ satisfiable, so no configuration that worked before changes behaviour. Set
 | 0 | nothing trades — previous basket holds |
 | 1–11 | nothing trades — below the floor |
 | 12–20 | the basket trades |
+
+## 11. Feed-integrity gates: `derived_feed_short` and `slice_mark_suspect`
+
+Both exist because of 2026-09-24. Robinhood pages its order feed with `next`
+as a bare opaque token; three private cursor parsers assumed a URL, returned
+None on page one, and every feed read silently ended at 200 orders. The
+derived club position under-counted, the sizing "ride" anchored each
+commitment to that collapsed mark, and the write-back persisted it — $990
+became $82 in four cycles with no error and a green test suite. The parser
+now lives in `app/robinhood/feed.py`; these two gates make the same class of
+failure loud instead of silent.
+
+**`derived_feed_short`** (audit action; the member is skipped as
+`transient_rh_error`): `positions.club_shares_derived` refuses a feed whose
+oldest order is newer than the member's oldest placed broker order in the
+ledger — a feed that stops short of the club's own history is partial,
+whatever the broker said about pages. It fires when:
+
+- pagination breaks again (a new `next` shape → also `undecodable feed cursor`);
+- the broker's feed retention no longer reaches the club's oldest order. The
+  live members' history starts 2026-06-16; if Robinhood ever caps the feed
+  (say 12 months) every member trips this at once and the club stops trading
+  rather than mis-size. That is the fail-closed choice. The way out is a
+  derived-position anchor (snapshot the club position at a date and read the
+  feed from there) — not loosening the check. Interim: `CLUB_POSITION_SOURCE=ledger`.
+
+**`slice_mark_suspect`** (audit action + `member_skipped`; the member gets a
+"paused trading" email): before the ride is computed, the executor compares
+what the club can ACCOUNT for — club positions at live quotes, `slice_carry`,
+`carry_pending`, and buys still in `error` — against `alloc_applied`, the
+figure it deployed last cycle. If more than 25% (min $5) is unaccounted for
+while the account is still worth at least 75% of it, the dollars did not
+leave — the club lost sight of them (feed truncated, positions read short,
+proceeds parked as cash the mark cannot see). A real market loss shows in the
+account total as well and is honored as before.
+
+It also fires, correctly, when a member sells club shares by hand: the slice
+really is smaller. After confirming that is what happened, honor it once:
+
+```bash
+ssh root@159.195.19.53 'cd /opt/concord/backend && sudo -u concord ./.venv/bin/python -c "from app.db import kv_set; kv_set(\"mark_accept:<member_id>\", \"1\")"'
+```
+
+The next live pass consumes the token (audit `slice_mark_accepted`); a dry run
+leaves it in place. Never set it to clear a `derived_feed_short` — that one is a
+broken read, not a smaller slice.

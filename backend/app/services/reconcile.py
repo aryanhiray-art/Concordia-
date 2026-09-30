@@ -32,7 +32,6 @@ import datetime
 import json
 import time
 import uuid
-from urllib.parse import parse_qs, urlparse
 
 from ..calendar_us import ET, today_et
 from ..db import audit, db
@@ -84,13 +83,10 @@ def _parse_ts(v) -> float | None:
 
 
 def _cursor_from_next(nxt) -> str | None:
-    if not nxt:
-        return None
-    try:
-        c = parse_qs(urlparse(str(nxt)).query).get("cursor")
-        return c[0] if c else None
-    except Exception:  # noqa: BLE001
-        return None
+    """The broker's `next` is a bare opaque token, not a URL — decoded in one
+    place (robinhood.feed) for every feed reader."""
+    from ..robinhood.feed import cursor_from_next
+    return cursor_from_next(nxt)
 
 
 def _fetch_agentic_orders(client, account_number: str) -> list[dict]:
@@ -111,9 +107,11 @@ def _fetch_agentic_orders(client, account_number: str) -> list[dict]:
             orders, nxt = [], None
         out += [o for o in orders
                 if isinstance(o, dict) and o.get("placed_agent") in (None, "agentic")]
+        if not nxt:
+            break                   # the broker said: that is everything
         cursor = _cursor_from_next(nxt)
-        if not cursor or not orders:
-            break
+        if cursor is None:
+            break                   # a page we cannot fetch — the oldest-order proof stays honest
     return out
 
 

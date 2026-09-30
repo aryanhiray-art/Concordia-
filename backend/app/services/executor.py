@@ -410,27 +410,33 @@ def _fetch_recent_orders(client, account_number: str) -> tuple[list[dict], bool]
             orders, nxt = [], None
         out += [o for o in orders
                 if isinstance(o, dict) and o.get("placed_agent") in (None, "agentic")]
-        cursor = _cursor_from_next(nxt)
-        if not cursor or not orders:
+        if not nxt:
             exhausted = True        # the broker itself said that is everything
             break
+        cursor = _cursor_from_next(nxt)
+        if cursor is None:
+            break                   # a next page we cannot decode: NOT proof of absence
         if cursor in seen:
-            exhausted = True        # a non-advancing cursor is the end of the feed
-            break
+            break                   # a non-advancing cursor proves nothing either
         seen.add(cursor)
     return out, exhausted
 
 
 def _cursor_from_next(nxt) -> str | None:
-    """The cursor inside a feed's `next` link, or None when there is no page 2."""
-    if not nxt:
-        return None
-    try:
-        from urllib.parse import parse_qs, urlparse
-        c = parse_qs(urlparse(str(nxt)).query).get("cursor")
-        return c[0] if c else None
-    except Exception:  # noqa: BLE001
-        return None
+    """The cursor for a feed's next page — a bare opaque token at Robinhood,
+    decoded in one place (robinhood.feed) for every feed reader."""
+    from ..robinhood.feed import cursor_from_next
+    return cursor_from_next(nxt)
+
+
+# Mark plausibility gate (see the budget branch in _run_impl): a compounding
+# member whose visible club slice reads more than this fraction below the
+# figure last deployed — while the account itself is still worth at least that
+# fraction of it — is not a member whose stocks fell; it is a member whose
+# stocks (or cash) the club can no longer SEE. Fail closed rather than ride
+# the commitment down to it.
+_MARK_DROP_FRAC = 0.25
+_MARK_GATE_MIN_USD = 5.0
 
 
 def _feed_covers(orders: list[dict], exhausted: bool, created_at) -> bool:
@@ -934,6 +940,59 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                                           {"member_id": mid, "from_session": _prev["id"],
                                            "budget": budget})
                 if budget is None:
+                    # Mark plausibility gate. The ride below anchors the
+                    # COMMITMENT to club_value and the write-back persists
+                    # whatever it computes — so a mark that is wrong (a feed
+                    # that stopped at page one, a positions read missing
+                    # names, proceeds parked as cash the mark cannot see)
+                    # becomes the member's new stake, permanently: 2026-09-24
+                    # took a $990 commitment to $82 in four cycles without a
+                    # single error. A real market loss shows in the account
+                    # total as well; a slice that shrank while the account
+                    # did not is dollars the club lost SIGHT of, not dollars
+                    # the member lost. Fail closed and say so.
+                    _honored = _num(m.get("alloc_applied"))
+                    if _honored is not None and _honored >= _MARK_GATE_MIN_USD:
+                        # The mark is every dollar the club can ACCOUNT for:
+                        # positions, this cycle's carry, credits waiting to be
+                        # drained, and buys that errored but are not yet
+                        # proven absent (A4/reconcile resolve those — either
+                        # into positions or into carry). Only dollars none of
+                        # these explain are "missing".
+                        with db() as conn:
+                            _acct = conn.execute(
+                                "SELECT COALESCE((SELECT carry_pending FROM member_settings "
+                                "WHERE member_id=?),0) AS pending, "
+                                "COALESCE((SELECT SUM(dollar_amount) FROM executions "
+                                "WHERE member_id=? AND side='buy' AND status='error'),0) AS err",
+                                (mid, mid)).fetchone()
+                        _mark = (club_value
+                                 + max(0.0, _num(m.get("slice_carry")) or 0.0)
+                                 + max(0.0, _num(_acct["pending"]) or 0.0)
+                                 + max(0.0, _num(_acct["err"]) or 0.0))
+                        _missing = _honored - _mark
+                        if (_missing > max(_MARK_DROP_FRAC * _honored, _MARK_GATE_MIN_USD)
+                                and total_value >= (1.0 - _MARK_DROP_FRAC) * _honored):
+                            _akey = f"mark_accept:{mid}"
+                            _detail = {"member_id": mid, "honored": round(_honored, 2),
+                                       "mark": round(_mark, 2),
+                                       "total_value": round(total_value, 2)}
+                            if kv_get(_akey) == "1":
+                                # An admin looked and confirmed the slice really
+                                # is smaller (the member sold club shares by
+                                # hand, say). Honor it once, on the live pass.
+                                if will_place:
+                                    kv_set(_akey, "0")
+                                audit("system", "slice_mark_accepted", str(sid), _detail)
+                            else:
+                                audit("system", "slice_mark_suspect", str(sid), _detail)
+                                _skip_member(
+                                    msum, "slice_mark_suspect",
+                                    f"club slice marks ${_mark:.2f} against ${_honored:.2f} "
+                                    f"deployed while the account is worth ${total_value:.2f} — "
+                                    "positions or cash the club cannot see; skipping this run "
+                                    f"(admin: kv mark_accept:{mid}=1 honors the smaller slice)")
+                                continue
                     # The committed figure in DOLLARS. A percent stake is a way of
                     # SPECIFYING the amount; once deployed it compounds like any
                     # other, so the percentage is resolved against the account only

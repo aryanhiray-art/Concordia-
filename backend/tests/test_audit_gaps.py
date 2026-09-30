@@ -126,11 +126,12 @@ class FakeClient:
         self.calls.append(("get_equity_orders", acct, placed_agent, cursor))
         if self.pages is None:
             return {"data": {"orders": list(self.orders_list), "next": None}}
-        # scripted pagination: pages[i] is one page; the cursor IS the index
-        idx = 0 if cursor is None else int(cursor)
+        # scripted pagination: pages[i] is one page. `next` is a BARE opaque
+        # token, exactly as Robinhood sends it (cD0yMDI2…, never a URL) — the
+        # earlier URL-shaped fake is how a page-1-only truncation stayed green.
+        idx = 0 if cursor is None else int(str(cursor).removeprefix("cD0"))
         page = self.pages[idx] if idx < len(self.pages) else []
-        nxt = (f"https://api.example/orders?cursor={idx + 1}"
-               if idx + 1 < len(self.pages) else None)
+        nxt = f"cD0{idx + 1}" if idx + 1 < len(self.pages) else None
         return {"data": {"orders": list(page), "next": nxt}}
 
     def review_market_buy(self, acct, symbol, amt):
@@ -154,7 +155,14 @@ class FakeClient:
                 if c[0] == kind and c[1] == acct and (symbol is None or c[2] == symbol)]
 
 
-def _member(email: str, *, alloc_value: float = 50.0, alloc_type: str = "dollar") -> int:
+def _member(email: str, *, alloc_value: float = 50.0, alloc_type: str = "dollar",
+            alloc_applied: float | None = None) -> int:
+    """A member who has never deployed (alloc_applied NULL) unless a test says
+    otherwise. The earlier default stamped alloc_applied = alloc_value onto a
+    member holding nothing — a state that in production means the club has
+    lost sight of the deployed dollars, which the mark gate now refuses to
+    size against — and it never changed a budget here (an empty slice
+    bootstraps from the full stake either way)."""
     now = int(time.time())
     with db() as conn:
         cur = conn.execute(
@@ -164,7 +172,7 @@ def _member(email: str, *, alloc_value: float = 50.0, alloc_type: str = "dollar"
         conn.execute(
             "INSERT INTO member_settings(member_id,opted_in,max_orders,alloc_type,alloc_value,"
             "alloc_applied,updated_at) VALUES(?,1,25,?,?,?,?)",
-            (mid, alloc_type, alloc_value, alloc_value, now))
+            (mid, alloc_type, alloc_value, alloc_applied, now))
         conn.execute(
             "INSERT INTO rh_accounts(member_id,account_number,agentic_allowed,enc_tokens,"
             "connected_at,last_refresh_at,status) VALUES(?,?,1,?,?,?, 'connected')",

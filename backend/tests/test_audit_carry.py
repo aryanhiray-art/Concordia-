@@ -351,7 +351,7 @@ def test_all_four_deferral_paths_sum_into_slice_carry(monkeypatch):
     The persisted slice_carry must equal the SUM of the four needs ($26.00) —
     any path that skips without accruing is a dollar that left the slice for good.
     """
-    mid = _member("carry-four@x.com", alloc_value=104.0, alloc_applied=100.0, max_orders=1)
+    mid = _member("carry-four@x.com", alloc_value=39.0, alloc_applied=35.0, max_orders=1)
     # A cash account defers a whole name rather than buying a partial, which
     # keeps the shortfall arithmetic exact (the partial path is A3 step 6).
     kv_set(f"acct_type:{mid}", "cash")
@@ -656,7 +656,7 @@ def test_weekly_cadence_second_run_does_not_accumulate_carry(monkeypatch):
     of it. (This is also the pass that the old shared column double-counted worst:
     it runs while reconcile is crediting the very same cycle.)
     """
-    mid = _member("carry-weekly@x.com", alloc_value=30.0, alloc_applied=30.0)
+    mid = _member("carry-weekly@x.com", alloc_value=20.0, alloc_applied=20.0)
     kv_set(f"acct_type:{mid}", "cash")    # settled-only BP: one quick look, no partials
     picks = ["A", "AAPL"]
     closed = _closed_session(datetime.date(2028, 8, 12), mid, picks)
@@ -876,7 +876,7 @@ def test_a_sub_minimum_topup_below_the_resize_threshold_stays_in_the_slice(monke
     under the broker's $1 minimum. It cannot be topped up and will not be
     resized, so the ONLY place those dollars can survive is slice_carry."""
     # budget = club_value 9.50 + (30.50 - 20.00) = 20.00 over two names = $10.00
-    mid = _member("carry-submin@x.com", alloc_value=30.50, alloc_applied=20.0)
+    mid = _member("carry-submin@x.com", alloc_value=20.0, alloc_applied=9.50)
     picks = ["AAPL", "ABT"]
     closed = _closed_session(datetime.date(2032, 3, 1), mid, picks)
     _hold(mid, "AAPL", 9.50, 98701)
@@ -904,7 +904,7 @@ def test_a_name_at_or_over_target_still_carries_nothing(monkeypatch):
     owes nothing — carrying here would top the slice up out of the member's own
     cash on any down move, which is exactly what compounding must never do."""
     # budget = club_value 10.50 + (29.50 - 20.00) = 20.00 over two names = $10.00
-    mid = _member("carry-attarget@x.com", alloc_value=29.50, alloc_applied=20.0)
+    mid = _member("carry-attarget@x.com", alloc_value=20.0, alloc_applied=10.50)
     picks = ["AAPL", "ABT"]
     closed = _closed_session(datetime.date(2032, 3, 2), mid, picks)
     _hold(mid, "AAPL", 10.50, 98702)
@@ -928,7 +928,7 @@ def test_the_refused_topup_is_still_committed_on_the_next_cycle(monkeypatch):
     through compound_budget exactly as the following cycle would."""
     from app.services import alloc as alloc_svc
 
-    mid = _member("carry-noratchet@x.com", alloc_value=30.50, alloc_applied=20.0)
+    mid = _member("carry-noratchet@x.com", alloc_value=20.0, alloc_applied=9.50)
     picks = ["AAPL", "ABT"]
     closed = _closed_session(datetime.date(2032, 3, 3), mid, picks)
     _hold(mid, "AAPL", 9.50, 98703)

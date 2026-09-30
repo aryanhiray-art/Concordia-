@@ -620,7 +620,8 @@ from app.services import positions  # noqa: E402
 
 
 def _ord(sym, side, agent, cum):
-    return {"symbol": sym, "side": side, "placed_agent": agent, "cumulative_quantity": str(cum)}
+    return {"symbol": sym, "side": side, "placed_agent": agent, "cumulative_quantity": str(cum),
+            "created_at": "2026-01-01T14:30:00Z"}
 
 
 def test_derive_clean_and_net():

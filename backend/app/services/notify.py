@@ -145,8 +145,9 @@ def _drain_line(m: dict, *, bought: bool) -> str | None:
 def _notify_member(m: dict, trade_date: str, sid: int | None, out: dict) -> None:
     orders = m.get("orders") or []
     stranded = m.get("skip_reason") == "rh_error_stranded"
+    suspect = m.get("skip_reason") == "slice_mark_suspect"
     clamp = _clamp_line(m)
-    if not orders and not stranded and not clamp:
+    if not orders and not stranded and not suspect and not clamp:
         return                                  # untouched member → no email
     row = _member_row(m.get("member_id"))
     if row is None:
@@ -158,6 +159,20 @@ def _notify_member(m: dict, trade_date: str, sid: int | None, out: dict) -> None
                 "Robinhood connection needs to be re-linked.\n\n"
                 "Sign in to Concordia and reconnect Robinhood from your Account "
                 "page — until then, the club's runs will skip your account.\n")
+        _deliver(row["email"], subject, body, out)
+        return
+    if suspect:
+        # The mark gate held the member out (executor: slice_mark_suspect). A
+        # silent skip reads as "the club forgot me"; say what happened and
+        # that nothing moved.
+        subject = "Concordia paused trading in your account this run"
+        body = (f"Hi {row['display_name']},\n\n"
+                "Concordia did not trade in your account this run: the club's "
+                "record of what it holds for you no longer matches your account, "
+                "so it stopped rather than resize your stake on a figure it "
+                "cannot verify.\n\n"
+                "Nothing was bought or sold. The club admin has been alerted and "
+                "trading resumes once the difference is understood.\n")
         _deliver(row["email"], subject, body, out)
         return
 

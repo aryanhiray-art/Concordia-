@@ -380,7 +380,11 @@ def test_dust_repair_keys_to_the_executing_session(monkeypatch):
     assert _rows_for_ref(executor.ref_id_for(ballot["id"], mid, "DUSTFIX:NVDA")) == []
 
     # same-day re-run: nothing repaired twice, and the repaired position is not
-    # sold today either (it is a placed buy row — the PDT guard sees it)
+    # sold today either (it is a placed buy row — the PDT guard sees it). The
+    # morning's AAPL buy is in the account by now — a static fake that still
+    # showed nothing deployed would read, correctly, as a slice the club lost
+    # sight of and the mark gate would skip the member.
+    client.positions_list = [("NVDA", "0.00005"), ("AAPL", "0.5")]
     with _armed_live():
         again = executor.run(closed, force_dry_run=False, phase="both")
 

@@ -552,7 +552,7 @@ def test_leftover_errored_buy_the_broker_shows_is_promoted_in_place(monkeypatch)
     """The order landed. The row must become 'placed' so club_shares counts the
     shares — and must never be re-placed (that is a duplicate buy)."""
     _no_reconcile(monkeypatch)
-    mid = _member("a4-left-promote@contract.test", alloc_value=40.0, alloc_applied=40.0)
+    mid = _member("a4-left-promote@contract.test", alloc_value=40.0, alloc_applied=25.0)
     closed = _closed_session(datetime.date(2095, 12, 1), mid, ["AAPL"])
     sid = closed["id"]
     # MSFT is NOT in this cycle's basket: a prior run's repair that errored.
@@ -579,7 +579,7 @@ def test_leftover_errored_buy_verified_absent_is_superseded(monkeypatch):
     The row is retired terminal — leaving it 'error' would hold the session's
     executed flip open for a cycle that is finished."""
     _no_reconcile(monkeypatch)
-    mid = _member("a4-left-absent@contract.test", alloc_value=40.0, alloc_applied=40.0)
+    mid = _member("a4-left-absent@contract.test", alloc_value=40.0, alloc_applied=25.0)
     closed = _closed_session(datetime.date(2095, 12, 2), mid, ["AAPL"])
     sid = closed["id"]
     executor._record(sid, mid, "MSFT", 25.0, "a4-left-2", "error", error="place: boom")
@@ -601,7 +601,7 @@ def test_leftover_errored_buy_survives_an_unreadable_feed(monkeypatch):
     must leave the row exactly as it is — superseding here would erase the only
     record of an order the broker may hold."""
     _no_reconcile(monkeypatch)
-    mid = _member("a4-left-blind@contract.test", alloc_value=40.0, alloc_applied=40.0)
+    mid = _member("a4-left-blind@contract.test", alloc_value=40.0, alloc_applied=25.0)
     closed = _closed_session(datetime.date(2095, 12, 3), mid, ["AAPL"])
     sid = closed["id"]
     executor._record(sid, mid, "MSFT", 25.0, "a4-left-3", "error", error="place: boom")
@@ -805,7 +805,7 @@ def test_a_six_percent_drift_is_not_round_tripped(monkeypatch):
     """$9.40 held against a $10.00 target: $0.60 short, 6% — under the band. It
     cannot be topped up (under $1) and must NOT be sold; the dollars carry."""
     # budget = club_value 9.40 + (30.60 - 20.00) = 20.00 over two names = $10.00
-    mid = _member("resize-small@contract.test", alloc_value=30.60, alloc_applied=20.0)
+    mid = _member("resize-small@contract.test", alloc_value=20.0, alloc_applied=9.40)
     picks = ["AAPL", "ABT"]
     closed = _closed_session(datetime.date(2095, 10, 1), mid, picks)
     _seed_holding(mid, "AAPL", 9.40, 97001)

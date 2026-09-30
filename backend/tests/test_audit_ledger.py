@@ -300,7 +300,8 @@ def test_ledger_trueup_is_idempotent_across_days(monkeypatch):
                      "tu-across-buy", "placed",
                      place={"data": {"order": {"cumulative_quantity": "0.5"}}})
     _backdate(mid, 5)          # past the 48h in-flight deferral
-    _use(monkeypatch, FeedClient(orders=[_order("AES", "buy", "filled", "0.5")],
+    _use(monkeypatch, FeedClient(orders=[_order("AES", "buy", "filled", "0.5",
+                                                created=_iso(time.time() - 10 * 86400))],
                                  positions=[]))
 
     assert positions.club_shares(mid).get("AES") == pytest.approx(0.5)
