@@ -266,7 +266,7 @@ def test_live_a4_keeps_the_error_row_when_the_broker_order_is_found(monkeypatch)
     sid = closed["id"]
     executor._record(sid, mid, "AAPL", 20.0, executor.ref_id_for(sid, mid, "AAPL"),
                      "error", error="place: read timeout")
-    landed = {"symbol": "AAPL", "side": "buy", "state": "filled", "dollar_amount": "20.00",
+    landed = {"symbol": "AAPL", "side": "buy", "state": "filled", "dollar_based_amount": {"amount": "20.00", "currency_code": "USD"},
               "placed_agent": "agentic", "created_at": int(time.time()),
               "cumulative_quantity": "0.2", "id": "ord-real"}
     client = FakeClient(quotes={"AAPL": 100.0}, orders=[landed], buying_power=100.0,
@@ -394,10 +394,10 @@ def test_a4_finds_a_landed_order_on_page_two(monkeypatch):
     sid = closed["id"]
     executor._record(sid, mid, "AAPL", 20.0, executor.ref_id_for(sid, mid, "AAPL"),
                      "error", error="place: read timeout")
-    landed = {"symbol": "AAPL", "side": "buy", "state": "filled", "dollar_amount": "20.00",
+    landed = {"symbol": "AAPL", "side": "buy", "state": "filled", "dollar_based_amount": {"amount": "20.00", "currency_code": "USD"},
               "placed_agent": "agentic", "created_at": int(time.time()),
               "cumulative_quantity": "0.2", "id": "ord-real"}
-    noise = [{"symbol": "KO", "side": "buy", "state": "filled", "dollar_amount": "1.00",
+    noise = [{"symbol": "KO", "side": "buy", "state": "filled", "dollar_based_amount": {"amount": "1.00", "currency_code": "USD"},
               "placed_agent": "agentic", "created_at": int(time.time()),
               "cumulative_quantity": "0.01", "id": f"noise-{i}"} for i in range(3)]
     client = FakeClient(quotes={"AAPL": 100.0}, buying_power=100.0, total_value=500.0,
@@ -431,7 +431,7 @@ def test_unproven_absence_does_not_retire_a_non_basket_row(monkeypatch):
                      (int(time.time()) - 6 * 86400, mid))
     # a feed that is all RECENT orders and still has more pages: it never reaches
     # back to the row, so it proves nothing either way
-    recent = [{"symbol": "KO", "side": "buy", "state": "filled", "dollar_amount": "1.00",
+    recent = [{"symbol": "KO", "side": "buy", "state": "filled", "dollar_based_amount": {"amount": "1.00", "currency_code": "USD"},
                "placed_agent": "agentic", "created_at": int(time.time()),
                "cumulative_quantity": "0.01", "id": f"r-{i}"} for i in range(4)]
     client = FakeClient(quotes={"AAPL": 100.0, "ZTS": 180.0}, buying_power=100.0,
@@ -525,7 +525,7 @@ def test_unproven_absence_never_re_places_an_in_basket_buy(monkeypatch):
     with db() as conn:                      # the row is older than anything the feed shows
         conn.execute("UPDATE executions SET created_at=? WHERE member_id=? AND symbol='AAPL'",
                      (int(time.time()) - 6 * 86400, mid))
-    recent = [{"symbol": "KO", "side": "buy", "state": "filled", "dollar_amount": "1.00",
+    recent = [{"symbol": "KO", "side": "buy", "state": "filled", "dollar_based_amount": {"amount": "1.00", "currency_code": "USD"},
                "placed_agent": "agentic", "created_at": int(time.time()),
                "cumulative_quantity": "0.01", "id": f"r-{i}"} for i in range(4)]
     client = FakeClient(quotes={"AAPL": 100.0}, buying_power=100.0, total_value=500.0,

@@ -18,8 +18,8 @@ from ..calendar_us import cycle_phase, next_trading_day, today_et
 from ..config import settings
 from ..db import audit, db, is_armed, kv_get, kv_set, set_armed
 from ..robinhood import vault
-from ..services import (adminview, alloc, apikeys, bots, executor, invites, membership,
-                        power, reconcile, research)
+from ..services import (adminview, alloc, apikeys, bots, executor, invites,
+                        membership, positions, power, reconcile, research)
 from ..services import voting as svc
 from .deps import load_member, owner_member_id, require_admin, require_owner
 
@@ -497,7 +497,7 @@ def member_detail(member_id: int, admin: dict = Depends(require_admin)):
                 "cash": _num(port.get("cash")),
                 "buying_power": _num(bp.get("buying_power") if isinstance(bp, dict) else bp),
             }
-            pos = (client.get_positions(acct).get("data") or {}).get("positions") or []
+            pos = positions.all_positions(client, acct)
             longs = [p for p in pos if p.get("type") == "long" and _num(p.get("quantity"))]
             syms = [p["symbol"] for p in longs]
             quotes = {}

@@ -57,6 +57,29 @@ def wired(monkeypatch):
                         {"AES": 0.342573, "AWK": 7e-06, "KO": 0.061})
     monkeypatch.setattr(positions, "live_positions_strict",
                         lambda mid: [{"symbol": "KO", "quantity": 0.061}])
+    # The feed corroborates both phantoms: the member sold them by hand (a
+    # 'user' sell, which the derived view ignores by design) after the club
+    # bought them. A name whose latest order is a BUY did not leave the
+    # account and is never trued up (see test_uncorroborated…).
+    monkeypatch.setattr(positions, "_fetch_full_order_feed",
+                        lambda client, acct, **kw: _feed(
+                            ("AES", "buy", 20), ("AES", "sell", 10, "user"),
+                            ("AWK", "buy", 20), ("AWK", "sell", 10, "user"),
+                            ("KO", "buy", 20)))
+
+
+def _feed(*events):
+    """(symbol, side, days_ago[, agent]) → filled feed rows, real-shaped."""
+    import datetime
+    out = []
+    for e in events:
+        sym, side, days = e[0], e[1], e[2]
+        agent = e[3] if len(e) > 3 else "agentic"
+        ts = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=days)
+        out.append({"id": f"{sym}-{side}-{days}", "symbol": sym, "side": side, "state": "filled",
+                    "quantity": "0.100000", "cumulative_quantity": "0.100000",
+                    "placed_agent": agent, "created_at": ts.isoformat().replace("+00:00", "Z")})
+    return out
 
 
 def test_phantoms_zeroed_held_names_untouched(wired):
@@ -111,3 +134,75 @@ def test_failed_live_read_raises_instead_of_zeroing_everything(monkeypatch):
     monkeypatch.setattr(positions, "live_positions_strict", boom)
     with pytest.raises(RuntimeError):
         reconcile.ledger_trueup(mid, account_number=f"ACC{mid}", dry_run=False)
+
+
+def test_uncorroborated_disappearance_is_left_alone(monkeypatch):
+    """Derived holds AES and the account shows none of it — but the feed's
+    latest AES order is a BUY. Shares do not leave an account without a sell:
+    this is a ticker the broker now reports under another symbol, or a
+    positions read that missed it. Zeroing it would hide real shares from every
+    sell leg for good. Left alone, on the record."""
+    from app.services import positions
+    from app.robinhood import vault
+    mid = _member("tu-uncorr@t.test")
+    monkeypatch.setattr(vault, "ensure_client", lambda m: object())
+    monkeypatch.setattr(positions, "club_shares_derived",
+                        lambda m, client=None, account_number=None: {"AES": 0.3, "KO": 0.1})
+    monkeypatch.setattr(positions, "live_positions_strict",
+                        lambda m: [{"symbol": "KO", "quantity": 0.1}])
+    monkeypatch.setattr(positions, "_fetch_full_order_feed",
+                        lambda client, acct, **kw: _feed(("AES", "buy", 20), ("KO", "buy", 20)))
+    res = reconcile.ledger_trueup(mid, account_number=f"ACC{mid}", dry_run=False)
+    assert res["zeroed"] == [] and res["uncorroborated"] == ["AES"]
+    with db() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM executions WHERE member_id=?",
+                            (mid,)).fetchone()[0] == 0
+        n = conn.execute("SELECT COUNT(*) FROM audit_log WHERE action='trueup_uncorroborated' "
+                         "AND target=?", (str(mid),)).fetchone()[0]
+    assert n == 1
+
+
+def test_an_empty_account_read_is_refused_not_zeroed(monkeypatch):
+    """The whole club position 'missing' from a successful positions read is a
+    read to distrust, not a member who sold everything: refuse, audit, write
+    nothing — an admin who knows better passes force=True."""
+    from app.services import positions
+    from app.robinhood import vault
+    mid = _member("tu-empty@t.test")
+    monkeypatch.setattr(vault, "ensure_client", lambda m: object())
+    monkeypatch.setattr(positions, "club_shares_derived",
+                        lambda m, client=None, account_number=None: {"AES": 0.3, "AWK": 0.2})
+    monkeypatch.setattr(positions, "live_positions_strict", lambda m: [])
+    monkeypatch.setattr(positions, "_fetch_full_order_feed",
+                        lambda client, acct, **kw: _feed(("AES", "buy", 20), ("AES", "sell", 10, "user"),
+                                                          ("AWK", "buy", 20), ("AWK", "sell", 10, "user")))
+    res = reconcile.ledger_trueup(mid, account_number=f"ACC{mid}", dry_run=False)
+    assert res["ok"] is False and "empty" in res["refused"] and res["zeroed"] == []
+    with db() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM executions WHERE member_id=?",
+                            (mid,)).fetchone()[0] == 0
+    forced = reconcile.ledger_trueup(mid, account_number=f"ACC{mid}", dry_run=False, force=True)
+    assert {z["symbol"] for z in forced["zeroed"]} == {"AES", "AWK"}
+
+
+def test_mass_zeroing_is_refused(monkeypatch):
+    """Six club names, five read as phantoms in one sweep: that is not
+    estimate drift, it is a bad read. Refused unless forced."""
+    from app.services import positions
+    from app.robinhood import vault
+    mid = _member("tu-mass@t.test")
+    syms = ["A", "B", "C", "D", "E", "F"]
+    monkeypatch.setattr(vault, "ensure_client", lambda m: object())
+    monkeypatch.setattr(positions, "club_shares_derived",
+                        lambda m, client=None, account_number=None: {s: 0.1 for s in syms})
+    monkeypatch.setattr(positions, "live_positions_strict",
+                        lambda m: [{"symbol": "F", "quantity": 0.1}])
+    monkeypatch.setattr(positions, "_fetch_full_order_feed",
+                        lambda client, acct, **kw: _feed(*[(s, "buy", 20) for s in syms],
+                                                          *[(s, "sell", 10, "user") for s in syms[:5]]))
+    res = reconcile.ledger_trueup(mid, account_number=f"ACC{mid}", dry_run=False)
+    assert res["ok"] is False and "5 of 6" in res["refused"]
+    with db() as conn:
+        n = conn.execute("SELECT COUNT(*) FROM audit_log WHERE action='trueup_refused' "
+                         "AND target=?", (str(mid),)).fetchone()[0]
+    assert n == 1

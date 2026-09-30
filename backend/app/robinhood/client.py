@@ -149,8 +149,14 @@ class RobinhoodClient:
     def get_portfolio(self, account_number: str) -> dict:
         return self.mcp.call_tool("get_portfolio", {"account_number": account_number})
 
-    def get_positions(self, account_number: str) -> dict:
-        return self.mcp.call_tool("get_equity_positions", {"account_number": account_number})
+    def get_positions(self, account_number: str, cursor: str | None = None) -> dict:
+        """Equity positions. The tool is cursor-paginated like the order feed
+        (`cursor` = the prior response's `next`, verbatim); a caller that wants
+        the whole account must follow `next` — services.positions does."""
+        args: dict = {"account_number": account_number}
+        if cursor:
+            args["cursor"] = cursor
+        return self.mcp.call_tool("get_equity_positions", args)
 
     def get_quotes(self, symbols: list[str]) -> dict:
         return self.mcp.call_tool("get_equity_quotes", {"symbols": symbols})

@@ -139,15 +139,12 @@ def _order_id(o: dict) -> str:
 
 
 def _order_amount(order: dict) -> float | None:
-    """Best-effort dollar amount of a broker order (dollar-denominated buys)."""
-    for key in ("dollar_amount", "amount", "notional", "total_notional", "executed_notional"):
-        v = order.get(key)
-        if isinstance(v, dict):
-            v = v.get("amount")
-        n = _num(v)
-        if n is not None:
-            return n
-    return None
+    """Dollar amount of a broker order. Robinhood carries it ONLY under
+    dollar_based_amount.amount — decoded in robinhood.feed for every reader
+    (the five-key list this used to search never matched a real order, so
+    the economic promotion gate below refused every filled buy)."""
+    from ..robinhood.feed import order_amount
+    return order_amount(order)
 
 
 def _order_state(o: dict) -> str:
@@ -463,10 +460,14 @@ def reconcile_fills(member_id: int, client=None, account_number: str | None = No
                 if partial <= 0:
                     unfilled = round(amt, 2)
                 else:
-                    _exec = _num(order.get("executed_notional"))
-                    # Without a trustworthy executed notional the split is a
-                    # guess, and guessing HIGH mints money — credit nothing and
-                    # let the filled shares speak for themselves in club_value.
+                    # The filled dollars come from the order's own executions
+                    # (or cumulative × average) — the feed carries no
+                    # `executed_notional` field, so reading one credited $0 on
+                    # every partial fill. Without a trustworthy figure the
+                    # split is a guess, and guessing HIGH mints money — credit
+                    # nothing and let the filled shares speak in club_value.
+                    from ..robinhood.feed import executed_notional
+                    _exec = executed_notional(order)
                     unfilled = round(max(0.0, amt - _exec), 2) if _exec is not None else 0.0
 
             if partial > 0:
@@ -583,8 +584,15 @@ def reconcile_fills(member_id: int, client=None, account_number: str | None = No
 
 
 
+# ledger_trueup refuses to zero more than this share of a member's derived names
+# in one sweep (once at least _TRUEUP_MASS_MIN of them) unless force=True: a
+# phantom is a name or two of estimate drift, never half the book at once.
+_TRUEUP_MASS_FRAC = 0.5
+_TRUEUP_MASS_MIN = 5
+
+
 def ledger_trueup(member_id: int, *, client=None, account_number: str | None = None,
-                  dry_run: bool = True) -> dict:
+                  dry_run: bool = True, force: bool = False) -> dict:
     """Zero PHANTOM club-ledger rows — names the derived ledger says the member
     holds while the live account holds none of the symbol at all.
 
@@ -622,6 +630,47 @@ def ledger_trueup(member_id: int, *, client=None, account_number: str | None = N
     live = {p["symbol"].upper(): float(p.get("quantity") or 0.0)
             for p in positions.live_positions_strict(member_id)}
 
+    # A TRUEUP row is append-only and folds into every view of the club
+    # position, so one wrong live reading would erase real holdings from the
+    # ledger for good. Two plausibility gates before anything is written:
+    # an account that reads EMPTY while the club holds names is a read we
+    # cannot trust (a paged/renamed/failed positions envelope, not a member
+    # who sold everything — that case is the admin's to force); and a sweep
+    # that would zero most of the book at once is the same thing in a
+    # smaller hat.
+    candidates = [sym for sym, qty in derived.items() if qty > 1e-9 and live.get(sym, 0.0) <= 0]
+    if candidates and not force:
+        reason = None
+        if not live:
+            reason = f"account reads empty while the club holds {len(derived)} names"
+        elif (len(candidates) >= _TRUEUP_MASS_MIN
+              and len(candidates) > _TRUEUP_MASS_FRAC * len(derived)):
+            reason = f"{len(candidates)} of {len(derived)} club names read as phantoms"
+        if reason:
+            audit("system:reconcile", "trueup_refused", str(member_id),
+                  {"reason": reason, "candidates": sorted(candidates)[:30], "dry_run": dry_run})
+            return {"ok": False, "member_id": member_id, "dry_run": dry_run, "zeroed": [],
+                    "refused": reason}
+    # Corroboration, per name: shares that are gone from the account left it
+    # through a SELL — the feed shows one (any agent; a member's own
+    # liquidation is the usual phantom source) newer than the last buy. A
+    # name whose latest order is a BUY did not leave; it is a ticker the
+    # broker now reports under another symbol, or a positions read that
+    # missed it — and zeroing it would hide real shares from every sell leg.
+    from ..robinhood.feed import order_ts
+    last_event: dict[str, tuple[float, str]] = {}
+    for o in positions._fetch_full_order_feed(client, account_number):
+        sym = str(o.get("symbol") or "").upper()
+        side = str(o.get("side") or "").lower()
+        ts = order_ts(o)
+        if not sym or side not in ("buy", "sell") or ts is None:
+            continue
+        if positions._order_filled_qty(o) <= 0:
+            continue
+        if sym not in last_event or ts >= last_event[sym][0]:
+            last_event[sym] = (ts, side)
+    uncorroborated: list[str] = []
+
     now = int(time.time())
     day = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
     cutoff = now - 48 * 3600
@@ -633,6 +682,9 @@ def ledger_trueup(member_id: int, *, client=None, account_number: str | None = N
                 continue
             if live.get(sym, 0.0) > 0:
                 continue                       # genuinely held → not a phantom
+            if last_event.get(sym, (0.0, "buy"))[1] != "sell":
+                uncorroborated.append(sym)     # no sell behind the disappearance — see above
+                continue
             recent = conn.execute(
                 "SELECT 1 FROM executions WHERE member_id=? AND symbol=? AND created_at>=? LIMIT 1",
                 (member_id, sym, cutoff)).fetchone()
@@ -665,10 +717,14 @@ def ledger_trueup(member_id: int, *, client=None, account_number: str | None = N
                  json.dumps({"_concord_est_qty": qty,
                              "ledger_trueup": "phantom — account holds none"}),
                  None, now))
+    if uncorroborated:
+        audit("system:reconcile", "trueup_uncorroborated", str(member_id),
+              {"symbols": sorted(uncorroborated)[:30], "dry_run": dry_run})
     if zeroed and not dry_run:
         audit("system:reconcile", "ledger_trueup", str(member_id),
               {"zeroed": zeroed[:30], "count": len(zeroed)})
-    return {"ok": True, "member_id": member_id, "dry_run": dry_run, "zeroed": zeroed}
+    return {"ok": True, "member_id": member_id, "dry_run": dry_run, "zeroed": zeroed,
+            "uncorroborated": sorted(uncorroborated)}
 
 
 def reconcile_all(dry_run: bool = False) -> dict:

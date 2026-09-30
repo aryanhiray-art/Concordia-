@@ -251,8 +251,8 @@ class DemoClient:
         return {"data": {"total_value": round(held + cash, 2), "cash": cash,
                          "buying_power": {"buying_power": cash}}}
 
-    def get_positions(self, account_number: str) -> dict:
-        return {"data": {"positions": [
+    def get_positions(self, account_number: str, cursor: str | None = None) -> dict:
+        return {"data": {"next": None, "positions": [
             {"symbol": s, "type": "long", "quantity": q,
              "average_buy_price": round(_price(s) * 0.94, 2)}
             for s, q in self._HOLDINGS]}}

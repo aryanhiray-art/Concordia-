@@ -475,15 +475,12 @@ def _order_ts(order: dict) -> float | None:
 
 
 def _order_amount(order: dict) -> float | None:
-    """Best-effort dollar amount of a broker order (dollar-denominated buys)."""
-    for key in ("dollar_amount", "amount", "notional", "total_notional", "executed_notional"):
-        v = order.get(key)
-        if isinstance(v, dict):
-            v = v.get("amount")
-        n = _num(v)
-        if n is not None:
-            return n
-    return None
+    """Dollar amount of a broker order. Robinhood carries it ONLY under
+    dollar_based_amount.amount — decoded in robinhood.feed for every reader
+    (the five-key list this used to search never matched a real order, so
+    A4's fuzzy match could not find an errored buy that had landed)."""
+    from ..robinhood.feed import order_amount
+    return order_amount(order)
 
 
 def _match_recovered_order(orders: list[dict], ref_id: str, symbol: str, side: str,
@@ -746,8 +743,17 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                          "transient portfolio error — will retry next run")
             continue
         pdata = port.get("data", port) if isinstance(port, dict) else {}
-        bp = pdata.get("buying_power") or (pdata.get("buying_power") or {})
-        buying_power = _num(bp.get("buying_power") if isinstance(bp, dict) else bp) or 0.0
+        bp = pdata.get("buying_power")
+        _bp_raw = _num(bp.get("buying_power") if isinstance(bp, dict) else bp)
+        if _bp_raw is None:
+            # STRICT, like total_value below: a renamed/missing field used to
+            # read as $0 of buying power — no skip, no audit — which defers
+            # every buy and, after two such cycles, MATURES the over-commitment
+            # clamp and writes the stake down to the marked slice.
+            _skip_member(msum, "transient_rh_error",
+                         "unreadable buying power — skipping this run")
+            continue
+        buying_power = _bp_raw
         # STRICT account value — never fall back to buying_power: a malformed
         # payload collapsing capacity to residual cash would size a near-zero
         # budget and liquidate the member's slice. Unreadable → skip (below).
@@ -904,41 +910,89 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                                 budget = round(max(0.0, _pb), 2)
                                 stamped_stake = _ps
                                 commit_target = float(_pc) if _pc is not None else None
+                                _reversed = 0.0
                                 if will_place:
-                                    kv_set(budget_stamp, json.dumps(
-                                        {"budget": budget, "stake": stamped_stake,
-                                         "commit": commit_target}))
                                     with db() as conn:
-                                        # The adopted budget was sized before
-                                        # any credit that cycle drained, so the
-                                        # drain must ride forward with it or the
-                                        # write-back overwrites those dollars
-                                        # out of existence.
-                                        _pdk = f"carry_drained:{_prev['id']}:{mid}"
-                                        _pd = (conn.execute(
-                                            "SELECT value FROM kv WHERE key=?",
-                                            (_pdk,)).fetchone() or {"value": None})["value"]
-                                        if _pd:
+                                        # ONE transaction: the new stamp, the
+                                        # drain move, the old stamp's retirement
+                                        # and the supersede below land together
+                                        # or not at all. Five autocommit writes
+                                        # left a kill between them with the new
+                                        # stamp in place and the old rows still
+                                        # creditable — the same dollars twice.
+                                        conn.execute("BEGIN IMMEDIATE")
+                                        try:
                                             conn.execute(
                                                 "INSERT INTO kv(key,value) VALUES(?,?) "
                                                 "ON CONFLICT(key) DO UPDATE SET "
                                                 "value=excluded.value",
-                                                (f"carry_drained:{sid}:{mid}", _pd))
-                                            conn.execute("DELETE FROM kv WHERE key=?", (_pdk,))
-                                        conn.execute("DELETE FROM kv WHERE key=?",
-                                                     (_prev_key,))
-                                        # This budget re-deploys what the
-                                        # interrupted cycle could not, so its
-                                        # errored buys must not ALSO be credited
-                                        # back to the slice later — that would
-                                        # spend the same dollars twice.
-                                        conn.execute(
-                                            "UPDATE executions SET status='superseded' "
-                                            "WHERE session_id=? AND member_id=? AND side='buy' "
-                                            "AND status='error'", (_prev["id"], mid))
+                                                (budget_stamp, json.dumps(
+                                                    {"budget": budget, "stake": stamped_stake,
+                                                     "commit": commit_target})))
+                                            # The adopted budget was sized before
+                                            # any credit that cycle drained, so the
+                                            # drain must ride forward with it or the
+                                            # write-back overwrites those dollars
+                                            # out of existence.
+                                            _pdk = f"carry_drained:{_prev['id']}:{mid}"
+                                            _pd = (conn.execute(
+                                                "SELECT value FROM kv WHERE key=?",
+                                                (_pdk,)).fetchone() or {"value": None})["value"]
+                                            if _pd:
+                                                conn.execute(
+                                                    "INSERT INTO kv(key,value) VALUES(?,?) "
+                                                    "ON CONFLICT(key) DO UPDATE SET "
+                                                    "value=excluded.value",
+                                                    (f"carry_drained:{sid}:{mid}", _pd))
+                                                conn.execute("DELETE FROM kv WHERE key=?", (_pdk,))
+                                            conn.execute("DELETE FROM kv WHERE key=?",
+                                                         (_prev_key,))
+                                            # This budget re-deploys what the
+                                            # interrupted cycle could not, so its
+                                            # errored buys must not ALSO be credited
+                                            # back to the slice — and where
+                                            # reconcile already HAS credited one
+                                            # (its age-out and this adoption
+                                            # window overlap for days 6-10 of a
+                                            # weekly cadence, and the old UPDATE
+                                            # here matched 0 rows once the row
+                                            # read 'skipped'), take the credit
+                                            # back before the write-back drains
+                                            # it on top of the adopted budget.
+                                            for _r in conn.execute(
+                                                    "SELECT id, status, place_json FROM executions "
+                                                    "WHERE session_id=? AND member_id=? AND side='buy' "
+                                                    "AND status IN ('error','skipped')",
+                                                    (_prev["id"], mid)).fetchall():
+                                                try:
+                                                    _pj = json.loads(_r["place_json"] or "{}")
+                                                except (TypeError, ValueError):
+                                                    _pj = {}
+                                                _cr = _num(_pj.get("_concord_carry_credited"))
+                                                _claim = _pj.get("_concord_awaiting_credit")
+                                                if _r["status"] == "skipped" and not _cr and _claim is None:
+                                                    continue        # an ordinary deferral — not ours
+                                                if _cr:
+                                                    _reversed += _cr
+                                                    _pj["_concord_credit_reversed"] = _cr
+                                                    _pj.pop("_concord_carry_credited", None)
+                                                _pj.pop("_concord_awaiting_credit", None)
+                                                conn.execute(
+                                                    "UPDATE executions SET status='superseded', "
+                                                    "place_json=? WHERE id=?",
+                                                    (json.dumps(_pj), _r["id"]))
+                                            if _reversed:
+                                                conn.execute(
+                                                    "UPDATE member_settings SET carry_pending="
+                                                    "MAX(0, COALESCE(carry_pending,0)-?) "
+                                                    "WHERE member_id=?", (round(_reversed, 2), mid))
+                                            conn.execute("COMMIT")
+                                        except BaseException:
+                                            conn.execute("ROLLBACK")
+                                            raise
                                     audit("system", "budget_carried_forward", str(sid),
                                           {"member_id": mid, "from_session": _prev["id"],
-                                           "budget": budget})
+                                           "budget": budget, "credit_reversed": round(_reversed, 2)})
                 if budget is None:
                     # Mark plausibility gate. The ride below anchors the
                     # COMMITMENT to club_value and the write-back persists
@@ -1002,11 +1056,15 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                     ride = alloc.compound_budget(stake_usd, m.get("alloc_applied"),
                                                  club_value, total_value,
                                                  daily_cap_usd=None, slice_carry=carry)
-                    # Deployable capacity = the marked slice (incl. carry) plus
-                    # spendable cash — a commitment above it can never fully
-                    # deploy and would defer/carry the excess forever.
-                    cv_marked = max(0.0, club_value + (carry or 0.0))
-                    capacity = cv_marked + deployable(buying_power)
+                    # Deployable capacity = the marked positions plus spendable
+                    # cash — a commitment above it can never fully deploy and
+                    # would defer/carry the excess forever. Carry is NOT added
+                    # here: carry is dollars we declined to spend, which are
+                    # only real if they are still in the account as cash, and
+                    # cash is what buying_power reports. Counting carry on both
+                    # sides made ride <= capacity an identity, so a carry whose
+                    # dollars had left the account could never mature the clamp.
+                    capacity = club_value + deployable(buying_power)
                     eff = min(ride, capacity)
                     cap = m.get("daily_cap_usd")
                     budget = round(max(0.0, min(eff, cap)
@@ -1117,6 +1175,13 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         # weight target is trimmed back to target, so the proceeds redistribute
         # into the rest of the new basket.
         placed_sell_usd = 0.0   # ≈ proceeds in flight; the both-day BP poll's early-exit target
+        # Club value the sell leg meant to release but could not (a blocked
+        # pre-trade alert, a review failure, the order cap, the PDT guard). The
+        # budget was sized WITH it, so the buy leg must deploy that much less
+        # this cycle — or it buys the shortfall out of the member's own idle
+        # cash — and it must not be carried, because the dollars never left the
+        # positions the next mark will count again.
+        unsold_club_usd = 0.0
         unpriced_sell_placed = False   # a placed sell with no quote → its proceeds are untracked
         # PDT guard, keyed on TIME, not session: anything this member BOUGHT
         # since the previous trading day's close (16:00 ET) must not be sold
@@ -1155,6 +1220,8 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                                        "note": "auth expired mid-pass"})
                 continue
             if symbol in bought_today:
+                if symbol not in want:          # a deferred EXIT keeps its value in the slice
+                    unsold_club_usd += min(qty, live.get(symbol, 0.0)) * (prices.get(symbol) or 0.0)
                 msum["orders"].append({"symbol": symbol, "side": "sell", "status": "skipped",
                                        "note": "bought today — PDT guard, exits next session"})
                 continue
@@ -1204,6 +1271,7 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                                        "note": "already sold"})
                 continue
             if sell_count >= member_max_orders:
+                unsold_club_usd += sell_qty * (price or 0.0)
                 # The sell leg has its own budget (see member_max_orders above),
                 # so a rotation can never starve its own buys — but it is still
                 # bounded, so one member cannot generate unlimited orders.
@@ -1255,6 +1323,7 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                 review = _broker(lambda: client.review_market_sell(m["account_number"], symbol, qstr))
             except RHAuthError as e:
                 # token refresh + retry both failed — strand the member's pass
+                unsold_club_usd += qfloor * (price or 0.0)
                 _record(sid, mid, symbol, None, ref_id, "skipped",
                         error=f"sell review failed: {e}", side="sell")
                 msum["orders"].append({"symbol": symbol, "side": "sell", "status": "skipped",
@@ -1275,12 +1344,14 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                 # 'skipped', not 'error': nothing reached the broker, so there
                 # is no fill to recover and no reason to hold the session's
                 # executed-flip open — the name is retried next session.
+                unsold_club_usd += qfloor * (price or 0.0)
                 _record(sid, mid, symbol, None, ref_id, "skipped",
                         error=f"sell review failed: {e}", side="sell")
                 msum["orders"].append({"symbol": symbol, "side": "sell", "status": "skipped", "note": str(e)})
                 continue
             blocked, alerts = has_blocking_alerts(review)
             if blocked:
+                unsold_club_usd += qfloor * (price or 0.0)
                 _record(sid, mid, symbol, None, ref_id, "skipped", review=review,
                         error="blocking pre-trade alert", side="sell")
                 msum["orders"].append({"symbol": symbol, "side": "sell", "status": "skipped", "alerts": alerts})
@@ -1413,6 +1484,13 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
         # so a sequence of dollar market orders doesn't exhaust buying power on
         # the last leg.
         bp_left = max(0.0, deployable(buying_power) - repair_reserve)
+        if unsold_club_usd > 0:
+            # The names above are still in the slice, so their value is not
+            # ours to redeploy this cycle: shrink the leg's headroom by it. The
+            # shortfall defers ("tops up next cycle") and is netted out of the
+            # carry at the write-back — it lands when the sell finally does.
+            bp_left = max(0.0, bp_left - unsold_club_usd)
+            msum["unsold_club_usd"] = round(unsold_club_usd, 2)
         # A4: lazy one-shot fetch of the member's recent broker orders, only when a
         # prior run left an errored buy whose true fate is unknown.
         recent_orders: list[dict] | None = None
@@ -1788,7 +1866,8 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
                         "UPDATE member_settings SET alloc_applied=?, slice_carry=?, "
                         "carry_pending=0 WHERE member_id=?",
                         (round(budget, 2),
-                         round(unplaced_usd + _drained - _rspent, 2), mid))
+                         round(max(0.0, unplaced_usd - unsold_club_usd) + _drained - _rspent, 2),
+                         mid))
                     conn.execute(
                         "INSERT INTO kv(key,value) VALUES(?,?) "
                         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -1809,9 +1888,15 @@ def _run_impl(session: dict, force_dry_run: bool = False, phase: str = "both") -
             # slice_carry, so a figure left frozen here would be redeployed in
             # full the day the member switches compounding back on, long after
             # the pinned cycles already covered it.
+            # alloc_applied is "the figure the executor last honored" and the
+            # compounding ride deploys alloc_value − alloc_applied on top of
+            # the marked slice. Pinned cycles honor the pinned budget, so they
+            # record it too — otherwise a member who compounds, turns it off,
+            # edits the stake, runs pinned, and turns it back on gets the edit
+            # applied twice (a $100→$50 cut liquidates the slice).
             with db() as conn:
-                conn.execute("UPDATE member_settings SET carry_pending=0, slice_carry=0 "
-                             "WHERE member_id=?", (mid,))
+                conn.execute("UPDATE member_settings SET carry_pending=0, slice_carry=0, "
+                             "alloc_applied=? WHERE member_id=?", (round(budget, 2), mid))
         # Sweep this member's sub-$1 crumbs while we are here. dust_cleanup is
         # the same review→place pipeline with its own DUST: ref_ids, so it is
         # idempotent and honours every gate run() just honoured; dry runs

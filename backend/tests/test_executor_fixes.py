@@ -206,7 +206,7 @@ def test_recovers_prior_errored_buy_from_broker(monkeypatch):
     client = FakeClient(
         quotes={"AAPL": 200.0},
         orders=[{"symbol": "AAPL", "side": "buy", "created_at": iso_now,
-                 "dollar_amount": "500.00", "state": "filled"}],
+                 "dollar_based_amount": {"amount": "500.00", "currency_code": "USD"}, "state": "filled"}],
     )
     _use_client(monkeypatch, client)
 

@@ -336,6 +336,43 @@ def club_shares_derived(member_id: int, *, client=None,
     return out
 
 
+# get_equity_positions is cursor-paginated exactly like the order feed (the
+# tool takes `cursor`, the page carries `next`). Today's accounts fit in one
+# page, so every reader used to consume page one and drop `next` — the same
+# assumption that truncated the order feed at 200 orders. A second page here
+# would read as "held nothing" for everything on it: the sell leg would leave
+# those names alone while the buy leg re-bought them, and ledger_trueup would
+# zero them out of the ledger. Read to the end; refuse a page we cannot fetch.
+_POSITIONS_PAGE_CEILING = 50
+
+
+def all_positions(client, account_number: str) -> list[dict]:
+    """EVERY position row for the account, following `next` to the end.
+    Raises RuntimeError on a `next` it cannot decode or a runaway cursor —
+    a partial positions list is never returned as the whole account."""
+    out: list[dict] = []
+    cursor, seen, pages = None, set(), 0
+    while True:
+        if pages >= _POSITIONS_PAGE_CEILING:
+            raise RuntimeError("positions page ceiling hit before feed end")
+        payload = client.get_positions(account_number, cursor=cursor) if cursor else \
+            client.get_positions(account_number)
+        data = payload.get("data", payload) if isinstance(payload, dict) else payload
+        if not isinstance(data, dict):
+            raise RuntimeError(f"positions payload is not an object: {type(data).__name__}")
+        out.extend(p for p in (data.get("positions") or []) if isinstance(p, dict))
+        nxt = data.get("next")
+        if not nxt:
+            return out
+        cursor = cursor_from_next(nxt)
+        if cursor is None:
+            raise RuntimeError(f"undecodable positions cursor: {str(nxt)[:40]!r}")
+        if cursor in seen:
+            raise RuntimeError("positions cursor did not advance")
+        seen.add(cursor)
+        pages += 1
+
+
 def holdings_with_value(member_id: int) -> list[dict]:
     """The member's long positions valued at the live quote: [{symbol, quantity, value, pnl}]."""
     acct = vault.account_number_for(member_id)
@@ -343,7 +380,7 @@ def holdings_with_value(member_id: int) -> list[dict]:
         return []
     try:
         client = vault.ensure_client(member_id)
-        pos = (client.get_positions(acct).get("data") or {}).get("positions") or []
+        pos = all_positions(client, acct)
     except Exception:  # noqa: BLE001
         return []
     longs = [p for p in pos if p.get("type") == "long" and (_num(p.get("quantity")) or 0) > 1e-9]
@@ -383,7 +420,7 @@ def live_positions_strict(member_id: int) -> list[dict]:
     for attempt in range(2):
         try:
             client = vault.ensure_client(member_id)
-            pos = (client.get_positions(acct).get("data") or {}).get("positions") or []
+            pos = all_positions(client, acct)
             out = []
             for p in pos:
                 q = _num(p.get("quantity")) or 0.0

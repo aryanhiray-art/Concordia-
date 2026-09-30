@@ -313,6 +313,18 @@ def test_w7_verify_failed(monkeypatch):
     assert watchdog._check_verify_failed() == []
 
 
+def test_w7_alerts_when_verification_itself_crashed(monkeypatch):
+    """The executor records verify_verdict='SKIPPED' when verify_all raises.
+    That is a run nobody verified, not a clean one — reading it as clean let a
+    broken verifier hide every later finding."""
+    now = _pin(monkeypatch, 2099, 8, 5, 12, 0)
+    ts = int(now.timestamp())
+    _run_report("2099-08-05", "SKIPPED", started_at=ts - 600)
+    finds = watchdog._check_verify_failed()
+    assert finds and finds[0]["key"] == "verify-failed"
+    assert "NOT verified" in finds[0]["message"] and "2099-08-05" in finds[0]["message"]
+
+
 # ─── W8: stuck session ───────────────────────────────────────────────────────
 
 def test_w8_stuck_session(monkeypatch):

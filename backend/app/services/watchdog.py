@@ -213,15 +213,24 @@ def _check_missed_run() -> list[dict]:
 
 def _check_verify_failed() -> list[dict]:
     """The latest run report (today/yesterday) ended WARN or FAIL — the
-    post-run account verification found drift the owner should look at."""
+    post-run account verification found drift the owner should look at — or
+    SKIPPED, which is what the executor records when verification itself
+    CRASHED: a run nobody verified is at least as worth a look as one that
+    verified badly, and reading SKIPPED as clean let a broken verifier hide
+    every later finding."""
     with db() as conn:
         row = conn.execute(
             "SELECT id, trade_date, started_at, verify_verdict FROM run_reports "
             "ORDER BY id DESC LIMIT 1").fetchone()
-    if not row or row["verify_verdict"] not in ("WARN", "FAIL"):
+    if not row or row["verify_verdict"] not in ("WARN", "FAIL", "SKIPPED"):
         return []
     if (row["started_at"] or 0) < now_et().timestamp() - 2 * 86400:
         return []          # an old failing report shouldn't alarm forever
+    if row["verify_verdict"] == "SKIPPED":
+        return [{"key": "verify-failed", "severity": "warn",
+                 "message": (f"latest run ({row['trade_date'] or 'unknown date'}) was "
+                             "NOT verified — the post-run verification crashed; "
+                             "check the run report's verify error")}]
     return [{"key": "verify-failed", "severity": "warn",
              "message": (f"latest run ({row['trade_date'] or 'unknown date'}) "
                          f"verified {row['verify_verdict']} — check the run "

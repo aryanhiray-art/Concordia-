@@ -85,3 +85,53 @@ def oldest_ts(orders: list[dict]) -> float | None:
     """Creation time of the oldest order in a feed read, or None when no order
     carries a readable timestamp."""
     return min((t for t in (order_ts(o) for o in orders) if t is not None), default=None)
+
+
+# The dollar notional of a dollar-denominated order. Robinhood's feed carries
+# it ONLY as `dollar_based_amount: {"amount": "1.180000", "currency_code":
+# "USD"}` (verified on the live feed and on every placed row in the ledger,
+# 2026-09-30). The two service-level helpers this replaces looked for five
+# other keys and never this one, so no real order ever had an amount: A4's
+# fuzzy match could not find an errored buy that had landed, and reconcile's
+# economic gate refused to promote one — both silently, both since launch.
+_AMOUNT_KEYS = ("dollar_based_amount", "dollar_amount", "amount", "notional",
+                "total_notional", "executed_notional")
+
+
+def executed_notional(order: dict) -> float | None:
+    """Dollars that actually FILLED on an order: the sum of its executions'
+    price × quantity, else cumulative_quantity × average_price. None when the
+    feed gives neither — the broker never sends an `executed_notional` field,
+    so a reader that looked for one always saw None and credited nothing."""
+    total, seen = 0.0, False
+    for e in order.get("executions") or []:
+        try:
+            total += float(e["price"]) * float(e["quantity"])
+            seen = True
+        except (KeyError, TypeError, ValueError):
+            continue
+    if seen:
+        return total
+    try:
+        q, p = float(order.get("cumulative_quantity")), float(order.get("average_price"))
+    except (TypeError, ValueError):
+        return None
+    return q * p if q == q and p == p else None
+
+
+def order_amount(order: dict) -> float | None:
+    """Dollar amount of a broker order, or None when it carries none (a
+    share-denominated sell, say)."""
+    for key in _AMOUNT_KEYS:
+        v = order.get(key)
+        if isinstance(v, dict):
+            v = v.get("amount")
+        if v is None:
+            continue
+        try:
+            n = float(v)
+        except (TypeError, ValueError):
+            continue
+        if n == n:                                 # never NaN
+            return n
+    return None

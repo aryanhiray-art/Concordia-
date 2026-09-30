@@ -13,6 +13,7 @@ import time
 
 os.environ.setdefault("CONCORD_DB_PATH", tempfile.mkstemp(suffix=".db")[1])
 
+import pytest  # noqa: E402
 from app.db import db, init_db  # noqa: E402
 from app.services import positions, renames  # noqa: E402
 
@@ -35,6 +36,25 @@ def _member(email: str, connected: bool = True) -> int:
                 "INSERT INTO rh_accounts(member_id,account_number,agentic_allowed,status,connected_at) "
                 "VALUES(?,?,1,'connected',?)", (mid, f"ACC{mid}", now))
     return mid
+
+
+@pytest.fixture(autouse=True)
+def _live_from_snapshot(monkeypatch):
+    """migrate now sizes adjustments from the BROKER (positions.live_positions_
+    strict), never from the display snapshot. These tests describe the account
+    through _snapshot(); serve that same picture as the strict live read so
+    the scenarios keep meaning what they say."""
+    from app.services import positions
+
+    def live(mid):
+        with db() as conn:
+            row = conn.execute("SELECT holdings FROM account_snapshots WHERE member_id=?",
+                               (mid,)).fetchone()
+        if not row or not row["holdings"]:
+            return []
+        return [{"symbol": h["symbol"], "quantity": float(h.get("quantity") or 0)}
+                for h in json.loads(row["holdings"]) if h.get("symbol")]
+    monkeypatch.setattr(positions, "live_positions_strict", live)
 
 
 def _snapshot(mid: int, holdings: list[dict]) -> None:
@@ -183,3 +203,45 @@ def test_check_and_alert_fires_once_per_pair(capsys):
     renames.migrate("GONE2", "FOUND2")
     renames.check_and_alert()   # pair resolved → dedup key cleared for any future re-emergence
     assert not kv_get("rename_alerted:GONE2>FOUND2")
+
+
+def test_migrate_never_sizes_a_member_from_a_zero_read(monkeypatch):
+    """A member whose live positions cannot be read, or whose account shows
+    NONE of the new symbol while the ledger holds it, is a member the club
+    cannot see — not a member who holds nothing. The old code read the display
+    snapshot (absent for anyone the refresher does not warm) as live_qty=0 and
+    wrote a $0 SELL of their entire renamed position, irreversibly; the dup
+    guard then made migrate a permanent no-op for them."""
+    from app.services import positions
+    sid = _session()
+    ok = _member("rename-ok@x.test")
+    blind = _member("rename-blind@x.test")
+    unread = _member("rename-unread@x.test")
+    for m in (ok, blind, unread):
+        _buy(sid, m, "OLDX", qty=0.0269, usd=5.00)
+    _snapshot(ok, [{"symbol": "NEWX", "quantity": 0.0752, "value": 4.90, "pnl": 0.0}])
+    # `blind` has no snapshot at all; `unread`'s live read raises
+    base = positions.live_positions_strict
+
+    def live(mid):
+        if mid == unread:
+            raise RuntimeError("throttled")
+        return base(mid)
+    monkeypatch.setattr(positions, "live_positions_strict", live)
+
+    res = renames.migrate("OLDX", "NEWX", name="New X")
+
+    assert [a["delta_shares"] for a in res["adjustments"]] == [pytest.approx(0.0752 - 0.0269, abs=1e-6)]
+    assert {d["member"] for d in res["deferred"]} == {"rename-blind", "rename-unread"}
+    assert abs(positions.club_shares(ok).get("NEWX", 0) - 0.0752) < 1e-6
+    for m in (blind, unread):
+        assert abs(positions.club_shares(m).get("NEWX", 0) - 0.0269) < 1e-6, "ledger untouched"
+        assert not [r for r in _rows("NEWX") if r["member_id"] == m and (r["ref_id"] or "").startswith("CORPACT:")]
+    # once the account can be seen, the same migrate call adjusts them
+    _snapshot(blind, [{"symbol": "NEWX", "quantity": 0.0752, "value": 4.90, "pnl": 0.0}])
+    _snapshot(unread, [{"symbol": "NEWX", "quantity": 0.0752, "value": 4.90, "pnl": 0.0}])
+    monkeypatch.setattr(positions, "live_positions_strict", base)
+    again = renames.migrate("OLDX", "NEWX", name="New X")
+    assert len(again["adjustments"]) == 2 and again["deferred"] == []
+    for m in (blind, unread):
+        assert abs(positions.club_shares(m).get("NEWX", 0) - 0.0752) < 1e-6

@@ -76,9 +76,11 @@ class _Feed:
     shape — or a URL / an undecodable dict on request. Last page: next=None."""
 
     def __init__(self, pages, *, next_shape="token", quotes=None, positions=None,
-                 buying_power=5.0, total_value=110.0):
+                 buying_power=5.0, total_value=110.0, pos_pages=None, pos_next_shape="token"):
         self.pages = pages
         self.next_shape = next_shape
+        self.pos_pages = pos_pages              # scripted positions pagination (same rules)
+        self.pos_next_shape = pos_next_shape
         self.quotes = quotes or {}
         self.positions_list = positions or []
         self.buying_power = buying_power
@@ -103,9 +105,21 @@ class _Feed:
         return {"data": {"buying_power": {"buying_power": str(self.buying_power)},
                          "total_value": str(self.total_value)}}
 
-    def get_positions(self, acct):
-        return {"data": {"positions": [{"symbol": s, "type": "long", "quantity": str(q)}
-                                       for s, q in self.positions_list]}}
+    def get_positions(self, acct, cursor=None):
+        self.calls.append(("get_positions", acct, cursor))
+        if self.pos_pages is None:
+            return {"data": {"positions": [{"symbol": s, "type": "long", "quantity": str(q)}
+                                           for s, q in self.positions_list]}}
+        idx = 0 if cursor is None else int(str(cursor).removeprefix("cD0"))
+        page = self.pos_pages[idx] if idx < len(self.pos_pages) else []
+        if idx + 1 >= len(self.pos_pages):
+            nxt = None
+        elif self.pos_next_shape == "token":
+            nxt = f"cD0{idx + 1}"
+        else:
+            nxt = {"page": idx + 1}
+        return {"data": {"next": nxt, "positions": [
+            {"symbol": s, "type": "long", "quantity": str(q)} for s, q in page]}}
 
     def get_quotes(self, symbols):
         return {"data": {"results": [
@@ -391,3 +405,44 @@ def test_a_small_drift_never_trips_the_gate(monkeypatch):
                     buying_power=10.0, total_value=110.0)
     row = _run(monkeypatch, mid, closed, client)
     assert row.get("skip_reason") is None, row
+
+
+# ─── 5. the sibling readers: positions pages, order amounts ──────────────────
+
+def test_order_amount_reads_the_broker_s_real_key():
+    """Robinhood puts a dollar order's notional under dollar_based_amount.amount
+    and nowhere else. Both service-level helpers looked for five other keys, so
+    A4 could never match an errored buy that landed and reconcile could never
+    promote one — since launch, silently."""
+    from app.robinhood.feed import order_amount
+    real = {"id": "x", "side": "buy", "dollar_based_amount": {"amount": "1.180000", "currency_code": "USD"},
+            "quantity": "0.005685", "cumulative_quantity": "0.005685", "average_price": "207.5431"}
+    assert order_amount(real) == pytest.approx(1.18)
+    assert order_amount({"dollar_amount": "20.00"}) == pytest.approx(20.0)        # legacy shape
+    assert order_amount({"side": "sell", "quantity": "0.5"}) is None               # share-denominated
+    assert order_amount({"dollar_based_amount": {"amount": "NaN"}}) is None       # never NaN
+    assert executor._order_amount(real) == pytest.approx(1.18)
+    assert reconcile._order_amount(real) == pytest.approx(1.18)
+
+
+def test_positions_reader_follows_next_to_the_end(monkeypatch):
+    """get_equity_positions pages like the order feed. A reader that stops at
+    page one reports everything on page two as 'held nothing' — the sell leg
+    leaves it alone and the buy leg re-buys it."""
+    mid = _member("pos-pages@x.com")
+    client = _Feed([[]], pos_pages=[[("AAPL", "0.2")], [("MSFT", "0.3")]])
+    monkeypatch.setattr(vault, "ensure_client", lambda m: client)
+    got = {p["symbol"]: p["quantity"] for p in positions.live_positions_strict(mid)}
+    assert got == {"AAPL": pytest.approx(0.2), "MSFT": pytest.approx(0.3)}
+    assert [c[2] for c in client.calls if c[0] == "get_positions"] == [None, "cD01"]
+
+
+def test_positions_reader_fails_closed_on_an_undecodable_next(monkeypatch):
+    """A second page we cannot fetch: the strict reader raises (its callers skip
+    the member), the lenient display reader returns [] as its contract says."""
+    mid = _member("pos-undecodable@x.com")
+    client = _Feed([[]], pos_pages=[[("AAPL", "0.2")], [("MSFT", "0.3")]], pos_next_shape="opaque")
+    monkeypatch.setattr(vault, "ensure_client", lambda m: client)
+    with pytest.raises(RuntimeError, match="undecodable"):
+        positions.live_positions_strict(mid)
+    assert positions.holdings_with_value(mid) == []

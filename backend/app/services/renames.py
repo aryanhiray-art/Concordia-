@@ -184,20 +184,37 @@ def migrate(old: str, new: str, name: str | None = None, actor: str = "admin") -
             "JOIN rh_accounts a ON a.member_id=m.id "
             "WHERE COALESCE(m.is_bot,0)=0 AND a.status='connected'").fetchall()
         adjusted = []
+        deferred = []
         for m in members:
             mid = m["id"]
-            live_qty = 0.0
-            h = _live_holdings(conn, mid).get(new)
-            if h is not None:
-                try:
-                    live_qty = float(h.get("quantity") or 0)
-                except (TypeError, ValueError):
-                    live_qty = 0.0
+            # The adjustment is sized from the BROKER, read strictly — never
+            # from the display snapshot. account_snapshots is a cache the
+            # refresher keeps only for opted-in members and leaves stale on a
+            # failed refresh; a member whose snapshot is missing or predates
+            # the conversion read as live_qty=0 here, which sized a $0 SELL of
+            # their entire renamed position — irreversible, and the dup guard
+            # below then made migrate a permanent no-op for them.
+            try:
+                live_map = {str(p["symbol"]).upper(): float(p.get("quantity") or 0.0)
+                            for p in positions.live_positions_strict(mid)}
+            except Exception as e:  # noqa: BLE001 — no read, no write
+                deferred.append({"member": m["display_name"], "reason": f"live read failed: {e}"})
+                continue
+            live_qty = live_map.get(new, 0.0)
             led_qty = positions.club_shares(mid).get(new, 0.0)
             if led_qty <= _DUST_SH and live_qty <= _DUST_SH:
                 continue
             delta = live_qty - led_qty
             if abs(delta) <= _DUST_SH:
+                continue
+            if delta < 0 and live_qty <= _DUST_SH:
+                # The ledger says the member holds the new name and the account
+                # shows none of it: that is a member the club cannot see (a
+                # positions read that missed it, a conversion not yet booked),
+                # not a member who holds nothing. Never write a negative
+                # adjustment from a zero read; leave them re-runnable.
+                deferred.append({"member": m["display_name"], "reason": "account shows none of "
+                                 f"{new} while the ledger holds {round(led_qty, 6)} — not adjusted"})
                 continue
             ref = f"CORPACT:{old}>{new}:{mid}"
             dup = conn.execute("SELECT 1 FROM executions WHERE ref_id=?", (ref,)).fetchone()
@@ -218,5 +235,6 @@ def migrate(old: str, new: str, name: str | None = None, actor: str = "admin") -
             "ON CONFLICT(symbol) DO UPDATE SET active=1, name=excluded.name",
             (new, name or new, old))
     audit(actor, "symbol_migrated", f"{old}->{new}",
-          {"execution_rows": renamed, "adjustments": adjusted})
-    return {"old": old, "new": new, "execution_rows": renamed, "adjustments": adjusted}
+          {"execution_rows": renamed, "adjustments": adjusted, "deferred": deferred})
+    return {"old": old, "new": new, "execution_rows": renamed, "adjustments": adjusted,
+            "deferred": deferred}

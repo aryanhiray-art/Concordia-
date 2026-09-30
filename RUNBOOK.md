@@ -491,3 +491,40 @@ ssh root@159.195.19.53 'cd /opt/concord/backend && sudo -u concord ./.venv/bin/p
 The next live pass consumes the token (audit `slice_mark_accepted`); a dry run
 leaves it in place. Never set it to clear a `derived_feed_short` — that one is a
 broken read, not a smaller slice.
+
+### 11.1 Siblings found by the 2026-09-30 audit (same batch)
+
+Audit actions you may now see, all fail-closed and all reversible by a human:
+
+- **`trueup_refused`** — `ledger_trueup` would have zeroed names off a live
+  positions read that came back EMPTY while the club holds names, or that
+  made ≥5 and >50% of a member's names look like phantoms. Nothing written.
+  A member who really did sell everything by hand is trued up with
+  `reconcile.ledger_trueup(mid, account_number=…, dry_run=False, force=True)`.
+- **`trueup_uncorroborated`** — a name the account no longer shows but whose
+  latest feed order is a BUY. Shares do not leave an account without a sell;
+  this is a ticker the broker now reports under another symbol (run the
+  rename flow) or a positions read that missed it. Nothing written.
+- **`symbol_migrated … deferred`** — `renames.migrate` sizes adjustments from
+  the broker's live positions (never the display snapshot); a member whose
+  read failed, or whose account shows none of the new symbol while the ledger
+  holds it, is listed under `deferred` and adjusted by the next `migrate`.
+- **`member_skipped: transient_rh_error — unreadable buying power`** — the
+  portfolio payload's buying-power field could not be read. Like an unreadable
+  total_value, the member sits out the run (it used to read as $0 and, after
+  two cycles, mature the over-commitment clamp on it).
+- **`budget_carried_forward … credit_reversed`** — crash-continuation adopted
+  the interrupted cycle's budget AND took back a carry credit reconcile had
+  already granted for that cycle's errored buy (weekly cadence: the two windows
+  overlap), so the dollars deploy once.
+- **`unsold_club_usd`** on a member's run row — a club sell (exit or trim)
+  did not place (blocked pre-trade alert, review failure, order cap, PDT). Its
+  value stays in the slice: the buy leg deploys that much less this cycle and
+  it is netted out of the carry. Recurring blocked sells (m2 AES/AMGN/AVGO,
+  m26 ABT/MMM since 09-24) no longer inflate the commitment.
+- The over-commitment clamp's capacity is now positions + buying power; carry
+  counts only if the account still holds it as cash.
+- Broker order notional lives ONLY under `dollar_based_amount.amount`; both
+  order-amount helpers (A4's fuzzy match, reconcile's promotion gate) read it
+  through `robinhood/feed.order_amount`. Test fakes must emit that shape.
+- Watchdog W7 alerts on a `SKIPPED` verify verdict (verification crashed).

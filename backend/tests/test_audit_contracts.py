@@ -560,7 +560,7 @@ def test_leftover_errored_buy_the_broker_shows_is_promoted_in_place(monkeypatch)
                      error="place: connection reset")
     feed = FakeClient(quotes={"AAPL": 10.0, "MSFT": 10.0},
                       orders=[{"symbol": "MSFT", "side": "buy", "created_at": time.time(),
-                               "dollar_amount": "25.00", "state": "filled",
+                               "dollar_based_amount": {"amount": "25.00", "currency_code": "USD"}, "state": "filled",
                                "cumulative_quantity": "2.5"}])
     _use_client(monkeypatch, feed)
 

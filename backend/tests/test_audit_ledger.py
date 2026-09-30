@@ -241,7 +241,8 @@ def _order(symbol, side, state, cum, *, agent="agentic", created=None, dollars=N
          "cumulative_quantity": str(cum), "placed_agent": agent,
          "created_at": created or _iso()}
     if dollars is not None:
-        o["dollar_amount"] = f"{dollars:.2f}"
+        # the broker's real shape — never a flat dollar_amount
+        o["dollar_based_amount"] = {"amount": f"{dollars:.6f}", "currency_code": "USD"}
     if oid is not None:
         o["id"] = oid
     return o
@@ -301,8 +302,11 @@ def test_ledger_trueup_is_idempotent_across_days(monkeypatch):
                      place={"data": {"order": {"cumulative_quantity": "0.5"}}})
     _backdate(mid, 5)          # past the 48h in-flight deferral
     _use(monkeypatch, FeedClient(orders=[_order("AES", "buy", "filled", "0.5",
-                                                created=_iso(time.time() - 10 * 86400))],
-                                 positions=[]))
+                                                created=_iso(time.time() - 10 * 86400)),
+                                         # the member sold it by hand — the phantom's origin
+                                         _order("AES", "sell", "filled", "0.5", agent="user",
+                                                created=_iso(time.time() - 8 * 86400))],
+                                 positions=[("KO", "1.0")]))
 
     assert positions.club_shares(mid).get("AES") == pytest.approx(0.5)
     assert positions.club_shares_derived(mid).get("AES") == pytest.approx(0.5)
@@ -335,7 +339,11 @@ def test_trueup_coverage_nets_off_even_if_the_derived_view_goes_blind(monkeypatc
     executor._record(_session_row(31, "executed"), mid, "AWK", 50.0,
                      "tu-cov-buy", "placed", place={"_concord_est_qty": 0.25})
     _backdate(mid, 5)
-    _use(monkeypatch, FeedClient(positions=[]))
+    _use(monkeypatch, FeedClient(orders=[_order("AWK", "buy", "filled", "0.25",
+                                                created=_iso(time.time() - 10 * 86400)),
+                                         _order("AWK", "sell", "filled", "0.25", agent="user",
+                                                created=_iso(time.time() - 8 * 86400))],
+                                 positions=[("KO", "1.0")]))
     monkeypatch.setattr(positions, "club_shares_derived",
                         lambda m, client=None, account_number=None: {"AWK": 0.25})
 
@@ -606,7 +614,9 @@ def test_partially_filled_then_cancelled_buy_keeps_its_shares(monkeypatch):
     executor._record(sid, mid, "ADM", 50.0, executor.ref_id_for(sid, mid, "ADM"),
                      "error", error="place: timeout")
     o = _order("ADM", "buy", "cancelled", "0.35", dollars=50.0)
-    o["executed_notional"] = "30.00"             # $30 of the $50 actually filled
+    # $30 of the $50 actually filled — said the way the broker says it: through
+    # the order's executions (there is no executed_notional field in the feed)
+    o["executions"] = [{"price": "85.714286", "quantity": "0.35"}]
     _use(monkeypatch, FeedClient(orders=[o]))
 
     res = reconcile.reconcile_fills(mid)
