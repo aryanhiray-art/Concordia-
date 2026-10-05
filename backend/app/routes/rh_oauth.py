@@ -121,16 +121,24 @@ def complete(body: CompleteBody, member: dict = Depends(require_member)):
             raise HTTPException(status_code=400, detail="paste the URL from the demo Robinhood page")
         import time as _time
         from ..robinhood.demo import DemoClient
-        vault.save_connection(member["id"], {
-            "access_token": "demo", "refresh_token": "demo", "client_id": "demo",
-            "obtained_at": int(_time.time()), "expires_in": 10 * 365 * 86400,
-        }, DemoClient.DEMO_ACCOUNT, True)
+        # Per-member fake account: a shared constant meant the second demo signup
+        # collided with the first and died here. And mirror the real path's 409 —
+        # an unhandled DuplicateAccount escapes as a 500 with no CORS headers, so
+        # the browser reports a bare "Failed to fetch" instead of the message.
+        demo_account = DemoClient.account_for(member["id"])
+        try:
+            vault.save_connection(member["id"], {
+                "access_token": "demo", "refresh_token": "demo", "client_id": "demo",
+                "obtained_at": int(_time.time()), "expires_in": 10 * 365 * 86400,
+            }, demo_account, True)
+        except vault.DuplicateAccount as e:
+            raise HTTPException(status_code=409, detail=str(e))
         try:
             power.snapshot_member(member["id"])
         except Exception:  # noqa: BLE001
             pass
         accountsnap.invalidate(member["id"])
-        return {"ok": True, "account_number": DemoClient.DEMO_ACCOUNT, "agentic_allowed": True}
+        return {"ok": True, "account_number": demo_account, "agentic_allowed": True}
     raw = (body.redirect_url or "").strip()
     if not raw:
         raise HTTPException(status_code=400, detail="paste the URL Robinhood sent you after approving")

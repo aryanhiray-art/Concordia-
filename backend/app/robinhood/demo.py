@@ -236,10 +236,27 @@ class DemoClient:
     def __init__(self, member_id: int | None = None):
         self.member_id = member_id
 
+    @classmethod
+    def account_for(cls, member_id: int | None) -> str:
+        """A DISTINCT fake account per demo member.
+
+        One brokerage account may back only one member (vault.save_connection
+        raises DuplicateAccount), which is right for real money — otherwise one
+        balance backs several member rows and multiplies one person's vote. But
+        the demo handed every member the same constant, so the FIRST signup took
+        DEMO4242 and every later one died on the paste step: the sandbox member
+        scripts/dev.sh seeds already owns it. Anyone walking the demo onboarding
+        after that hit a dead end two steps from the end.
+
+        member_id None keeps the bare constant so the seeded sandbox member and
+        the tests that call get_portfolio(c.DEMO_ACCOUNT) are unaffected.
+        """
+        return cls.DEMO_ACCOUNT if not member_id else f"DEMO{4242 + int(member_id)}"
+
     # ── read ──────────────────────────────────────────────────────────────
     def get_accounts(self) -> dict:
         return {"data": {"accounts": [
-            {"account_number": self.DEMO_ACCOUNT, "agentic_allowed": True}]}}
+            {"account_number": self.account_for(self.member_id), "agentic_allowed": True}]}}
 
     def get_portfolio(self, account_number: str) -> dict:
         holds = self._HOLDINGS

@@ -22,7 +22,7 @@
 // exits ("Skip for now" and "Enter the club") set the skip flag first so the
 // Overview can never bounce a member back here (no redirect loops).
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -53,6 +53,8 @@ export function Wizard() {
   const [step, setStep] = useState(1);
   const [unlocked, setUnlocked] = useState(1); // furthest step reached this visit
   const [derived, setDerived] = useState(false);
+  // null = not read yet; true/false = the latched answer (see the effect below)
+  const inflightRef = useRef<boolean | null>(null);
 
   useEffect(() => {
     if (derived || !member) return; // derive once — later member refreshes must not yank the member around
@@ -62,11 +64,23 @@ export function Wizard() {
       // A blocked popup navigates THIS tab to the approval page; when the
       // member comes back mid-OAuth, re-deriving to step 1 hides the paste
       // step's instructions exactly when they are holding the URL to paste.
-      let inflight = false;
-      try {
-        inflight = sessionStorage.getItem("concordia_oauth_inflight") === "1";
-        sessionStorage.removeItem("concordia_oauth_inflight");
-      } catch {}
+      //
+      // LATCH THE FLAG IN A REF. Reading it was destructive while this effect
+      // can run more than once before `derived` commits — the first run ate the
+      // key and called setStep(3), the second re-ran with `derived` still false,
+      // found nothing, and derived step 1 over the top. StrictMode's double
+      // invoke makes that certain in dev (so `./scripts/dev.sh` always lost it),
+      // and in production the deps below re-fire as the account snapshot settles
+      // right after connecting — exactly when a member is holding the URL.
+      // A ref survives both re-runs and StrictMode's remount, so every run after
+      // the first reuses the latched answer instead of re-reading a consumed key.
+      if (inflightRef.current === null) {
+        try {
+          inflightRef.current = sessionStorage.getItem("concordia_oauth_inflight") === "1";
+          sessionStorage.removeItem("concordia_oauth_inflight");
+        } catch { inflightRef.current = false; }
+      }
+      const inflight = inflightRef.current;
       const start = inflight ? 3 : rh?.account_number ? 2 : 1;
       setStep(start); setUnlocked(start); setDerived(true);
       return;
