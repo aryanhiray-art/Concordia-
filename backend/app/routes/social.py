@@ -34,12 +34,29 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from .. import ratelimit
+from ..config import settings
 from ..db import audit, db
 from ..services import membership
 from ..services.textguard import profane, sanitize
 from .deps import require_member, require_session_member
 
 router = APIRouter(prefix="/api/social", tags=["social"])
+
+
+def _discussion_gate(member: dict) -> None:
+    """Discussion is OWNER-ONLY for now (owner call, 2026-10-05).
+
+    Layered ON TOP of each route's existing dependency rather than replacing it,
+    so the writes keep their session-only requirement (require_session_member) —
+    swapping them to require_owner would have widened them to API-key auth.
+
+    Hiding <ClubFeed/> in the UI is not hiding the feature: without this, any
+    member could still read the whole feed and post into it with a bare fetch.
+    /api/social/me is deliberately NOT gated — it is the voting-power dial's
+    data, not discussion, and every member's /club page still renders it.
+    """
+    if settings.discussion_owner_only and member.get("role") != "owner":
+        raise HTTPException(status_code=403, detail="discussion isn't open yet")
 
 _ACTIVE = membership.active_clause("m")
 
@@ -219,6 +236,7 @@ def _shape(row: dict) -> dict:
 
 @router.get("/feed")
 def feed(sort: str = "top", limit: int = 100, member: dict = Depends(require_member)):
+    _discussion_gate(member)
     if sort not in ("top", "new"):
         raise HTTPException(status_code=422, detail="sort must be 'top' or 'new'")
     limit = max(1, min(int(limit), 200))
@@ -245,6 +263,7 @@ class PostBody(BaseModel):
 
 @router.post("/posts")
 def create_post(payload: PostBody, member: dict = Depends(require_session_member)):
+    _discussion_gate(member)
     mid = member["id"]
     if ratelimit.too_many(f"clubpost:{mid}", *_POST_BURST) or \
        ratelimit.too_many(f"clubpostday:{mid}", *_POST_DAILY):
@@ -294,6 +313,7 @@ class VoteBody(BaseModel):
 
 @router.post("/posts/{post_id}/vote")
 def vote_post(post_id: int, payload: VoteBody, member: dict = Depends(require_session_member)):
+    _discussion_gate(member)
     mid = member["id"]
     if ratelimit.too_many(f"clubvote:{mid}", *_VOTE_BURST):
         raise HTTPException(status_code=429, detail="voting too fast — give it a minute")
@@ -331,6 +351,7 @@ def vote_post(post_id: int, payload: VoteBody, member: dict = Depends(require_se
 
 @router.delete("/posts/{post_id}")
 def delete_post(post_id: int, member: dict = Depends(require_session_member)):
+    _discussion_gate(member)
     mid = member["id"]
     is_admin = member.get("role") in ("owner", "admin")
     with db() as conn:

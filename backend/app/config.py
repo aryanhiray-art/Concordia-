@@ -194,6 +194,14 @@ class Settings:
     # one plain-English email of what happened in their account. Fully fenced —
     # can never fail or delay a run (services/notify.py).
     member_run_emails: bool = _bool("MEMBER_RUN_EMAILS", True)
+
+    # Discussion (the /club feed, routes/social.py) is OWNER-ONLY while it is
+    # not launched (owner call, 2026-10-05). Hiding <ClubFeed/> in the web app
+    # is only cosmetic — this is what actually closes /api/social/*. Flip to 0
+    # to open the floor to every member; the feed's own mechanics (ranking,
+    # voting, moderation, departed-member cleanup) are unaffected either way.
+    discussion_owner_only: bool = _bool("DISCUSSION_OWNER_ONLY", True)
+
     # Size each buy against what the member's account ACTUALLY holds right now
     # (live positions), not the club's reconstructed ledger — so ledger drift, a
     # partial fill, or a manual sale can never mis-size a buy, and a liquidated

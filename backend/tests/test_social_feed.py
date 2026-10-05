@@ -31,6 +31,37 @@ from app.main import app  # noqa: E402
 from app.security import hash_password, make_session  # noqa: E402
 from app.services import apikeys  # noqa: E402
 from app.services.textguard import profane, sanitize  # noqa: E402
+from app.routes import social as _social  # noqa: E402
+
+import pytest  # noqa: E402
+
+
+class _GateOff:
+    """The real settings with discussion_owner_only forced False.
+
+    These tests cover the feed's MECHANICS (ranking, voting, moderation,
+    departed-member cleanup), which are unchanged by who is allowed in. The
+    owner-only gate added 2026-10-05 would otherwise 403 every one of them.
+
+    Patched per-test rather than via DISCUSSION_OWNER_ONLY in the environment:
+    app.config reads env once at import, and every test module sets its env with
+    setdefault BEFORE importing the app — so whichever module imports config
+    first wins and an env-based switch here would silently do nothing in a
+    full-suite run. test_discussion_gate.py covers the gate itself.
+    """
+
+    def __init__(self, real):
+        self._real = real
+
+    discussion_owner_only = False
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+@pytest.fixture(autouse=True)
+def _open_the_floor(monkeypatch):
+    monkeypatch.setattr(_social, "settings", _GateOff(_social.settings))
 
 client = TestClient(app)   # no context manager → no startup event (init_db below)
 

@@ -5,10 +5,18 @@
 // floor runs beneath — the power-weighted feed. Composition only; the dial
 // and feed own their data.
 
+import { useAuth } from "@/lib/auth";
 import { ClubPowerDial } from "@/components/ClubPowerDial";
 import { ClubFeed } from "@/components/ClubFeed";
 
 export default function ClubPage() {
+  // The discussion floor is OWNER-ONLY for now (owner call, 2026-10-05).
+  // Hiding the component is the cosmetic half; /api/social/* refuses non-owners
+  // as well, so a member cannot reach the feed by calling the API directly.
+  // The dial above stays visible to everyone — it is not part of discussion.
+  const { member } = useAuth();
+  const canSeeDiscussion = member?.role === "owner";
+
   return (
     <div className="stagger space-y-8">
       <section className="pt-2 text-center">
@@ -21,7 +29,7 @@ export default function ClubPage() {
         </div>
       </section>
 
-      <ClubFeed />
+      {canSeeDiscussion && <ClubFeed />}
     </div>
   );
 }
