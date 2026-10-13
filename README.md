@@ -15,7 +15,7 @@ concordia/
 ├── backend/          ← FastAPI + SQLite + Robinhood OAuth/MCP + executor
 ├── web/              ← Next.js member app (landing, wizard, voting, account)
 ├── infra/            ← systemd units, nginx vhost, host setup, MIGRATION.md
-└── scripts/          ← dev.sh (local sandbox), deploy.sh (ship to production)
+└── scripts/          ← dev.sh (local sandbox), deploy.sh (ship to production + demo)
 ```
 
 ## Getting started (2 minutes, zero risk)
@@ -39,7 +39,13 @@ SSH key is on it:
 ```bash
 ./scripts/deploy.sh              # web + backend, restart both
 ./scripts/deploy.sh --web        # web only
+./scripts/deploy.sh --no-demo    # production only
 ```
+
+The public demo (`demo.voteconcordia.com`) follows production: once the live
+deploy has finished and passed its checks, the same commit goes to the demo. A
+demo failure is reported but never fails the production deploy. To ship the demo
+on its own, run `./scripts/deploy-demo.sh`.
 
 It refuses to run on a dirty tree or unpushed commits — what's live is always a
 commit that exists on GitHub — and it never syncs `.env` or `concord.db`, so a
